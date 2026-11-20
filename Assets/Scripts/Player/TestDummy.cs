@@ -28,7 +28,7 @@ namespace SuddenMageEncounter
         // server simulation
         Vector3 _vel;
         bool _ragdoll, _grounded = true;
-        float _ragdollUntil;
+        float _ragdollUntil, _chainYankAt;
 
         protected override void Awake()
         {
@@ -79,6 +79,15 @@ namespace SuddenMageEncounter
             if (!IsAlive || Arena.Current == null || !MatchManager.Running) return;
             Vector3 pos = transform.position;
             int mask = Layers.EnvironmentMask;
+
+            // trapped by the Empress and thrown out of her domain: the chains haul it back in (as for players)
+            if (SpellServer.TrapCenter(this, out var trapCenter) &&
+                SpellPlans.ChainPullBack(pos + Vector3.down * HipHeight, trapCenter, ref _vel, dt, out var yank) &&
+                (!_ragdoll || _carried) && Time.time >= _chainYankAt)
+            {
+                _chainYankAt = Time.time + 0.4f;
+                ServerKnock(yank, _carried ? 0.6f : 0f);
+            }
 
             if (_carried)
             {
@@ -206,9 +215,30 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Server: new round — alive again, dropped onto the ground under where it was placed.</summary>
+        // ------------------------------------------------------------------ mana (server only)
+
+        /// <summary>The dummy sits at this much mana: drained by Mana Siphon, then refills back up to it (never past).</summary>
+        public const float Mana = 5f;
+        float _mana = Mana;
+        double _manaTime;
+
+        public float ManaNow => Mathf.Min(Mana, _mana + (float)(WorldNet.Now - _manaTime) * ManaState.PerSecond);
+
+        /// <summary>Server: take up to <paramref name="amount"/> mana; returns how much was taken.</summary>
+        public float ServerDrainMana(float amount)
+        {
+            float m = ManaNow, take = Mathf.Min(amount, m);
+            _mana = m - take;
+            _manaTime = WorldNet.Now;
+            return take;
+        }
+
         public void ServerReset()
         {
             ServerRevive();
+            TrappedBy.Value = 0;
+            _mana = Mana;
+            _manaTime = WorldNet.Now;
             _vel = Vector3.zero;
             _ragdoll = false;
             _carried = false;

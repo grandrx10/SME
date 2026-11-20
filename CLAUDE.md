@@ -30,6 +30,6 @@ The VFX style above comes from this game. Read its code before making new effect
 ## Working here
 
 - The Unity editor is usually open, so check compilation offline with `powershell -File Tools/check.ps1` (it uses Unity's bundled Roslyn). Run it after every change. It cannot run gameplay, so tell the user what still needs testing in Unity.
-- There is no git, Python or .NET SDK on this PC.
+- There is no Python or .NET SDK on this PC. Git is at `C:\Program Files\Git\cmd\git.exe` (may not be on PATH); repo is https://github.com/grandrx10/SME. To push from the agent shell, set `$env:GCM_INTERACTIVE="always"; $env:GIT_TERMINAL_PROMPT="1"` first. `Assets/StreamingAssets/Tools/*.exe` are stored in Git LFS (ffmpeg is over GitHub's 100 MB limit).
 - Networking is server-authoritative. Voxel edits go through the ordered op stream in `Spells/WorldNet.cs` as integer cell ops, so every peer's world stays identical. Spell logic runs on the server in `Spells/SpellServer.cs`. Input, aiming and previews are in `Spells/AbilityCaster.cs`. Debris and effects are client-side only.
 - Spells have a 20 m max range unless the card says otherwise. Knockback ragdolls people. A caster's own spells don't hurt or ragdoll them unless the card says so.

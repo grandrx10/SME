@@ -362,7 +362,7 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- Nomadic Dash
-        public const float DashSpeed = 35f, DashTime = 0.16f; // ~5.6 m in a blink
+        public const float DashSpeed = 22.75f, DashTime = 0.16f; // ~3.6 m in a blink (0.65 of the old 35 m/s)
         public const float DashKnockForward = 9f, DashKnockUp = 5f;
 
         // ---------------------------------------------------------------- Mana Missiles
@@ -433,12 +433,34 @@ namespace SuddenMageEncounter
         public const float PriestessDelay = 1f;          // the sun shows this long before the flash
         public const float PriestessFlash = 0.15f;       // looking at the caster during this window blinds you
         public const float BlindFade = 2f;               // white screen fading out
-        public const float DomainDelay = 0.3f;           // hands come together
+        public const float DomainDelay = 0.5f;           // startup: rooted, hands clasped, symbols pouring out (hurt / thrown = cancelled)
         public const float DomainGrow = 0.2f;            // expands to full size this fast
         public const float EmpressRadius = 10f, EmperorRadius = 6.8f;
         public static float DomainRadius(byte kind) => kind == 0 ? EmpressRadius : EmperorRadius;
         public const float EmpressTime = 10f, EmpressDamage = 1.25f;
+        public const float ChainSlack = 0.4f;            // trapped: pulled back once this far inside the Empress's edge
+        public const float ChainSpeed = 14f, ChainPull = 45f; // m/s back in, and how hard the chains accelerate you
         public const float EmperorTime = 6f, EmperorDamage = 0.5f;
+
+        /// <summary>
+        /// The Empress's chains on a trapped body outside her domain: no further out (taut), and hauled back in.
+        /// False = still inside, nothing to do. <paramref name="yank"/> is a hop back in for a body on its feet.
+        /// </summary>
+        public static bool ChainPullBack(Vector3 feet, Vector3 center, ref Vector3 v, float dt, out Vector3 yank)
+        {
+            yank = Vector3.zero;
+            Vector3 o = feet - center;
+            bool outside = new Vector2(o.x, o.z).magnitude > EmpressRadius - ChainSlack || o.y > 4f || o.y < -1.5f;
+            if (!outside) return false;
+            Vector3 dir = (center + Vector3.up * 1.2f - feet).normalized;
+            float away = -Vector3.Dot(v, dir);
+            if (away > 0f) v += dir * away;
+            float inward = Vector3.Dot(v, dir);
+            if (inward < ChainSpeed) v += dir * Mathf.Min(ChainSpeed - inward, ChainPull * dt);
+            yank = dir * ChainSpeed;
+            yank.y = Mathf.Max(yank.y, 4f);
+            return true;
+        }
 
         // ---------------------------------------------------------------- Arcane Judgment
         public const float JudgmentRadius = 5f;
@@ -452,7 +474,8 @@ namespace SuddenMageEncounter
 
         // ---------------------------------------------------------------- Mana Siphon
         public const float SiphonTime = 1f, SiphonSpeed = 22f, SiphonArm = 0.3f;
-        public const float SiphonReach = 1.3f, SiphonHitRadius = 1.6f;
+        public const float SiphonTurn = 260f;              // deg/s the mouse can steer the charge (was 100)
+        public const float SiphonReach = 2.9f, SiphonHalfWidth = 2f, SiphonHalfHeight = 1.4f; // hit box in front: a wide, flat slab
         public const float SiphonDamage = 10f, SiphonDrain = 2f;
     }
 }

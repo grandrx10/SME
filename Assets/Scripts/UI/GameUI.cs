@@ -678,7 +678,8 @@ namespace SuddenMageEncounter
                 }
                 if (_hudKeysDirty) b.key.text = GameSettings.Binds[GameSettings.AbilityAction(i)].ShortName;
                 bool empty = card == CardId.None;
-                bool ready = !empty && pc.Caster.Affordable(i) && pc.IsAlive;
+                float running = pc.Caster.RunningLeft(i); // The Magician still going: shown as a sweep, not red
+                bool ready = !empty && (pc.Caster.Affordable(i) || running > 0f) && pc.IsAlive;
                 _denied[i] = Mathf.Max(0f, _denied[i] - dt);
                 Color back = empty ? new Color(1, 1, 1, 0.08f) : ready ? Color.white : DeniedRed;
                 // a card The Fool rolled: shown over a Fool-coloured (mahogany) box
@@ -686,7 +687,7 @@ namespace SuddenMageEncounter
                 if (_denied[i] > 0f) back = Color.Lerp(back, DeniedRed, 0.6f);
                 b.back.color = back;
                 b.frame.color = pc.Caster.HoldingSlot == i ? UIFactory.Accent : new Color(0, 0, 0, empty ? 0.3f : 0.85f);
-                float cd = pc.Caster.CooldownLeft(i) / Cards.Cooldown;
+                float cd = Mathf.Max(pc.Caster.CooldownLeft(i) / Cards.Cooldown, running);
                 b.cooldown.fillAmount = cd;
                 b.cooldown.enabled = cd > 0f;
                 float shake = _denied[i] > 0f ? Mathf.Sin(_denied[i] * 80f) * 4f * _denied[i] / 0.35f : 0f;

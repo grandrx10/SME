@@ -15,6 +15,7 @@ namespace SuddenMageEncounter
         SpellIndicator _indicator;
         int _holding = -1;
         readonly float[] _cooldownUntil = new float[Loadout.Slots];
+        readonly bool[] _foolRolling = new bool[Loadout.Slots];
         float _predictedSpend, _predictedAt;
         ManaState _manaSeen;
         int _rockId;
@@ -56,12 +57,18 @@ namespace SuddenMageEncounter
         /// <summary>A free card rolled by The Fool (costs nothing, used once).</summary>
         public bool IsFree(int slot) => _pc != null && _pc.IsFoolCard(slot);
         public float CooldownLeft(int slot) => Mathf.Max(0f, _cooldownUntil[slot] - Time.time);
-        public bool Affordable(int slot) => _pc != null && (IsFree(slot) || _pc.CanAfford(Cards.Get(CardIn(slot)), _predictedSpend));
+        /// <summary>A card whose effect is still running and can't be cast again yet (The Magician): 1 → 0 as it runs out.</summary>
+        public float RunningLeft(int slot)
+        {
+            if (_pc == null || !_pc.IsSpawned || CardIn(slot) != CardId.TheMagician) return 0f;
+            return Mathf.Clamp01((float)(_pc.Mana.Value.FastUntil - WorldNet.Now) / SpellPlans.MagicianTime);
+        }
+        public bool Affordable(int slot) =>_pc != null && (IsFree(slot) || _pc.CanAfford(Cards.Get(CardIn(slot)), _predictedSpend));
 
         public void ResetForRound()
         {
             CancelAll();
-            for (int i = 0; i < _cooldownUntil.Length; i++) _cooldownUntil[i] = 0f;
+            for (int i = 0; i < _cooldownUntil.Length; i++) { _cooldownUntil[i] = 0f; _foolRolling[i] = false; }
             _predictedSpend = 0f;
         }
 
@@ -82,6 +89,8 @@ namespace SuddenMageEncounter
             // the server's mana changed: our guess has been replaced by the real value
             if (!_pc.Mana.Value.Equals(_manaSeen)) { _manaSeen = _pc.Mana.Value; _predictedSpend = 0f; }
             if (_predictedSpend > 0f && Time.time - _predictedAt > 1.5f) _predictedSpend = 0f;
+            for (int s = 0; s < Loadout.Slots; s++)
+                if (_foolRolling[s] && _pc.IsFoolCard(s)) { _foolRolling[s] = false; _cooldownUntil[s] = 0f; }
 
             bool able = _pc.IsAlive && !_pc.Motor.Ragdolled && !_pc.Motor.GettingUp && !_pc.Motor.Busy && MatchManager.CastingAllowed;
             if (!able && _holding >= 0) { _holding = -1; SetPose(SpellPose.None); }
@@ -122,10 +131,18 @@ namespace SuddenMageEncounter
                 SpellPose.Barrier => 1.25f, SpellPose.Siphon => SpellPlans.SiphonTime + 0.1f, SpellPose.SiphonPunch => 0.5f,
                 SpellPose.FlameCharge => 0.95f, SpellPose.HellfireDraw => SpellPlans.HellfireDraw + 0.2f, SpellPose.FlameHands => 0.7f,
                 SpellPose.JudgmentCast => 1.6f, SpellPose.TugCast => 0.7f, SpellPose.Platform => 0.7f,
-                SpellPose.FoolRoll => 0.5f, SpellPose.Magician => 0.7f, SpellPose.SunRaise => SpellPlans.PriestessDelay + 0.35f, SpellPose.Prayer => 0.6f,
+                SpellPose.FoolRoll => 0.5f, SpellPose.Magician => 0.7f, SpellPose.SunRaise => SpellPlans.PriestessDelay + 0.35f, SpellPose.Prayer => SpellPlans.DomainDelay + 0.35f,
                 _ => float.MaxValue,
             };
             if (t > ends) SetPose(SpellPose.None);
+        }
+
+        /// <summary>The server cancelled our domain while the hands were still clasped (we got hurt or thrown).</summary>
+        public void DomainStartupCancelled()
+        {
+            if (Pose != SpellPose.Prayer) return;
+            SetPose(SpellPose.None);
+            _pc.Motor.Unroot();
         }
 
         void SetPose(SpellPose p)
@@ -250,6 +267,7 @@ namespace SuddenMageEncounter
                     SetPose(SpellPose.FoolRoll);
                     break;
                 case CardId.TheMagician:
+                    if (_pc.Mana.Value.Fast(WorldNet.Now)) { Denied?.Invoke(slot); return false; } // already running
                     SetPose(SpellPose.Magician);
                     break;
                 case CardId.TheHighPriestess:
@@ -257,6 +275,7 @@ namespace SuddenMageEncounter
                     break;
                 case CardId.TheEmpress:
                 case CardId.TheEmperor:
+                    _pc.Motor.Root(SpellPlans.DomainDelay); // locked in place while the hands are clasped
                     SetPose(SpellPose.Prayer);
                     break;
                 case CardId.SummonPlatform:
@@ -269,6 +288,8 @@ namespace SuddenMageEncounter
             }
             _pc.RequestCast(slot, info.id, target, yaw, targetId);
             _cooldownUntil[slot] = Time.time + Cards.Cooldown;
+            // The Fool: the slot is held only until the rolled card arrives, then it's ready at once
+            _foolRolling[slot] = info.id == CardId.TheFool && !free;
             if (info.costType == CostType.Mana && !free) _predictedSpend += info.cost;
             _predictedAt = Time.time;
             return true;

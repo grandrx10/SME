@@ -10,7 +10,7 @@ namespace SuddenMageEncounter
         {
             public int id; public byte kind; public PlayerController caster; public Vector3 center;
             public double formAt, endAt; public bool formed;
-            public readonly HashSet<PlayerController> trapped = new();
+            public readonly HashSet<Combatant> trapped = new();
         }
 
         const byte Empress = 0, Emperor = 1;
@@ -38,9 +38,9 @@ namespace SuddenMageEncounter
             {
                 case CardId.TheMagician:
                 {
-                    // doesn't stack: casting it again while it runs costs the mana and does nothing
+                    // can't be cast again while it runs (refused: no cost, no cooldown)
                     var m = caster.Mana.Value;
-                    if (m.Fast(now)) return true;
+                    if (m.Fast(now)) return false;
                     caster.Mana.Value = new ManaState { Value = m.At(now), Time = now, FastUntil = now + SpellPlans.MagicianTime };
                     return true;
                 }
@@ -51,10 +51,8 @@ namespace SuddenMageEncounter
                 case CardId.TheEmperor:
                 {
                     byte kind = card == CardId.TheEmpress ? Empress : Emperor;
-                    // one Emperor aura at a time per caster: a new one replaces the old
-                    if (kind == Emperor)
-                        foreach (var old in Domains.ToArray())
-                            if (old.kind == Emperor && old.caster == caster) End(old);
+                    // still clasping hands for one already: no
+                    foreach (var old in Domains) if (old.caster == caster && !old.formed) return false;
                     var d = new DomainState
                     {
                         kind = kind, caster = caster, center = caster.FeetPosition,
@@ -76,16 +74,23 @@ namespace SuddenMageEncounter
                 var d = Domains[i];
                 if (d.caster == null || !d.caster.IsAlive || now >= d.endAt) { End(d); continue; }
                 if (now < d.formAt) continue;
+                if (!d.formed && d.kind == Emperor)
+                {
+                    // one Emperor aura at a time per caster: a new one replaces the old
+                    foreach (var old in Domains.ToArray())
+                        if (old != d && old.kind == Emperor && old.caster == d.caster) End(old);
+                    i = Domains.IndexOf(d);
+                }
                 d.formed = true;
                 if (d.kind == Emperor) { d.center = d.caster.FeetPosition; continue; }
 
                 // Empress: ends when its caster leaves it
                 // (against its full size, so stepping about while it's still growing doesn't end it)
                 if (!Inside(d, d.caster.FeetPosition, double.MaxValue, 0f)) { End(d); continue; }
-                foreach (var p in PlayerController.All)
+                foreach (var p in Combatant.Registry)
                 {
                     if (p == null || p == d.caster || !p.IsAlive) continue;
-                    bool full = p.Mana.Value.At(now) >= ManaState.Max - 0.001f;
+                    bool full = ManaOf(p, now) >= ManaState.Max - 0.001f;
                     if (d.trapped.Contains(p))
                     {
                         // held until their mana is full
@@ -111,18 +116,36 @@ namespace SuddenMageEncounter
 
         static void Release(DomainState d)
         {
-            var was = new List<PlayerController>(d.trapped);
+            var was = new List<Combatant>(d.trapped);
             d.trapped.Clear();
             foreach (var p in was) RefreshTrapped(p);
         }
 
-        /// <summary>Trapped while any Empress domain is holding them.</summary>
-        static void RefreshTrapped(PlayerController p)
+        /// <summary>A body's mana (a test dummy sits at 5, so it stays caught for the whole domain).</summary>
+        static float ManaOf(Combatant c, double now) => c switch
+        {
+            PlayerController p => p.Mana.Value.At(now),
+            TestDummy d => d.ManaNow,
+            _ => ManaState.Max,
+        };
+
+        /// <summary>Server: where the Empress domain holding a body is (for the chains on server-simulated bodies).</summary>
+        public static bool TrapCenter(Combatant c, out Vector3 center)
+        {
+            center = default;
+            if (c == null || !c.Trapped) return false;
+            foreach (var d in Domains)
+                if (d.id == c.TrappedBy.Value && d.kind == Empress) { center = d.center; return true; }
+            return false;
+        }
+
+        /// <summary>Trapped (and chained to its caster) while any Empress domain is holding them.</summary>
+        static void RefreshTrapped(Combatant p)
         {
             if (p == null) return;
-            bool held = false;
-            foreach (var d in Domains) if (d.trapped.Contains(p)) { held = true; break; }
-            if (p.Trapped.Value != held) p.Trapped.Value = held;
+            int by = 0;
+            foreach (var d in Domains) if (d.trapped.Contains(p)) { by = d.id; break; }
+            if (p.TrappedBy.Value != by) p.TrappedBy.Value = by;
         }
 
         /// <summary>Within the circle (and roughly at its height), counting how far it has grown.</summary>
@@ -149,6 +172,14 @@ namespace SuddenMageEncounter
                 else if (d.kind == Emperor && d.caster == victim && Inside(d, source.FeetPosition, now, 0.3f)) dmg *= SpellPlans.EmperorDamage;
             }
             return dmg;
+        }
+
+        /// <summary>Hurt or thrown while still clasping hands: the domain never opens (the mana stays spent).</summary>
+        static void CancelDomainStartup(PlayerController p)
+        {
+            if (p == null) return;
+            foreach (var d in Domains.ToArray())
+                if (d.caster == p && !d.formed) End(d);
         }
 
         /// <summary>The Magician ends early (ragdolled, trapped).</summary>

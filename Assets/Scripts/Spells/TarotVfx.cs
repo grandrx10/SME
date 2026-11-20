@@ -9,7 +9,8 @@ namespace SuddenMageEncounter
     {
         public static readonly Color Mahogany = new(2.2f, 0.7f, 0.32f, 1f);
         public static readonly Color Gold = new(3f, 2.1f, 0.45f, 1f);
-        public static readonly Color Bubble = new(1.4f, 2.2f, 2.6f, 1f);
+        /// <summary>Soft pale blue, only just over 1 so the Magician's bubbles barely bloom.</summary>
+        public static readonly Color Bubble = new(0.8f, 1.25f, 1.5f, 1f);
 
         public static List<Vector2> Ring(float r, float startDeg, int steps)
         {
@@ -204,7 +205,46 @@ namespace SuddenMageEncounter
             v._circle.Progress = 1f;
             v._circle.SetColour(v._colour);
             c.transform.localScale = Vector3.zero;
+            if (WorldNet.Now < fx.start && !Debris.Suppressed)
+            {
+                // the startup: energy gathers into the clasped hands and symbols pour out of them
+                ulong caster = fx.caster;
+                float left = Mathf.Max(0.05f, (float)(fx.start - WorldNet.Now));
+                System.Func<Vector3> hands = () =>
+                {
+                    var cc = WorldNet.FindCombatant(caster);
+                    return cc != null ? (SpellVisuals.RightHand(cc) + SpellVisuals.LeftHand(cc)) * 0.5f : go.transform.position;
+                };
+                System.Func<bool> alive = () => { var cc = WorldNet.FindCombatant(caster); return cc != null && cc.IsAlive; };
+                v._charge = ArcaneCharge.Create(hands, alive, left, v._colour, true);
+                v._spew = RuneSpew.Create(hands, alive, left, v._colour);
+            }
+            v._startupDone = WorldNet.Now >= fx.start;
             return v;
+        }
+
+        ArcaneCharge _charge;
+        RuneSpew _spew;
+        bool _startupDone;
+
+        /// <summary>The startup ends: the domain bursts out of the hands, or (hurt / thrown) it fizzles.</summary>
+        void FinishStartup(bool cancelled)
+        {
+            _startupDone = true;
+            if (cancelled)
+            {
+                if (_charge != null) _charge.Cancel();
+                if (_spew != null) _spew.Stop();
+                var me = PlayerController.Local;
+                if (me != null && me.NetworkObjectId == _fx.caster && me.Caster != null) me.Caster.DomainStartupCancelled();
+                return;
+            }
+            if (_charge != null)
+            {
+                CameraRig.ShakeFrom(_charge.transform.position, 0.12f, 0.2f);
+                _charge.Release();
+            }
+            if (_spew != null) _spew.Release();
         }
 
         /// <summary>Double ring with a band of runes (tops outward) between, in unit coordinates.</summary>
@@ -230,6 +270,11 @@ namespace SuddenMageEncounter
         {
             double now = WorldNet.Now;
             float t = (float)(now - _fx.start);
+            if (!_startupDone)
+            {
+                if (_fx.ended >= 0 && _fx.ended < _fx.start) FinishStartup(true);
+                else if (t >= 0f) FinishStartup(false);
+            }
             if (_fx.kind == 1)
             {
                 var c = WorldNet.FindCombatant(_fx.caster);
@@ -272,19 +317,19 @@ namespace SuddenMageEncounter
     // ====================================================================== on a player's body
 
     /// <summary>
-    /// Tarot effects that ride on a player, drawn by every client from replicated state: fizzy bubbles while The
-    /// Magician runs, mahogany shackle rings while trapped by The Empress.
+    /// Tarot effects that ride on a player, drawn by every client from replicated state: soft bubbles while The
+    /// Magician runs, mahogany shackle rings and a chain back to her while trapped by The Empress.
     /// </summary>
     public class TarotBodyFx : MonoBehaviour
     {
-        PlayerController _pc;
+        Combatant _pc;
         class Bubble { public Transform t; public Vector3 offset; public float age, life, size; }
         readonly List<Bubble> _bubbles = new();
         float _owed;
         GameObject _shackles;
         RuneDrawing _ringA, _ringB;
 
-        void Awake() => _pc = GetComponent<PlayerController>();
+        void Awake() => _pc = GetComponent<Combatant>();
 
         void LateUpdate()
         {
@@ -293,16 +338,16 @@ namespace SuddenMageEncounter
             Vector3 body = _pc.RagdollFocus != null ? _pc.RagdollFocus.position : _pc.transform.position;
             float dt = Time.deltaTime;
 
-            // The Magician: fizzy bubbles rising round the body
-            if (alive && _pc.Mana.Value.Fast(WorldNet.Now))
+            // The Magician: a few soft see-through bubbles drifting up round the body
+            if (alive && _pc is PlayerController player && player.Mana.Value.Fast(WorldNet.Now))
             {
-                _owed += 22f * dt;
+                _owed += 6f * dt;
                 while (_owed >= 1f)
                 {
                     _owed -= 1f;
-                    Vector2 r = Random.insideUnitCircle.normalized * Random.Range(0.25f, 0.5f);
-                    var t = Glow.Piece(null, Glow.SphereMesh, TarotVfx.Bubble, "Bubble");
-                    var b = new Bubble { t = t, offset = new Vector3(r.x, Random.Range(-0.9f, 0.2f), r.y), life = Random.Range(0.5f, 0.9f), size = Random.Range(0.05f, 0.11f) };
+                    Vector2 r = Random.insideUnitCircle.normalized * Random.Range(0.3f, 0.5f);
+                    var t = MakeBubble();
+                    var b = new Bubble { t = t, offset = new Vector3(r.x, Random.Range(-0.8f, 0.1f), r.y), life = Random.Range(0.8f, 1.3f), size = Random.Range(0.07f, 0.13f) };
                     t.position = body + b.offset;
                     _bubbles.Add(b);
                 }
@@ -311,21 +356,19 @@ namespace SuddenMageEncounter
             {
                 var b = _bubbles[i];
                 b.age += dt;
-                if (b.age >= b.life)
-                {
-                    // pop
-                    EnergyBurst.Create(b.t.position, new EnergyBurst.Settings { flashSize = b.size * 2.5f, flashTime = 0.08f, sparkCount = 0, colour = TarotVfx.Bubble });
-                    Destroy(b.t.gameObject);
-                    _bubbles.RemoveAt(i);
-                    continue;
-                }
-                b.offset += new Vector3(Mathf.Sin(b.age * 17f + i) * 0.3f, 1.4f, 0f) * dt;
+                if (b.age >= b.life + PopTime) { Destroy(b.t.gameObject); _bubbles.RemoveAt(i); continue; }
+                b.offset += new Vector3(Mathf.Sin(b.age * 6f + i) * 0.15f, 0.9f, Mathf.Cos(b.age * 5f + i) * 0.1f) * dt;
                 b.t.position = body + b.offset;
-                b.t.localScale = Vector3.one * b.size * Mathf.Min(1f, b.age * 8f);
+                // grow in, wobble a little, then pop: a quick swell and gone (no flash)
+                float s = b.size * Mathf.Min(1f, b.age * 6f);
+                float wob = 0.06f * Mathf.Sin(b.age * 14f + i);
+                if (b.age > b.life) { float u = (b.age - b.life) / PopTime; s *= (1f + 0.5f * u) * (1f - u); }
+                b.t.localScale = new Vector3(1f + wob, 1f - wob, 1f + wob) * s;
             }
 
-            // The Empress: shackle rings round the trapped body
-            bool trapped = alive && _pc.Trapped.Value;
+            // The Empress: shackle rings round the trapped body, chained to her
+            bool trapped = alive && _pc.Trapped;
+            UpdateChain(trapped, body, dt);
             if (trapped && _shackles == null)
             {
                 _shackles = new GameObject("Shackles") { layer = Layers.Fx };
@@ -342,6 +385,86 @@ namespace SuddenMageEncounter
                 _ringB.Host.localPosition = Vector3.up * (0.05f + 0.05f * Mathf.Sin(time * 3f + 1.5f));
                 _ringB.Host.localRotation = Quaternion.Euler(0f, -time * 55f, 0f);
             }
+        }
+
+        // ---------------- the Empress's chain ----------------
+
+        Transform _chainRoot;
+        readonly List<Transform> _links = new();
+        float _chainGrow, _taut;
+        bool _chainShown;
+        Vector3 _chainFrom, _chainTo;
+        const float LinkStep = 0.2f, ChainGrowTime = 0.2f;
+
+        /// <summary>
+        /// A mahogany chain from the Empress to this trapped player: slack while they're well inside, taut at her
+        /// edge (where it hauls them back). Shoots out from her when they're caught, shrinks away when they're freed.
+        /// </summary>
+        void UpdateChain(bool trapped, Vector3 body, float dt)
+        {
+            _chainShown = false;
+            var net = WorldNet.Instance;
+            if (trapped && net != null && net.Domains.TryGetValue(_pc.TrappedBy.Value, out var fx) && fx.ended < 0)
+            {
+                var c = WorldNet.FindCombatant(fx.caster);
+                if (c != null && c.IsAlive)
+                {
+                    _chainShown = true;
+                    _chainFrom = c.RagdollFocus != null ? c.RagdollFocus.position : c.transform.position + Vector3.up * 0.1f;
+                    _chainTo = body;
+                    Vector3 o = body - fx.center;
+                    _taut = Mathf.Clamp01(new Vector2(o.x, o.z).magnitude / (SpellPlans.EmpressRadius - SpellPlans.ChainSlack));
+                }
+            }
+            _chainGrow = Mathf.MoveTowards(_chainGrow, _chainShown ? 1f : 0f, dt / ChainGrowTime);
+            if (_chainGrow <= 0f)
+            {
+                if (_chainRoot != null) { Destroy(_chainRoot.gameObject); _chainRoot = null; _links.Clear(); }
+                return;
+            }
+            if (_chainRoot == null) _chainRoot = new GameObject("EmpressChain") { layer = Layers.Fx }.transform;
+
+            Vector3 span = _chainTo - _chainFrom;
+            float len = span.magnitude;
+            int n = Mathf.Clamp(Mathf.CeilToInt(len / LinkStep), 1, 150);
+            while (_links.Count < n) _links.Add(Glow.Piece(_chainRoot, Glow.SphereMesh, TarotVfx.Mahogany, "Link"));
+            float sag = len * Mathf.Lerp(0.12f, 0.01f, _taut * _taut);
+            Vector3 Point(float u) => _chainFrom + span * u + Vector3.down * (sag * 4f * u * (1f - u));
+            for (int i = 0; i < _links.Count; i++)
+            {
+                var l = _links[i];
+                bool on = i < n;
+                if (l.gameObject.activeSelf != on) l.gameObject.SetActive(on);
+                if (!on) continue;
+                float u0 = i / (float)n, u1 = (i + 1) / (float)n;
+                // growing: links appear out from her; going: they all shrink together
+                float s = _chainShown ? (u1 <= _chainGrow + 1e-3f ? 1f : 0f) : _chainGrow;
+                Vector3 a = Point(u0), b = Point(u1), d = b - a;
+                if (d.sqrMagnitude < 1e-6f) d = Vector3.forward * 1e-3f;
+                l.SetPositionAndRotation((a + b) * 0.5f, Quaternion.LookRotation(d) * Quaternion.Euler(0f, 0f, (i & 1) == 0 ? 0f : 90f));
+                l.localScale = new Vector3(0.05f, 0.1f, d.magnitude * 1.3f) * s;
+            }
+        }
+
+        const float PopTime = 0.07f;
+        static Material _bubbleMat;
+
+        /// <summary>A see-through toon bubble (its own ink edge; no solid hull, which would hide the see-through).</summary>
+        static Transform MakeBubble()
+        {
+            if (_bubbleMat == null)
+            {
+                var s = Shader.Find("SME/Bubble");
+                _bubbleMat = s != null ? new Material(s) { name = "Bubble" } : Glow.Shared;
+                if (s != null) _bubbleMat.SetColor("_BaseColor", TarotVfx.Bubble);
+            }
+            var go = new GameObject("Bubble") { layer = Layers.Fx };
+            go.AddComponent<MeshFilter>().sharedMesh = Glow.SphereMesh;
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = _bubbleMat;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            return go.transform;
         }
 
         static RuneDrawing MakeRing(Transform parent, float radius)
@@ -369,6 +492,7 @@ namespace SuddenMageEncounter
         {
             foreach (var b in _bubbles) if (b.t != null) Destroy(b.t.gameObject);
             if (_shackles != null) { _ringA?.Release(); _ringB?.Release(); Destroy(_shackles); }
+            if (_chainRoot != null) Destroy(_chainRoot.gameObject);
         }
     }
 }

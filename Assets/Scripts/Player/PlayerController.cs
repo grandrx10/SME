@@ -31,8 +31,6 @@ namespace SuddenMageEncounter
         public readonly NetworkVariable<EquippedCards> Equipped = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
         /// <summary>The Fool: the free single-use card it rolled, per slot (None = The Fool is showing).</summary>
         public readonly NetworkVariable<EquippedCards> FoolCards = new();
-        /// <summary>Caught in an Empress domain: can't move or cast (spells can still push you about).</summary>
-        public readonly NetworkVariable<bool> Trapped = new();
 
         /// <summary>The card a slot actually casts right now (a Fool slot holding a rolled card casts that).</summary>
         public CardId CardInSlot(int slot)
@@ -177,7 +175,7 @@ namespace SuddenMageEncounter
             {
                 if (!Dead.Value)
                 {
-                    if (Trapped.Value) Motor.Root(0.15f); // held in place by the Empress (knocks still move you)
+                    if (Trapped) { Motor.Root(0.15f); ChainTick(); } // held in place by the Empress (knocks still move you; the chains pull you back)
                     WriteState();
                     CheckHazards();
                 }
@@ -190,6 +188,27 @@ namespace SuddenMageEncounter
             }
             else Interpolate();
             UpdateLiveRagdoll();
+        }
+
+        // ---------------- the Empress's chains ----------------
+
+        float _chainYankAt;
+
+        /// <summary>
+        /// Owner: trapped and outside the domain that holds us (walked, thrown or carried out): the chains go taut
+        /// (no further out) and haul us back in, whoever threw us.
+        /// </summary>
+        void ChainTick()
+        {
+            var net = WorldNet.Instance;
+            if (net == null || !net.Domains.TryGetValue(TrappedBy.Value, out var fx) || fx.ended >= 0) return;
+            Vector3 v = Motor.Velocity;
+            if (!SpellPlans.ChainPullBack(FeetPosition, fx.center, ref v, Time.deltaTime, out var yank)) return;
+            if (Motor.Ragdolled && !Motor.Carried) { Motor.Velocity = v; return; }
+            // on our feet (or spun by a tornado): yanked off them, back in
+            if (Time.time < _chainYankAt) return;
+            _chainYankAt = Time.time + 0.4f;
+            Motor.Knock(yank, Motor.Carried ? 0.6f : 0f);
         }
 
         // ---------------- replication ----------------
@@ -312,7 +331,7 @@ namespace SuddenMageEncounter
         [Rpc(SendTo.Server)]
         void CastRpc(byte slot, byte cardByte, Vector3 target, float yaw, ulong targetId)
         {
-            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowed || Trapped.Value) return;
+            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowed || Trapped) return;
             var card = (CardId)cardByte;
             bool free = IsFoolCard(slot) && FoolCards.Value[slot] == card;
             if (!free && Equipped.Value[slot] != card) return;
@@ -330,9 +349,10 @@ namespace SuddenMageEncounter
                 var rolled = FoolCards.Value;
                 rolled[slot] = SpellServer.RollFoolCard();
                 FoolCards.Value = rolled;
+                // no cooldown: the rolled card can be cast straight away
             }
             else if (!SpellServer.Cast(this, card, target, yaw, targetId)) return;
-            _serverLastCast[slot] = now;
+            else _serverLastCast[slot] = now;
             if (free)
             {
                 // used once: back to The Fool
@@ -508,7 +528,7 @@ namespace SuddenMageEncounter
             ServerRevive();
             Mana.Value = new ManaState { Value = 0f, Time = WorldNet.Now };
             FoolCards.Value = default;
-            Trapped.Value = false;
+            TrappedBy.Value = 0;
             for (int i = 0; i < _serverLastCast.Length; i++) _serverLastCast[i] = -10;
             _serverRagdollUntil = 0f;
             RoundStartRpc(pos, yaw);
@@ -550,7 +570,7 @@ namespace SuddenMageEncounter
         protected override void OnServerKilled(ulong attackerClientId)
         {
             FoolCards.Value = default; // a rolled card is lost on death
-            Trapped.Value = false;
+            TrappedBy.Value = 0;
             Mana.Value = new ManaState { Value = Mana.Value.At(WorldNet.Now), Time = WorldNet.Now }; // the Magician's boost ends
             if (attackerClientId == OwnerClientId || attackerClientId == NoAttacker) return;
             var killer = ServerFind(attackerClientId);

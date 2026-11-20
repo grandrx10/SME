@@ -237,12 +237,14 @@ namespace SuddenMageEncounter
             new(1.00f, new(0.14f, 0.66f, 0.08f), new(-0.3f, 1f, 0f), M(new(0.14f, 0.66f, 0.08f)), new(0.3f, 1f, 0f), 0f, 0f, -10f),
             new(1.10f, new(0.3f, 0.5f, 0.2f), new(0.6f, 1f, 0f), M(new(0.3f, 0.5f, 0.2f)), new(-0.6f, 1f, 0f), 0f, 0f, -4f),
         };
-        // The Empress / The Emperor: hands come together in front of the chest
+        // The Empress / The Emperor: hands clap together in front of the chest and press there (the startup),
+        // then fling open as the domain bursts out
         static readonly Key[] PrayerKeys =
         {
             new(0.00f, new(0.3f, -0.05f, 0.25f), new(-0.3f, 0.4f, 1f), M(new(0.3f, -0.05f, 0.25f)), new(0.3f, 0.4f, 1f)),
-            new(0.28f, new(0.03f, 0.08f, 0.32f), new(-0.6f, 1f, 0.3f), M(new(0.03f, 0.08f, 0.32f)), new(0.6f, 1f, 0.3f), 0f, 0.04f, 4f),
-            new(0.45f, new(0.03f, 0.08f, 0.32f), new(-0.6f, 1f, 0.3f), M(new(0.03f, 0.08f, 0.32f)), new(0.6f, 1f, 0.3f), 0f, 0.04f, 4f),
+            new(0.14f, new(0.03f, 0.1f, 0.3f), new(-0.6f, 1f, 0.3f), M(new(0.03f, 0.1f, 0.3f)), new(0.6f, 1f, 0.3f), 0f, 0.06f, 6f),
+            new(0.48f, new(0.03f, 0.06f, 0.34f), new(-0.6f, 1f, 0.3f), M(new(0.03f, 0.06f, 0.34f)), new(0.6f, 1f, 0.3f), 0f, 0.08f, 8f),
+            new(0.58f, new(0.42f, 0.0f, 0.3f), new(0.5f, 0.2f, 1f), M(new(0.42f, 0.0f, 0.3f)), new(-0.5f, 0.2f, 1f), 0f, 0.02f, -6f),
         };
 
         /// <summary>Keyframes of a pose, and when it starts / finishes fading back to rest.</summary>
@@ -273,7 +275,7 @@ namespace SuddenMageEncounter
             SpellPose.FoolRoll => (FoolKeys, 0.3f, 0.5f, false),
             SpellPose.Magician => (MagicianKeys, 0.5f, 0.7f, false),
             SpellPose.SunRaise => (SunRaiseKeys, SpellPlans.PriestessDelay + 0.1f, SpellPlans.PriestessDelay + 0.35f, false),
-            SpellPose.Prayer => (PrayerKeys, 0.4f, 0.6f, false),
+            SpellPose.Prayer => (PrayerKeys, SpellPlans.DomainDelay + 0.15f, SpellPlans.DomainDelay + 0.35f, false),
             _ => (null, 0f, 0f, false),
         };
 

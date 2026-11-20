@@ -393,11 +393,22 @@ namespace SuddenMageEncounter
                 float t = (float)(now - s.start);
                 if (me == null || !me.IsAlive || t > SpellPlans.SiphonTime) { Siphons.RemoveAt(i); continue; }
                 if (t < SpellPlans.SiphonArm) continue;
-                Vector3 fwd = Quaternion.Euler(0, me.ViewYaw, 0) * Vector3.forward;
-                Vector3 c = me.transform.position + fwd * SpellPlans.SiphonReach + Vector3.up * 0.2f;
+                // the way the charge is actually going (it steers behind the mouse), else where they're looking
+                Vector3 vel = me.ViewVelocity;
+                vel.y = 0f;
+                Vector3 fwd = vel.magnitude > 5f ? vel.normalized : Quaternion.Euler(0, me.ViewYaw, 0) * Vector3.forward;
+                Vector3 right = new(fwd.z, 0f, -fwd.x);
+                // a wide slab in front: from just behind the chest out to the reach, wider than it is deep
                 var struck = new List<Combatant>();
                 foreach (var o in Combatant.Registry)
-                    if (o != null && o != me && o.IsAlive && (o.transform.position - c).magnitude <= SpellPlans.SiphonHitRadius) struck.Add(o);
+                {
+                    if (o == null || o == me || !o.IsAlive) continue;
+                    Vector3 rel = o.transform.position - me.transform.position;
+                    float along = Vector3.Dot(rel, fwd);
+                    if (along < -0.4f || along > SpellPlans.SiphonReach) continue;
+                    if (Mathf.Abs(Vector3.Dot(rel, right)) > SpellPlans.SiphonHalfWidth || Mathf.Abs(rel.y) > SpellPlans.SiphonHalfHeight) continue;
+                    struck.Add(o);
+                }
                 if (struck.Count == 0) continue;
 
                 // the punch lands
@@ -411,6 +422,7 @@ namespace SuddenMageEncounter
                         victim.Mana.Value = victim.Mana.Value.With(now, m - take);
                         gained += take;
                     }
+                    else if (o is TestDummy dummy) gained += dummy.ServerDrainMana(SpellPlans.SiphonDrain); // refills to 5 on its own
                     Vector3 away = o.transform.position - me.transform.position;
                     away.y = 0f;
                     away = away.sqrMagnitude > 0.01f ? away.normalized : fwd;
@@ -792,6 +804,7 @@ namespace SuddenMageEncounter
             Dashes.RemoveAll(d => d.caster == pc);
             if (knocked) Siphons.RemoveAll(s => s.caster == pc);
             if (knocked) DispelMagician(pc);
+            CancelDomainStartup(pc);
         }
 
         // ------------------------------------------------------------------ casting

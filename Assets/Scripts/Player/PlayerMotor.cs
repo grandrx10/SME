@@ -99,6 +99,7 @@ namespace SuddenMageEncounter
         public bool Siphoning => Time.time < _siphonUntil;
         public bool Rooted => Time.time < _rootUntil;
         public bool Busy => Dashing || Siphoning || Rooted || _carried;
+        public bool Carried => _carried;
 
         /// <summary>Nomadic Dash: rush along <paramref name="dir"/> (horizontal).</summary>
         public void Dash(Vector3 dir, float speed, float seconds)
@@ -140,7 +141,9 @@ namespace SuddenMageEncounter
             _dashUntil = _siphonUntil = 0f;
         }
 
-        /// <summary>Caught in a tornado: spun along with it until thrown out (Knock).</summary>
+        public void Unroot() => _rootUntil = 0f;
+
+        /// <summary>Caught in a tornado:spun along with it until thrown out (Knock).</summary>
         public void Carry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
             _carryOrigin = origin;
@@ -256,7 +259,7 @@ namespace SuddenMageEncounter
         {
             // the mouse steers it a little
             Vector3 aim = Quaternion.Euler(0, Yaw, 0) * Vector3.forward;
-            _dashDir = Vector3.RotateTowards(_dashDir, aim, 100f * Mathf.Deg2Rad * dt, 0f);
+            _dashDir = Vector3.RotateTowards(_dashDir, aim, SpellPlans.SiphonTurn * Mathf.Deg2Rad * dt, 0f);
             GroundCheck();
             Vector3 want = _dashDir * SpellPlans.SiphonSpeed;
             Velocity = new Vector3(want.x, IsGrounded ? -2f : Velocity.y - gravity * dt, want.z);

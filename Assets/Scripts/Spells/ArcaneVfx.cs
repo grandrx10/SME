@@ -275,7 +275,7 @@ namespace SuddenMageEncounter
             c._colour = colour;
             c._core = Glow.Piece(go.transform, Glow.SphereMesh, colour, "Core");
             c._core.localScale = Vector3.zero;
-            if (runes) c._runes = RuneSpew.Create(point, alive, seconds);
+            if (runes) c._runes = RuneSpew.Create(point, alive, seconds, colour);
             return c;
         }
 
@@ -344,11 +344,14 @@ namespace SuddenMageEncounter
         int _index;
         bool _spewing = true;
         Vector3 _origin;
+        Color _colour = Glow.Arcane;
 
         const float PerSecond = 14f, Drag = 2f, UpBias = 0.5f, Size = 0.22f, Width = 0.022f, WriteTime = 0.12f;
         static readonly Vector2 Speed = new(1.2f, 2.8f), Life = new(0.7f, 1.2f);
 
-        public static RuneSpew Create(Func<Vector3> point, Func<bool> alive, float seconds)
+        public static RuneSpew Create(Func<Vector3> point, Func<bool> alive, float seconds) => Create(point, alive, seconds, Glow.Arcane);
+
+        public static RuneSpew Create(Func<Vector3> point, Func<bool> alive, float seconds, Color colour)
         {
             if (Debris.Suppressed) return null;
             var go = new GameObject("RuneSpew") { layer = Layers.Fx };
@@ -356,6 +359,7 @@ namespace SuddenMageEncounter
             s._point = point;
             s._alive = alive;
             s._time = Mathf.Max(0.01f, seconds);
+            s._colour = colour;
             s._origin = point();
             return s;
         }
@@ -405,7 +409,7 @@ namespace SuddenMageEncounter
             var d = new RuneDrawing(go);
             d.AddRune(RuneGlyphs.Rune(_index++), Size, Width);
             d.Progress = 0f;
-            d.SetColour(Glow.Arcane);
+            d.SetColour(_colour);
             _runes.Add(new Rune
             {
                 t = go.transform, d = d, v = dir * (UnityEngine.Random.Range(Speed.x, Speed.y) * speedScale),

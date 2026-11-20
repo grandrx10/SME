@@ -24,6 +24,10 @@ namespace SuddenMageEncounter
         public readonly NetworkVariable<bool> Dead = new(false);
         /// <summary>How many burns are on this body right now (each: 15 damage over 5 s; they stack). Drives the flames on it.</summary>
         public readonly NetworkVariable<byte> BurnStacks = new(0);
+        /// <summary>The Empress domain (id) holding this body, 0 = free: can't move or cast (spells can still push it about, the chains pull it back in).</summary>
+        public readonly NetworkVariable<int> TrappedBy = new();
+        /// <summary>Held by an Empress domain (chained to whoever opened it).</summary>
+        public bool Trapped => IsSpawned && TrappedBy.Value != 0;
         public virtual float MaxHealth => maxHealth;
 
         public ProceduralAnimator Animator { get; private set; }
@@ -50,7 +54,7 @@ namespace SuddenMageEncounter
         {
             Animator = GetComponent<ProceduralAnimator>();
             if (GetComponent<BurnFx>() == null) gameObject.AddComponent<BurnFx>();
-            if (this is PlayerController && GetComponent<TarotBodyFx>() == null) gameObject.AddComponent<TarotBodyFx>();
+            if (GetComponent<TarotBodyFx>() == null) gameObject.AddComponent<TarotBodyFx>();
             if (model == null) model = transform.Find("PlayerModel");
             Bones = Rig.MapBones(model);
             _renderers = model.GetComponentsInChildren<Renderer>(true);
