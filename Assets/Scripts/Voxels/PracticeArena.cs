@@ -1,0 +1,94 @@
+using UnityEngine;
+
+namespace SuddenMageEncounter
+{
+    /// <summary>
+    /// The arena used when the Match Manager has no arena prefabs: a 48 m square of grass on dirt over unbreakable
+    /// bedrock, with a hill, stone pillars and a long wall to smash. Generated in code (identically on every peer).
+    /// </summary>
+    public static class PracticeArena
+    {
+        const int Half = 96;  // cells from the centre to the edge (24 m)
+        const int Depth = 8;  // 2 m of ground
+
+        public static Arena Create()
+        {
+            var go = new GameObject("Practice Arena");
+            var arena = go.AddComponent<Arena>();
+            arena.displayName = "Practice Grounds";
+            arena.killHeight = -20f;
+            arena.RuntimeData = Generate();
+            // spawns in a ring
+            for (int i = 0; i < 8; i++)
+            {
+                float a = i * Mathf.PI / 4f;
+                var sp = new GameObject("Spawn " + (i + 1)).AddComponent<SpawnPoint>();
+                sp.transform.SetParent(go.transform, false);
+                Vector3 p = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * 15f;
+                int cx = Mathf.FloorToInt(p.x / VoxelWorld.Size), cz = Mathf.FloorToInt(p.z / VoxelWorld.Size);
+                float ground = (Depth + Hill(cx, cz)) * VoxelWorld.Size;
+                sp.transform.localPosition = p + Vector3.up * (ground + 1.0f); // the body's root sits at the hips
+                sp.transform.rotation = Quaternion.LookRotation(-p);
+            }
+            return arena;
+        }
+
+        static VoxelArenaData Generate()
+        {
+            var d = new VoxelArenaData();
+            ushort grass = d.AddMaterial(new Color32(104, 158, 72, 255), false);
+            ushort grass2 = d.AddMaterial(new Color32(96, 148, 66, 255), false);
+            ushort dirt = d.AddMaterial(new Color32(134, 98, 64, 255), false);
+            ushort stone = d.AddMaterial(new Color32(142, 142, 148, 255), false);
+            ushort darkStone = d.AddMaterial(new Color32(112, 112, 120, 255), false);
+            ushort sand = d.AddMaterial(new Color32(214, 192, 140, 255), false);
+            ushort bedrock = d.AddMaterial(new Color32(58, 56, 62, 255), true);
+
+            // ground: bedrock, dirt, grass on top (y = 0 is the bottom)
+            for (int x = -Half; x < Half; x++)
+            for (int z = -Half; z < Half; z++)
+            {
+                int h = Depth + Hill(x, z);
+                for (int y = 0; y < h; y++)
+                {
+                    ushort v = y < 2 ? bedrock : y == h - 1 ? (((x >> 3) + (z >> 3)) % 2 == 0 ? grass : grass2) : dirt;
+                    d.Set(x, y, z, v);
+                }
+            }
+            // a sandy patch
+            for (int x = -60; x < -36; x++)
+            for (int z = 30; z < 54; z++)
+                if ((x + 48) * (x + 48) + (z - 42) * (z - 42) < 144) d.Set(x, Depth - 1, z, sand);
+
+            // stone pillars
+            int[,] pillars = { { 30, 30 }, { -30, 30 }, { 30, -30 }, { -30, -30 } };
+            for (int i = 0; i < pillars.GetLength(0); i++)
+                Box(d, pillars[i, 0] - 3, Depth, pillars[i, 1] - 3, 6, 20, 6, (x, y, z) => (y % 4 == 0) ? darkStone : stone);
+
+            // a long wall to throw people through
+            Box(d, -24, Depth, -78, 48, 10, 3, (x, y, z) => (((x + 64) / 4 + y / 2) % 2 == 0) ? stone : darkStone);
+            // a small tower with a floor to knock out
+            Box(d, 70, Depth, -6, 12, 14, 12, (x, y, z) => stone);
+            Box(d, 72, Depth, -4, 8, 12, 8, (x, y, z) => 0); // hollow
+            Box(d, 70, Depth + 6, -6, 12, 1, 12, (x, y, z) => darkStone); // middle floor
+            Box(d, 70, Depth, -2, 1, 4, 4, (x, y, z) => 0); // doorway facing the middle
+            return d;
+        }
+
+        /// <summary>A gentle hill on one side (extra cells of height).</summary>
+        static int Hill(int x, int z)
+        {
+            float dx = x - 40, dz = z - 48;
+            float r = Mathf.Sqrt(dx * dx + dz * dz);
+            return Mathf.Max(0, Mathf.FloorToInt((26f - r) / 3f));
+        }
+
+        static void Box(VoxelArenaData d, int x0, int y0, int z0, int sx, int sy, int sz, System.Func<int, int, int, ushort> v)
+        {
+            for (int x = x0; x < x0 + sx; x++)
+            for (int y = y0; y < y0 + sy; y++)
+            for (int z = z0; z < z0 + sz; z++)
+                d.Set(x, y, z, v(x, y, z));
+        }
+    }
+}
