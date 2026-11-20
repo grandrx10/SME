@@ -1,7 +1,10 @@
 # Offline compile check of Assets/Scripts with Unity's bundled Roslyn (runtime + editor assemblies).
-param([string]$Project = "C:\Users\Richard\SuddenMageEncounter")
+# The project is this script's parent folder; the editor is the one ProjectVersion.txt names (any PC).
+param([string]$Project = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = "Stop"
-$u = "C:\Program Files\Unity\Hub\Editor\6000.0.36f1\Editor\Data"
+$version = ((Get-Content (Join-Path $Project "ProjectSettings\ProjectVersion.txt") | Select-String '^m_EditorVersion:').Line -split ':\s*')[1].Trim()
+$u = "C:\Program Files\Unity\Hub\Editor\$version\Editor\Data"
+if (-not (Test-Path $u)) { throw "Unity $version isn't installed at $u" }
 $dotnet = "$u\NetCoreRuntime\dotnet.exe"
 $csc = "$u\DotNetSdkRoslyn\csc.dll"
 $out = Join-Path $env:TEMP "sme-compile-check"

@@ -188,22 +188,77 @@ namespace SuddenMageEncounter
             End();
         }
 
-        void AddRing(Vector3 center, float radius, Color c)
+        /// <summary>Water of Life: a wire ball where the orb will float.</summary>
+        public void ShowOrb(Vector3 center, float radius)
+        {
+            Begin();
+            var cam = Camera.main;
+            Vector3 right = cam != null ? cam.transform.right : Vector3.right, up = cam != null ? cam.transform.up : Vector3.up;
+            AddCircle(center, right, up, radius, Good);                                     // its outline as you see it
+            AddCircle(center, Vector3.right, Vector3.forward, radius, new Color(1f, 1f, 1f, 0.6f)); // the equator
+            Vector3 side = Vector3.Cross(Vector3.up, right).normalized;
+            AddCircle(center, Vector3.up, side, radius, new Color(1f, 1f, 1f, 0.35f));      // a meridian, for roundness
+            End();
+        }
+
+        /// <summary>Tsunami: the wave where it rises, and the strip of floor it will run along.</summary>
+        public void ShowTsunami(Vector3 feet, Vector3 dir)
+        {
+            Begin();
+            dir.y = 0f;
+            dir = dir.sqrMagnitude > 1e-4f ? dir.normalized : Vector3.forward;
+            var rot = Quaternion.LookRotation(dir);
+            float w = SpellPlans.TsunamiWidth, d = SpellPlans.TsunamiDepth, h = SpellPlans.TsunamiHeight;
+            Vector3 wave = feet + dir * (SpellPlans.TsunamiAhead + d * 0.5f) + Vector3.up * (h * 0.5f + 0.02f);
+            AddBox(wave, rot, new Vector3(w, h, d), Good, 0.1f);
+            float len = SpellPlans.TsunamiTravel;
+            Vector3 path = feet + dir * (SpellPlans.TsunamiAhead + d + len * 0.5f) + Vector3.up * 0.05f;
+            AddBox(path, rot, new Vector3(w, 0.02f, len), Good, 0.06f);
+            End();
+        }
+
+        /// <summary>Warp Self: a figure-sized box standing where you'll end up, and a ring at its feet.</summary>
+        public void ShowWarp(Vector3 feet, bool ok)
+        {
+            Begin();
+            Color c = ok ? Good : Bad;
+            AddRing(feet + Vector3.up * 0.05f, 0.45f, c);
+            var cam = Camera.main;
+            float yaw = cam != null ? cam.transform.eulerAngles.y : 0f;
+            AddBox(feet + Vector3.up * 0.95f, Quaternion.Euler(0f, yaw, 0f), new Vector3(0.7f, 1.9f, 0.7f), c, 0.1f);
+            End();
+        }
+
+        /// <summary>Warp Space: the portal's frame where it will open, its front (the opening) facing you.</summary>
+        public void ShowPortal(Vector3 center, float yaw, float pitch, bool ok)
+        {
+            Begin();
+            Color c = ok ? Good : Bad;
+            var rot = SpellPlans.PortalRotation(yaw, pitch);
+            AddBox(center - rot * Vector3.forward * (SpellPlans.PortalDepth * 0.5f), rot,
+                new Vector3(SpellPlans.PortalWidth, SpellPlans.PortalHeight, SpellPlans.PortalDepth), c, 0.22f);
+            End();
+        }
+
+        void AddRing(Vector3 center, float radius, Color c) => AddCircle(center, Vector3.right, Vector3.forward, radius, c);
+
+        /// <summary>A circle (outline only) in the plane of axes <paramref name="a"/> and <paramref name="b"/>.</summary>
+        void AddCircle(Vector3 center, Vector3 a, Vector3 b, float radius, Color c)
         {
             if (_used >= _boxes.Count) _boxes.Add(MakeBox());
-            var b = _boxes[_used++];
-            b.root.SetActive(true);
-            b.fill.transform.localScale = Vector3.zero; // outline only
-            b.line.startColor = b.line.endColor = new Color(c.r, c.g, c.b, 0.9f * c.a);
+            var box = _boxes[_used++];
+            box.root.SetActive(true);
+            box.fill.transform.localScale = Vector3.zero; // outline only
+            box.line.startColor = box.line.endColor = new Color(c.r, c.g, c.b, 0.9f * c.a);
             const int n = 48;
             var pts = new Vector3[n + 1];
             for (int i = 0; i <= n; i++)
             {
-                float a = i / (float)n * Mathf.PI * 2f;
-                pts[i] = center + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * radius;
+                float ang = i / (float)n * Mathf.PI * 2f;
+                pts[i] = center + (a * Mathf.Cos(ang) + b * Mathf.Sin(ang)) * radius;
             }
-            b.line.positionCount = pts.Length;
-            b.line.SetPositions(pts);
+            box.line.positionCount = pts.Length;
+            box.line.SetPositions(pts);
         }
 
         static Vector3 Abs(Vector3 v) => new(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));

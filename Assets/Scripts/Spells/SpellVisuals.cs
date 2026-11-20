@@ -127,7 +127,7 @@ namespace SuddenMageEncounter
                 Combatant Caster() => WorldNet.FindCombatant(fx.caster);
                 v._charge = ArcaneCharge.Create(
                     () => { var c = Caster(); return SpellVisuals.RightHand(c) + (c != null ? c.transform.forward * 0.12f : Vector3.zero); },
-                    () => { var c = Caster(); return c != null && c.IsAlive; },
+                    () => { var c = Caster(); return c != null && c.IsAlive && !WorldNet.Fizzled(fx.caster, fx.start, fx.start + SpellPlans.MissileCharge); },
                     SpellPlans.MissileCharge);
             }
             return v;
@@ -232,7 +232,13 @@ namespace SuddenMageEncounter
             float t = (float)(WorldNet.Now - _fx.start) - SpellPlans.BarrierWindup;
             var c = WorldNet.FindCombatant(_fx.caster);
             if (c != null) transform.SetPositionAndRotation(c.transform.position + Vector3.up * 0.1f, Quaternion.identity);
-            if (t < 0f) { transform.localScale = Vector3.zero; return; }
+            if (t < 0f)
+            {
+                transform.localScale = Vector3.zero;
+                // knocked down before it went up: it never does
+                if (WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + SpellPlans.BarrierWindup)) Destroy(gameObject);
+                return;
+            }
             if (!_burst)
             {
                 _burst = true;

@@ -264,7 +264,11 @@ namespace SuddenMageEncounter
             {
                 // the line being drawn: glowing, pulsing a little
                 _line.Set(_shownPts);
-                _line.SetWidth(0.14f + 0.03f * Mathf.Sin(Time.time * 25f));
+                // the caster was knocked down while drawing: the line thins away to nothing
+                if (_fizzledAt < 0 && WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + SpellPlans.HellfireDraw + 0.1)) _fizzledAt = now;
+                float thin = _fizzledAt < 0 ? 1f : 1f - Mathf.Clamp01((float)(now - _fizzledAt) / 0.2f);
+                _line.SetWidth((0.14f + 0.03f * Mathf.Sin(Time.time * 25f)) * thin);
+                if (thin <= 0f) { Destroy(gameObject); return; }
                 if (now - _fx.start > SpellPlans.HellfireDraw + 3.0) Destroy(gameObject); // never rose
                 return;
             }
@@ -274,6 +278,17 @@ namespace SuddenMageEncounter
             _line.Set(_shownPts);
             // falls all at once at the end
             float fall = 1f - Mathf.Clamp01((t - SpellPlans.HellfireRise - SpellPlans.HellfireStand) / SpellPlans.HellfireFall);
+            // put out by water: it drops right away in a hiss of steam along its length
+            if (_fx.quenched >= 0)
+            {
+                if (!_steamed)
+                {
+                    _steamed = true;
+                    for (int i = 0; i < _shownPts.Count; i += Mathf.Max(1, _shownPts.Count / 6)) WaterVfx.Steam(_shownPts[i] + Vector3.up * 0.8f, 0.9f);
+                }
+                fall = Mathf.Min(fall, 1f - Mathf.Clamp01((float)(now - _fx.quenched) / SpellPlans.HellfireFall));
+                if (fall <= 0f) { Destroy(gameObject); return; }
+            }
             if (fall < 1f) _line.Hide();
             Resample(_shownPts, 0.3f);
             Build(t, fall);
@@ -281,6 +296,8 @@ namespace SuddenMageEncounter
 
         readonly List<Vector3> _smooth = new(), _shownPts = new(), _tmp = new();
         float _shown;
+        bool _steamed;
+        double _fizzledAt = -1;
 
         /// <summary>Rounds off the corners (Chaikin, twice) and evens out the bumps in height, lifted just off the ground.</summary>
         void Smooth(List<Vector3> src, List<Vector3> dst)

@@ -19,6 +19,10 @@ namespace SuddenMageEncounter
         ManaState _manaSeen;
         int _rockId;
         double _rockLaunchAt;
+        float _castUntil;
+
+        /// <summary>Still casting the last card (<see cref="Cards.CastTime"/>): no other card until it's over.</summary>
+        public bool Casting => Time.time < _castUntil;
 
         public SpellPose Pose { get; private set; }
         public double PoseStart { get; private set; }
@@ -40,6 +44,7 @@ namespace SuddenMageEncounter
             WorldNet.RockGathered += OnRockGathered;
             WorldNet.FireballCharging += OnFireballCharging;
             WorldNet.HellfireStarted += OnHellfireStarted;
+            WorldNet.BubbleEnded += OnBubbleEnded;
         }
 
         void OnDisable()
@@ -47,15 +52,40 @@ namespace SuddenMageEncounter
             WorldNet.RockGathered -= OnRockGathered;
             WorldNet.FireballCharging -= OnFireballCharging;
             WorldNet.HellfireStarted -= OnHellfireStarted;
+            WorldNet.BubbleEnded -= OnBubbleEnded;
             _indicator?.Hide();
+        }
+
+        /// <summary>The server says our bubble popped (or ran out): drop out of it.</summary>
+        void OnBubbleEnded(ulong caster)
+        {
+            if (_pc == null || caster != _pc.NetworkObjectId) return;
+            _pc.Motor.EndBubble();
+            if (Pose == SpellPose.BubbleCast) SetPose(SpellPose.None);
         }
 
         void OnDestroy() => _indicator?.Destroy();
 
         public CardId CardIn(int slot) => _pc != null ? _pc.CardInSlot(slot) : Loadouts.Selected.Get(slot);
-        /// <summary>A free card rolled by The Fool (costs nothing, used once).</summary>
-        public bool IsFree(int slot) => _pc != null && _pc.IsFoolCard(slot);
-        public float CooldownLeft(int slot) => Mathf.Max(0f, _cooldownUntil[slot] - Time.time);
+        /// <summary>Free to cast: a card rolled by The Fool (used once), or Warp Space's second portal.</summary>
+        public bool IsFree(int slot) => _pc != null && (_pc.IsFoolCard(slot) || CardIn(slot) == CardId.WarpSpace && PortalWaiting());
+        public float CooldownLeft(int slot) => CardIn(slot) == CardId.WarpSpace && PortalWaiting() ? 0f : Mathf.Max(0f, _cooldownUntil[slot] - Time.time);
+
+        /// <summary>Our first Warp Space portal is open and waiting for its partner (which is free, with no cooldown).</summary>
+        bool PortalWaiting() => OwnPortals(false);
+
+        /// <summary>A linked pair of ours is still open: no Warp Space until it closes.</summary>
+        bool PortalsLinked() => OwnPortals(true);
+
+        bool OwnPortals(bool linked)
+        {
+            var net = WorldNet.Instance;
+            if (net == null || _pc == null) return false;
+            double now = WorldNet.Now;
+            foreach (var p in net.Portals.Values)
+                if (p.owner == _pc.NetworkObjectId && now < p.End && (p.pair != 0) == linked) return true;
+            return false;
+        }
         public bool Affordable(int slot) => _pc != null && (IsFree(slot) || _pc.CanAfford(Cards.Get(CardIn(slot)), _predictedSpend));
 
         public void ResetForRound()
@@ -67,6 +97,7 @@ namespace SuddenMageEncounter
 
         public void CancelAll()
         {
+            _castUntil = 0f;
             _holding = -1;
             _rockId = 0;
             _fireId = 0;
@@ -85,6 +116,9 @@ namespace SuddenMageEncounter
 
             bool able = _pc.IsAlive && !_pc.Motor.Ragdolled && !_pc.Motor.GettingUp && !_pc.Motor.Busy && MatchManager.CastingAllowed;
             if (!able && _holding >= 0) { _holding = -1; SetPose(SpellPose.None); }
+            // knocked down mid-cast: the spell stops (the server cancels its side too)
+            bool knocked = !_pc.IsAlive || _pc.Motor.Ragdolled || _pc.Motor.Carried;
+            if (knocked && (Casting || _rockId != 0 || _fireId != 0 || _hellId != 0 || _escapeAt >= 0f)) CancelAll();
 
             if (able && !InputMap.Blocked)
             {
@@ -123,6 +157,9 @@ namespace SuddenMageEncounter
                 SpellPose.FlameCharge => 0.95f, SpellPose.HellfireDraw => SpellPlans.HellfireDraw + 0.2f, SpellPose.FlameHands => 0.7f,
                 SpellPose.JudgmentCast => 1.6f, SpellPose.TugCast => 0.7f, SpellPose.Platform => 0.7f,
                 SpellPose.FoolRoll => 0.5f, SpellPose.Magician => 0.7f, SpellPose.SunRaise => SpellPlans.PriestessDelay + 0.35f, SpellPose.Prayer => 0.6f,
+                SpellPose.WaterCast => 0.6f, SpellPose.BubbleCast => SpellPlans.BubbleWindup + SpellPlans.BubbleTime + 0.25f, SpellPose.TsunamiCast => 0.9f,
+                SpellPose.WarpCast => SpellPlans.WarpDone + 0.2f, SpellPose.PortalCast => 0.5f,
+                SpellPose.SwiftCast => SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 0.2f,
                 _ => float.MaxValue,
             };
             if (t > ends) SetPose(SpellPose.None);
@@ -140,7 +177,7 @@ namespace SuddenMageEncounter
         {
             var info = Cards.Get(CardIn(slot));
             if (info == null) return;
-            if (CooldownLeft(slot) > 0f) { Denied?.Invoke(slot); return; }
+            if (Casting || CooldownLeft(slot) > 0f) { Denied?.Invoke(slot); return; }
             if (info.castOnPress)
             {
                 TryCast(slot, info);
@@ -154,6 +191,10 @@ namespace SuddenMageEncounter
                 CardId.Tornado => SpellPose.TornadoHold,
                 CardId.ArcaneJudgment => SpellPose.JudgmentHold,
                 CardId.Tug => SpellPose.TugHold,
+                CardId.WaterOfLife => SpellPose.WaterHold,
+                CardId.Tsunami => SpellPose.TsunamiHold,
+                CardId.WarpSelf => SpellPose.WarpHold,
+                CardId.WarpSpace => SpellPose.PortalHold,
                 _ => SpellPose.HoldWall,
             });
         }
@@ -167,7 +208,7 @@ namespace SuddenMageEncounter
 
         bool TryCast(int slot, CardInfo info)
         {
-            if (CooldownLeft(slot) > 0f || !Affordable(slot)) { Denied?.Invoke(slot); return false; }
+            if (Casting || CooldownLeft(slot) > 0f || !Affordable(slot)) { Denied?.Invoke(slot); return false; }
             bool free = IsFree(slot);
             var world = VoxelWorld.Current;
             Vector3 target = Vector3.zero;
@@ -264,11 +305,44 @@ namespace SuddenMageEncounter
                     _pc.Motor.Knock(Vector3.up * SpellPlans.PlatformLift, 0f); // ride it up (no ragdoll)
                     SetPose(SpellPose.Platform);
                     break;
+                case CardId.WaterOfLife:
+                    target = SpellPlans.OrbSpot(_pc.transform.position, yaw); // where the preview showed it
+                    SetPose(SpellPose.WaterCast);
+                    break;
+                case CardId.BubbleAway:
+                    _pc.Motor.Bubble(SpellPlans.BubbleWindup, SpellPlans.BubbleTime);
+                    SetPose(SpellPose.BubbleCast);
+                    break;
+                case CardId.Tsunami:
+                    _pc.Motor.Root(SpellPlans.TsunamiWindup); // stand and shove it out
+                    SetPose(SpellPose.TsunamiCast);
+                    break;
+                case CardId.WarpSelf:
+                {
+                    Vector3 p = AimPoint(false, out bool hit);
+                    if (!SpellPlans.WarpTarget(_pc.transform.position, p, hit, CameraRig.AimRay.direction, out target)) { Denied?.Invoke(slot); return false; }
+                    SetPose(SpellPose.WarpCast); // you can still move while it charges
+                    break;
+                }
+                case CardId.WarpSpace:
+                {
+                    if (PortalsLinked()) { Denied?.Invoke(slot); return false; }
+                    Vector3 p = AimPoint(false, out bool hit);
+                    if (!SpellPlans.PlanPortal(_pc.transform.position, p, hit, CameraRig.AimRay.direction, out target, out yaw, out float pitch)) { Denied?.Invoke(slot); return false; }
+                    targetId = SpellPlans.PackAngle(pitch); // the tilt rides along in the spare id
+                    SetPose(SpellPose.PortalCast);
+                    break;
+                }
+                case CardId.ArcaneSwiftness:
+                    _pc.Motor.Swift(SpellPlans.SwiftPrep, SpellPlans.SwiftTime);
+                    SetPose(SpellPose.SwiftCast);
+                    break;
                 default:
                     return false;
             }
             _pc.RequestCast(slot, info.id, target, yaw, targetId);
             _cooldownUntil[slot] = Time.time + Cards.Cooldown;
+            _castUntil = Time.time + Cards.CastTime(info.id);
             if (info.costType == CostType.Mana && !free) _predictedSpend += info.cost;
             _predictedAt = Time.time;
             return true;
@@ -527,6 +601,26 @@ namespace SuddenMageEncounter
                     Vector3 to = _pc.transform.position + Vector3.up * 0.4f;
                     if ((to - from).magnitude > 1.5f) _indicator.ShowTug(from, to);
                     else _indicator.Hide();
+                    break;
+                }
+                case CardId.WaterOfLife:
+                    _indicator.ShowOrb(SpellPlans.OrbSpot(_pc.transform.position, yaw), SpellPlans.OrbRadius);
+                    break;
+                case CardId.Tsunami:
+                    _indicator.ShowTsunami(_pc.FeetPosition, Quaternion.Euler(0, yaw, 0) * Vector3.forward);
+                    break;
+                case CardId.WarpSelf:
+                {
+                    Vector3 p = AimPoint(false, out bool hit);
+                    bool can = SpellPlans.WarpTarget(_pc.transform.position, p, hit, CameraRig.AimRay.direction, out var feet);
+                    _indicator.ShowWarp(feet, can);
+                    break;
+                }
+                case CardId.WarpSpace:
+                {
+                    Vector3 p = AimPoint(false, out bool hit);
+                    bool can = SpellPlans.PlanPortal(_pc.transform.position, p, hit, CameraRig.AimRay.direction, out var center, out float portalYaw, out float portalPitch);
+                    _indicator.ShowPortal(center, portalYaw, portalPitch, can && !PortalsLinked());
                     break;
                 }
                 default:

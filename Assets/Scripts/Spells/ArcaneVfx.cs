@@ -344,6 +344,8 @@ namespace SuddenMageEncounter
         int _index;
         bool _spewing = true;
         Vector3 _origin;
+        Color _colour = Glow.Arcane;
+        float _rate = -1f;
 
         const float PerSecond = 14f, Drag = 2f, UpBias = 0.5f, Size = 0.22f, Width = 0.022f, WriteTime = 0.12f;
         static readonly Vector2 Speed = new(1.2f, 2.8f), Life = new(0.7f, 1.2f);
@@ -358,6 +360,28 @@ namespace SuddenMageEncounter
             s._time = Mathf.Max(0.01f, seconds);
             s._origin = point();
             return s;
+        }
+
+        /// <summary>
+        /// Runes in another colour (Water of Life's green), at a steady <paramref name="perSecond"/> rather than building
+        /// up, each written somewhere within <paramref name="spread"/> (half-sizes of a box) of the point: all round a body.
+        /// </summary>
+        public static RuneSpew Create(Func<Vector3> point, Func<bool> alive, float seconds, Color colour, float perSecond, Vector3 spread = default)
+        {
+            var s = Create(point, alive, seconds);
+            if (s == null) return null;
+            s._colour = colour;
+            s._rate = perSecond;
+            s._spread = spread;
+            return s;
+        }
+
+        Vector3 _spread;
+
+        /// <summary>A sudden flurry of <paramref name="count"/> runes flung out fast (it keeps spewing as before).</summary>
+        public void Burst(int count, float speed = 1.8f)
+        {
+            for (int i = 0; i < count; i++) Spew(speed);
         }
 
         public void Release()
@@ -377,7 +401,7 @@ namespace SuddenMageEncounter
             else _origin = _point();
             if (_spewing)
             {
-                _owed += PerSecond * Mathf.Lerp(0.33f, 1f, Mathf.Clamp01(_age / _time)) * dt;
+                _owed += (_rate > 0f ? _rate : PerSecond * Mathf.Lerp(0.33f, 1f, Mathf.Clamp01(_age / _time))) * dt;
                 while (_owed >= 1f) { _owed -= 1f; Spew(1f); }
             }
             Quaternion facing = RuneDrawing.FacingCamera();
@@ -401,11 +425,11 @@ namespace SuddenMageEncounter
             Vector3 dir = (UnityEngine.Random.onUnitSphere + Vector3.up * UpBias).normalized;
             var go = new GameObject("Rune") { layer = Layers.Fx };
             go.transform.SetParent(transform, false);
-            go.transform.position = _origin;
+            go.transform.position = _origin + Vector3.Scale(new Vector3(UnityEngine.Random.Range(-1f, 1f), UnityEngine.Random.Range(-1f, 1f), UnityEngine.Random.Range(-1f, 1f)), _spread);
             var d = new RuneDrawing(go);
             d.AddRune(RuneGlyphs.Rune(_index++), Size, Width);
             d.Progress = 0f;
-            d.SetColour(Glow.Arcane);
+            d.SetColour(_colour);
             _runes.Add(new Rune
             {
                 t = go.transform, d = d, v = dir * (UnityEngine.Random.Range(Speed.x, Speed.y) * speedScale),

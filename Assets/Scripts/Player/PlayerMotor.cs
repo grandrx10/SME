@@ -76,6 +76,9 @@ namespace SuddenMageEncounter
         {
             _carried = false;
             _dashUntil = _siphonUntil = _rootUntil = 0f;
+            _bubbleFrom = _bubbleUntil = -1f;
+            _inBubble = false;
+            _swiftFrom = _swiftUntil = -1f;
             if (_ragdollUntil == float.MaxValue) _ragdollUntil = 0f;
             EndRagdoll(true);
             _cc.enabled = false;
@@ -98,7 +101,173 @@ namespace SuddenMageEncounter
         public bool Dashing => Time.time < _dashUntil;
         public bool Siphoning => Time.time < _siphonUntil;
         public bool Rooted => Time.time < _rootUntil;
-        public bool Busy => Dashing || Siphoning || Rooted || _carried;
+        /// <summary>Floating in a Bubble Away right now.</summary>
+        public bool Bubbled => Time.time >= _bubbleFrom && Time.time < _bubbleUntil;
+        public bool Busy => Dashing || Siphoning || Rooted || _carried || Time.time < _bubbleUntil || Time.time < _swiftUntil;
+
+        // ---------------- moved by a spell (warp, portal) ----------------
+
+        /// <summary>(new position) — moved somewhere else in one go (a warp, a portal): others should snap, not slide.</summary>
+        public event Action<Vector3> Moved;
+
+        /// <summary>Put the body somewhere else without stopping what it's doing (ragdoll, dash, bubble keep going).</summary>
+        public void MoveTo(Vector3 pos, float yaw, Vector3 velocity, float? pitch = null)
+        {
+            _cc.enabled = false;
+            transform.position = pos;
+            _cc.enabled = true;
+            Velocity = velocity;
+            Yaw = Mathf.Repeat(yaw, 360f);
+            if (pitch.HasValue) Pitch = Mathf.Clamp(pitch.Value, minPitch, maxPitch);
+            if (!Ragdolled) transform.rotation = Quaternion.Euler(0, Yaw, 0);
+            _dashDir = Quaternion.Euler(0, Yaw, 0) * Vector3.forward;
+            Moved?.Invoke(pos);
+        }
+
+        int _portalSkip;
+
+        /// <summary>
+        /// Going into a linked portal: the moment the body touches its opening (walking into it, falling or jumping
+        /// in, or standing on one that faces up), it comes out of the other one, the same distance in front of it,
+        /// facing and moving the matching way. The opening is flush against whatever it was cast on, so we can't
+        /// wait for the body to pass through it. The portal we came out of is ignored until we're clear of it.
+        /// </summary>
+        void ThroughPortals()
+        {
+            var net = WorldNet.Instance;
+            if (net == null || net.Portals.Count < 2) return;
+            double now = WorldNet.Now;
+            float r = _cc.radius, half = Mathf.Max(0f, _cc.height * 0.5f - _cc.radius), slack = _cc.skinWidth + 0.06f;
+            const float hw = SpellPlans.PortalWidth * 0.5f, hh = SpellPlans.PortalHeight * 0.5f;
+            Vector3 c = transform.position + _cc.center;
+            foreach (var a in net.Portals.Values)
+            {
+                var b = net.LinkedTo(a, now);
+                if (b == null) continue;
+                Quaternion qa = a.Rotation;
+                Vector3 n = qa * Vector3.forward;
+                Vector3 l = Quaternion.Inverse(qa) * (c - a.center);
+                // how far the body reaches towards the opening (a capsule standing up: further for a floor or ceiling portal)
+                float reach = r + half * Mathf.Abs(n.y) + slack;
+                bool over = Mathf.Abs(l.x) <= hw && Mathf.Abs(l.y) <= hh;
+                if (a.id == _portalSkip)
+                {
+                    if (!over || l.z > reach + 0.3f) _portalSkip = 0;
+                    continue;
+                }
+                if (!over || l.z > reach || l.z < -0.5f) continue;
+                // moving into it (as we were before the slab stopped us), or standing on a floor portal
+                Vector3 moving = _hitThisFrame ? _intendedVelocity : Velocity;
+                bool going = Vector3.Dot(moving, n) < -0.1f || n.y > 0.7f;
+                if (!going) continue;
+
+                Quaternion qb = b.Rotation;
+                Vector3 nb = qb * Vector3.forward;
+                Vector3 p = SpellPlans.ThroughPoint(c, a.center, qa, b.center, qb, true);
+                // far enough out of the other one for the body (its reach differs if one portal is flat and the other upright)
+                float reachB = r + half * Mathf.Abs(nb.y) + slack;
+                float outB = Vector3.Dot(p - b.center, nb);
+                if (outB < reachB) p += nb * (reachB - outB);
+                Vector3 look = SpellPlans.ThroughDir(ViewRotation * Vector3.forward, qa, qb);
+                float yaw = Mathf.Atan2(look.x, look.z) * Mathf.Rad2Deg;
+                float pitch = -Mathf.Asin(Mathf.Clamp(look.y, -1f, 1f)) * Mathf.Rad2Deg;
+                Vector3 v = SpellPlans.ThroughDir(moving, qa, qb);
+                // always leave moving out of it, at least a little
+                float away = Vector3.Dot(v, nb);
+                if (away < 2f) v += nb * (2f - away);
+                _portalSkip = b.id;
+                IsGrounded = false;
+                _lastJumpTime = Time.time;
+                MoveTo(p - _cc.center, yaw, v, pitch);
+                return;
+            }
+        }
+
+        // ---------------- Arcane Swiftness ----------------
+
+        float _swiftFrom = -1f, _swiftUntil = -1f, _lastSwiftBreak;
+        /// <summary>Running with Arcane Swiftness right now (after the crouch): free to move, three times as fast.</summary>
+        public bool Swifting => Time.time >= _swiftFrom && Time.time < _swiftUntil;
+        /// <summary>(feet, direction) — the swift run hit voxels: they come apart.</summary>
+        public event Action<Vector3, Vector3> SwiftBlocked;
+        float SpeedScale => Swifting ? SpellPlans.SwiftSpeedScale : 1f;
+
+        /// <summary>Arcane Swiftness: crouched for <paramref name="prep"/>, then <paramref name="seconds"/> of running at three times the speed.</summary>
+        public void Swift(float prep, float seconds)
+        {
+            Root(prep);
+            _swiftFrom = Time.time + prep;
+            _swiftUntil = _swiftFrom + seconds;
+        }
+
+        /// <summary>Knocked out of the crouch: it never happens.</summary>
+        public void EndSwift()
+        {
+            if (Time.time >= _swiftUntil) return;
+            if (Time.time < _swiftFrom) _rootUntil = 0f;
+            _swiftUntil = Time.time;
+        }
+
+        /// <summary>Running swift into something: it comes apart in front of you (small steps you just run up).</summary>
+        void SwiftCrash(Vector3 wish, Vector3 before, float dt)
+        {
+            Vector3 moved = transform.position - before;
+            moved.y = 0f;
+            float speed = new Vector2(Velocity.x, Velocity.z).magnitude;
+            if (moved.magnitude > Mathf.Max(speed, runSpeed) * dt * 0.6f || Time.time - _lastSwiftBreak < 0.08f) return;
+            _lastSwiftBreak = Time.time;
+            SwiftBlocked?.Invoke(transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f), wish.normalized);
+        }
+        /// <summary>Caught up in a tornado right now.</summary>
+        public bool Carried => _carried;
+
+        // ---------------- Bubble Away ----------------
+
+        float _bubbleFrom = -1f, _bubbleUntil = -1f, _lastBubbleBreak;
+        bool _inBubble;
+        /// <summary>(bubble centre) — the rising bubble ran into voxels above it: break them.</summary>
+        public event Action<Vector3> BubbleBlocked;
+
+        /// <summary>Bubble Away: held still while it forms, then floating up for <paramref name="seconds"/>, steering across.</summary>
+        public void Bubble(float windup, float seconds)
+        {
+            Root(windup);
+            _bubbleFrom = Time.time + windup;
+            _bubbleUntil = _bubbleFrom + seconds;
+        }
+
+        /// <summary>The bubble popped: drop out of it (you just fall from there).</summary>
+        public void EndBubble()
+        {
+            if (Time.time >= _bubbleUntil) return;
+            _bubbleUntil = Time.time;
+            if (Time.time < _bubbleFrom) _rootUntil = 0f;
+        }
+
+        void BubbleTick(float dt)
+        {
+            _inBubble = true;
+            Vector2 input = InputMap.Move;
+            Vector3 wish = Quaternion.Euler(0, Yaw, 0) * new Vector3(input.x, 0, input.y);
+            if (wish.sqrMagnitude > 1f) wish.Normalize();
+            Vector3 h = Vector3.MoveTowards(new Vector3(Velocity.x, 0f, Velocity.z), wish * SpellPlans.BubbleMove, 10f * dt);
+            Velocity = new Vector3(h.x, SpellPlans.BubbleRise, h.z);
+            IsGrounded = false;
+            Vector3 c = SpellPlans.BubbleCenter(transform.position);
+            bool ready = Time.time - _lastBubbleBreak > 0.1f;
+            if (ready && SpellPlans.BubbleRoofBlocked(c))
+            {
+                _lastBubbleBreak = Time.time;
+                ready = false;
+                BubbleBlocked?.Invoke(c);
+            }
+            var flags = _cc.Move(Velocity * dt);
+            if (ready && (flags & CollisionFlags.Above) != 0)
+            {
+                _lastBubbleBreak = Time.time;
+                BubbleBlocked?.Invoke(c);
+            }
+        }
 
         /// <summary>Nomadic Dash: rush along <paramref name="dir"/> (horizontal).</summary>
         public void Dash(Vector3 dir, float speed, float seconds)
@@ -232,10 +401,19 @@ namespace SuddenMageEncounter
             Look();
             if (_carried) { CarryTick(dt); return; }
             Depenetrate();
+            _hitThisFrame = false;
+            // the bubble just ended: stop rising, fall from here
+            if (_inBubble && !Bubbled)
+            {
+                _inBubble = false;
+                if (Velocity.y > 0f) Velocity.y = 0f;
+            }
             if (Ragdolled) RagdollTick(dt);
+            else if (Bubbled) BubbleTick(dt);
             else if (Dashing) DashTick(dt);
             else if (Siphoning) SiphonTick(dt);
             else MoveTick(dt);
+            ThroughPortals();
         }
 
         void DashTick(float dt)
@@ -298,7 +476,7 @@ namespace SuddenMageEncounter
                 for (int i = 0; i < n; i++)
                 {
                     var o = Overlaps[i];
-                    if (o == null || o == _cc) continue;
+                    if (o == null || o == _cc || Physics.GetIgnoreCollision(_cc, o)) continue; // (passing into a portal)
                     if (Physics.ComputePenetration(_probe, transform.position, Quaternion.identity, o, o.transform.position, o.transform.rotation,
                             out var dir, out float dist) && dist > push.magnitude)
                         push = dir * (dist + 0.02f);
@@ -353,8 +531,8 @@ namespace SuddenMageEncounter
             }
             if (IsGrounded && Time.time - _lastJumpTime > 0.1f)
             {
-                Vector3 target = wish * runSpeed;
-                float rate = wish.sqrMagnitude > 0.01f ? groundAccel : groundDecel;
+                Vector3 target = wish * (runSpeed * SpeedScale);
+                float rate = (wish.sqrMagnitude > 0.01f ? groundAccel : groundDecel) * SpeedScale;
                 h = Vector3.MoveTowards(h, target, rate * dt);
                 Velocity = new Vector3(h.x, -2f, h.z);
             }
@@ -362,8 +540,8 @@ namespace SuddenMageEncounter
             {
                 // air: steer, but never faster than running (or what you already had)
                 float before = h.magnitude;
-                h += wish * (airControl * dt);
-                float cap = Mathf.Max(before, runSpeed);
+                h += wish * (airControl * SpeedScale * dt);
+                float cap = Mathf.Max(before, runSpeed * SpeedScale);
                 if (h.magnitude > cap) h = h.normalized * cap;
                 Velocity.x = h.x;
                 Velocity.z = h.z;
@@ -374,7 +552,11 @@ namespace SuddenMageEncounter
             bool snap = IsGrounded && Time.time - _lastJumpTime > 0.1f;
             Vector3 before3 = transform.position;
             var flags = _cc.Move(Velocity * dt);
-            if ((flags & CollisionFlags.Sides) != 0 && wish.sqrMagnitude > 0.01f) TryClimbLedge(wish, before3);
+            if ((flags & CollisionFlags.Sides) != 0 && wish.sqrMagnitude > 0.01f)
+            {
+                if (Swifting) SwiftCrash(wish, before3, dt);
+                TryClimbLedge(wish, before3);
+            }
 
             // stick to the ground going down steps / slopes
             if (snap && (_cc.collisionFlags & CollisionFlags.Below) == 0 &&
@@ -456,8 +638,14 @@ namespace SuddenMageEncounter
                 EndRagdoll(Time.time > _ragdollUntil + 4f);
         }
 
+        // The velocity a move was made with, before the first thing it hit changed it (sliding along walls, bouncing):
+        // walking into a portal's slab zeroes the part going into it, but it still counts as going in.
+        Vector3 _intendedVelocity;
+        bool _hitThisFrame;
+
         void OnControllerColliderHit(ControllerColliderHit hit)
         {
+            if (!_hitThisFrame) { _hitThisFrame = true; _intendedVelocity = Velocity; }
             Vector3 n = hit.normal;
             float into = -Vector3.Dot(Velocity, n);
             if (!Ragdolled)

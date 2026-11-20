@@ -86,9 +86,10 @@ namespace SuddenMageEncounter
             float before = Health.Value;
             Health.Value = Mathf.Max(0f, Health.Value - dmg);
             OnServerDamaged(dmg);
-            // tell whoever did it (damage number + hit marker on their screen)
+            // tell whoever did it (damage number + hit marker on their screen): the hit's own damage, not just the
+            // health that happened to be left (a 15-damage rock finishing someone on 1 HP showed "1")
             if (source != null && source != this)
-                source.ServerHitConfirm(transform.position + Vector3.up * 1.15f, before - Health.Value, Health.Value <= 0f);
+                source.ServerHitConfirm(transform.position + Vector3.up * 1.15f, Health.Value <= 0f ? dmg : before - Health.Value, Health.Value <= 0f);
             if (Health.Value <= 0f)
             {
                 // spells credit the caster; falls and barriers credit whoever hurt you last
@@ -116,7 +117,7 @@ namespace SuddenMageEncounter
         /// <summary>Server: set alight — another 15 damage over 5 seconds, on top of any burns already going.</summary>
         public void ServerBurn(ulong attacker)
         {
-            if (!IsServer || Dead.Value) return;
+            if (!IsServer || Dead.Value || SpellServer.Invulnerable(this)) return;
             _burns.Add((WorldNet.Now + SpellPlans.BurnTime, attacker));
             BurnStacks.Value = (byte)Mathf.Min(255, _burns.Count);
         }
@@ -151,6 +152,41 @@ namespace SuddenMageEncounter
             if (IsServer && BurnStacks.Value != 0) BurnStacks.Value = 0;
         }
 
+        /// <summary>Server: water put the flames out.</summary>
+        public void ServerExtinguish() => ClearBurns();
+
+        // ---------------- healing ----------------
+
+        readonly List<(double end, float rate)> _heals = new();
+        float _healOwed;
+
+        /// <summary>Server: restore <paramref name="amount"/> health spread over <paramref name="seconds"/> (never above max).</summary>
+        public void ServerHeal(float amount, float seconds)
+        {
+            if (!IsServer || Dead.Value || amount <= 0f) return;
+            seconds = Mathf.Max(0.01f, seconds);
+            _heals.Add((WorldNet.Now + seconds, amount / seconds));
+        }
+
+        /// <summary>Server, every frame: healing trickles in (in small steps) until it runs out.</summary>
+        public void ServerTickHeal(double now, float dt)
+        {
+            if (_heals.Count == 0) return;
+            if (Dead.Value) { _heals.Clear(); _healOwed = 0f; return; }
+            for (int i = _heals.Count - 1; i >= 0; i--)
+            {
+                // only the part of this frame before it ran out
+                float share = Mathf.Clamp((float)(_heals[i].end - (now - dt)), 0f, dt);
+                _healOwed += _heals[i].rate * share;
+                if (now >= _heals[i].end) _heals.RemoveAt(i);
+            }
+            if (_healOwed >= 1f || _heals.Count == 0)
+            {
+                Health.Value = Mathf.Min(MaxHealth, Health.Value + _healOwed);
+                _healOwed = 0f;
+            }
+        }
+
         /// <summary>Server: knock this body away (and ragdoll it for a while). Players override this.</summary>
         public virtual void ServerKnock(Vector3 velocity, float ragdollSeconds) { }
 
@@ -179,6 +215,8 @@ namespace SuddenMageEncounter
             Dead.Value = false;
             _lastAttacker = NoAttacker;
             ClearBurns();
+            _heals.Clear();
+            _healOwed = 0f;
         }
 
         // ---------------- kill feed ----------------

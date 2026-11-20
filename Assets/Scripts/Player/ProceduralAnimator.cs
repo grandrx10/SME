@@ -245,6 +245,70 @@ namespace SuddenMageEncounter
             new(0.45f, new(0.03f, 0.08f, 0.32f), new(-0.6f, 1f, 0.3f), M(new(0.03f, 0.08f, 0.32f)), new(0.6f, 1f, 0.3f), 0f, 0.04f, 4f),
         };
 
+        // Water of Life: hands cupped in front, holding the water... then lifted out to set it floating
+        static readonly Key[] WaterHoldKeys =
+        {
+            new(0f, new(0.12f, -0.12f, 0.36f), new(0.3f, 0.6f, 1f), M(new(0.12f, -0.12f, 0.36f)), new(-0.3f, 0.6f, 1f), 0f, 0.03f, 4f),
+        };
+        static readonly Key[] WaterCastKeys =
+        {
+            new(0.00f, new(0.12f, -0.12f, 0.36f), new(0.3f, 0.6f, 1f), M(new(0.12f, -0.12f, 0.36f)), new(-0.3f, 0.6f, 1f), 0f, 0.03f, 4f),
+            new(0.18f, new(0.16f, 0.06f, 0.62f), new(0.2f, 0.8f, 1f), M(new(0.16f, 0.06f, 0.62f)), new(-0.2f, 0.8f, 1f), 0f, 0f, 8f),
+            new(0.40f, new(0.2f, 0.04f, 0.6f), new(0.3f, 0.7f, 1f), M(new(0.2f, 0.04f, 0.6f)), new(-0.3f, 0.7f, 1f), 0f, 0f, 6f),
+        };
+        // Bubble Away: hands come together in front of the chest, and stay cupped there while the bubble carries you
+        static readonly Key[] BubbleKeys =
+        {
+            new(0.00f, new(0.32f, -0.05f, 0.25f), new(-0.3f, 0.4f, 1f), M(new(0.32f, -0.05f, 0.25f)), new(0.3f, 0.4f, 1f)),
+            new(0.25f, new(0.05f, 0.04f, 0.34f), new(-0.5f, 0.8f, 0.6f), M(new(0.05f, 0.04f, 0.34f)), new(0.5f, 0.8f, 0.6f), 0f, 0.06f, 2f),
+            new(2.30f, new(0.05f, 0.06f, 0.34f), new(-0.5f, 0.8f, 0.6f), M(new(0.05f, 0.06f, 0.34f)), new(0.5f, 0.8f, 0.6f), 0f, 0.06f, 2f),
+        };
+        // Tsunami: arms low and ready... drawn back behind the hips, then shoved forward
+        static readonly Key[] TsunamiHoldKeys =
+        {
+            new(0f, new(0.3f, -0.3f, 0.18f), new(0f, -0.2f, 1f), M(new(0.3f, -0.3f, 0.18f)), new(0f, -0.2f, 1f), 0f, 0.06f, 2f),
+        };
+        static readonly Key[] TsunamiCastKeys =
+        {
+            new(0.00f, new(0.3f, -0.3f, 0.18f), new(0f, -0.2f, 1f), M(new(0.3f, -0.3f, 0.18f)), new(0f, -0.2f, 1f), 0f, 0.06f, 2f),
+            new(0.25f, new(0.34f, -0.28f, -0.28f), new(0f, -0.4f, 1f), M(new(0.34f, -0.28f, -0.28f)), new(0f, -0.4f, 1f), 0f, 0.14f, -8f),
+            new(0.45f, new(0.2f, 0.02f, 0.68f), new(0f, 0.5f, 1f), M(new(0.2f, 0.02f, 0.68f)), new(0f, 0.5f, 1f), 0f, 0.08f, 16f),
+            new(0.65f, new(0.2f, 0.0f, 0.64f), new(0f, 0.4f, 1f), M(new(0.2f, 0.0f, 0.64f)), new(0f, 0.4f, 1f), 0f, 0.06f, 10f),
+        };
+
+        // Warp Self: hands held close together... pulled apart (the rift opens between them), then folding in on yourself
+        static readonly Key[] WarpHoldKeys =
+        {
+            new(0f, new(0.06f, 0.02f, 0.34f), new(-0.4f, 0.6f, 1f), M(new(0.06f, 0.02f, 0.34f)), new(0.4f, 0.6f, 1f)),
+        };
+        static readonly Key[] WarpCastKeys =
+        {
+            new(0.00f, new(0.06f, 0.02f, 0.34f), new(-0.4f, 0.6f, 1f), M(new(0.06f, 0.02f, 0.34f)), new(0.4f, 0.6f, 1f)),
+            new(0.12f, new(0.02f, 0.05f, 0.36f), new(-0.6f, 0.8f, 0.6f), M(new(0.02f, 0.05f, 0.36f)), new(0.6f, 0.8f, 0.6f), 0f, 0.03f, 2f),
+            new(0.40f, new(0.34f, 0.05f, 0.34f), new(-1f, 0.3f, 0.4f), M(new(0.34f, 0.05f, 0.34f)), new(1f, 0.3f, 0.4f), 0f, 0.05f, 4f),
+            new(0.60f, new(0.05f, 0.0f, 0.16f), new(-0.6f, 0.5f, 0.6f), M(new(0.05f, 0.0f, 0.16f)), new(0.6f, 0.5f, 0.6f), 0f, 0.2f, 12f),
+            new(0.80f, new(0.3f, -0.1f, 0.3f), new(0.3f, 0.2f, 1f), M(new(0.3f, -0.1f, 0.3f)), new(-0.3f, 0.2f, 1f), 0f, 0.05f, 2f),
+        };
+        // Warp Space: right hand out, palm forward, framing where it'll open... a sweep, and it opens
+        static readonly Key[] PortalHoldKeys =
+        {
+            new(0f, new(0.18f, 0.1f, 0.62f), new(0f, 1f, 0.15f), new(-0.26f, -0.2f, 0.25f), new(0f, -0.6f, 0.6f), -8f, 0f, 4f),
+        };
+        static readonly Key[] PortalCastKeys =
+        {
+            new(0.00f, new(0.18f, 0.1f, 0.62f), new(0f, 1f, 0.15f), new(-0.26f, -0.2f, 0.25f), new(0f, -0.6f, 0.6f), -8f, 0f, 4f),
+            new(0.15f, new(0.42f, -0.18f, 0.55f), new(0.4f, 0.8f, 0.4f), new(-0.26f, -0.2f, 0.25f), new(0f, -0.6f, 0.6f), -14f, 0.03f, 6f),
+            new(0.30f, new(0.42f, -0.16f, 0.52f), new(0.4f, 0.8f, 0.4f), new(-0.26f, -0.2f, 0.25f), new(0f, -0.6f, 0.6f), -12f, 0.02f, 4f),
+        };
+        // Arcane Swiftness: crouched low, gathering... then running, arms swept back
+        static readonly Key[] SwiftKeys =
+        {
+            new(0.00f, new(0.25f, -0.45f, 0.32f), new(0f, -1f, 0.4f), M(new(0.25f, -0.45f, 0.32f)), new(0f, -1f, 0.4f), 0f, 0.35f, 22f),
+            new(0.28f, new(0.25f, -0.5f, 0.3f), new(0f, -1f, 0.4f), M(new(0.25f, -0.5f, 0.3f)), new(0f, -1f, 0.4f), 0f, 0.38f, 24f),
+            new(0.36f, new(0.25f, -0.32f, -0.22f), new(0f, -0.6f, -1f), M(new(0.25f, -0.32f, -0.22f)), new(0f, -0.6f, -1f), 0f, 0.12f, 24f),
+            new(1.90f, new(0.25f, -0.32f, -0.22f), new(0f, -0.6f, -1f), M(new(0.25f, -0.32f, -0.22f)), new(0f, -0.6f, -1f), 0f, 0.12f, 24f),
+        };
+
         /// <summary>Keyframes of a pose, and when it starts / finishes fading back to rest.</summary>
         static (Key[] keys, float fadeStart, float fadeEnd, bool shake) PoseData(SpellPose p) => p switch
         {
@@ -274,6 +338,16 @@ namespace SuddenMageEncounter
             SpellPose.Magician => (MagicianKeys, 0.5f, 0.7f, false),
             SpellPose.SunRaise => (SunRaiseKeys, SpellPlans.PriestessDelay + 0.1f, SpellPlans.PriestessDelay + 0.35f, false),
             SpellPose.Prayer => (PrayerKeys, 0.4f, 0.6f, false),
+            SpellPose.WaterHold => (WaterHoldKeys, 99f, 99f, true),
+            SpellPose.WaterCast => (WaterCastKeys, 0.4f, 0.6f, false),
+            SpellPose.BubbleCast => (BubbleKeys, SpellPlans.BubbleWindup + SpellPlans.BubbleTime, SpellPlans.BubbleWindup + SpellPlans.BubbleTime + 0.25f, false),
+            SpellPose.TsunamiHold => (TsunamiHoldKeys, 99f, 99f, true),
+            SpellPose.TsunamiCast => (TsunamiCastKeys, 0.65f, 0.9f, false),
+            SpellPose.WarpHold => (WarpHoldKeys, 99f, 99f, true),
+            SpellPose.WarpCast => (WarpCastKeys, 0.8f, 1.0f, false),
+            SpellPose.PortalHold => (PortalHoldKeys, 99f, 99f, true),
+            SpellPose.PortalCast => (PortalCastKeys, 0.3f, 0.5f, false),
+            SpellPose.SwiftCast => (SwiftKeys, SpellPlans.SwiftPrep + SpellPlans.SwiftTime, SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 0.2f, false),
             _ => (null, 0f, 0f, false),
         };
 

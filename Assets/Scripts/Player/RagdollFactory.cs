@@ -14,15 +14,11 @@ namespace SuddenMageEncounter
         public static float Lifetime = 20f;
         static PhysicsMaterial _slippery;
 
-        /// <summary>Gives every part of a ragdoll an extra shove.</summary>
-        public static void Push(GameObject ragdoll, Vector3 impulse)
+        /// <summary>Throws a ragdoll: every part gains <paramref name="knock"/> (a velocity, m/s: the same throw a live body gets).</summary>
+        public static void Push(GameObject ragdoll, Vector3 knock)
         {
-            if (ragdoll == null || impulse.sqrMagnitude < 1e-4f) return;
-            var bodies = ragdoll.GetComponentsInChildren<Rigidbody>();
-            float total = 0f;
-            foreach (var rb in bodies) total += rb.mass;
-            if (total <= 0f) return;
-            foreach (var rb in bodies) rb.linearVelocity += impulse / total;
+            if (ragdoll == null || knock.sqrMagnitude < 1e-4f) return;
+            foreach (var rb in ragdoll.GetComponentsInChildren<Rigidbody>()) rb.linearVelocity += knock;
         }
 
         /// <param name="lifetime">Seconds before it's removed; 0 = never (a live ragdoll that is removed by its owner).</param>
@@ -95,16 +91,15 @@ namespace SuddenMageEncounter
                 foreach (var c in rb.GetComponents<Collider>()) c.sharedMaterial = _slippery;
             }
 
-            // Half the impulse throws the whole body (with a little lift), half hits the struck limb.
-            float totalMass = 0f;
-            foreach (var rb in bodies) if (rb) totalMass += rb.mass;
-            Vector3 fling = impulse * 0.5f + Vector3.up * (impulse.magnitude * 0.12f);
-            if (totalMass > 0f)
-                foreach (var rb in bodies) if (rb) rb.linearVelocity += fling / totalMass;
-
-            Rigidbody hitBody = segment >= 0 && segment < bodies.Length ? bodies[segment] : null;
-            if (hitBody == null && bodies.Length > 0) hitBody = bodies[0];
-            if (hitBody) hitBody.AddForceAtPosition(impulse * 0.5f, point, ForceMode.Impulse);
+            // the killing hit's knock (a velocity: the same throw a live body would have got) carries the whole body,
+            // and the struck part gets a little extra, so it tumbles
+            if (impulse.sqrMagnitude > 1e-4f)
+            {
+                foreach (var rb in bodies) if (rb) rb.linearVelocity += impulse;
+                Rigidbody hitBody = segment >= 0 && segment < bodies.Length ? bodies[segment] : null;
+                if (hitBody == null && bodies.Length > 0) hitBody = bodies[0];
+                if (hitBody) hitBody.AddForceAtPosition(impulse * (hitBody.mass * 0.3f), point, ForceMode.Impulse);
+            }
 
             go.AddComponent<RagdollLifetime>().dieAt = Time.time + Lifetime;
             return go;

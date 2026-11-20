@@ -46,6 +46,7 @@ namespace SuddenMageEncounter
         Transform _sun;
         readonly List<Transform> _rays = new();
         bool _flashed, _checked;
+        float _fizzledAt = -1f;
 
         public static void Create(ulong caster, double start)
         {
@@ -78,6 +79,15 @@ namespace SuddenMageEncounter
             if (cam != null) transform.rotation = Quaternion.LookRotation(transform.position - cam.transform.position);
 
             float delay = SpellPlans.PriestessDelay;
+            // the caster was knocked down before the flash: the sun shrinks away, nobody is blinded
+            if (_fizzledAt < 0f && !_flashed && WorldNet.Fizzled(_caster, _start, _start + delay)) _fizzledAt = t;
+            if (_fizzledAt >= 0f)
+            {
+                float s = 1f - Mathf.Clamp01((t - _fizzledAt) / 0.2f);
+                if (s <= 0f) { Destroy(gameObject); return; }
+                transform.localScale = Vector3.one * (0.28f * s);
+                return;
+            }
             if (t < delay)
             {
                 float grow = 1f - Mathf.Pow(1f - Mathf.Clamp01(t / 0.2f), 3f);

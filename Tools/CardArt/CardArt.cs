@@ -1,6 +1,7 @@
 // Pulls the hand-drawn card sketches out of the design PDFs (and a pasted PNG), and turns each into a clean
 // card symbol: black lines on transparent, centred in a square, strokes thickened and edges smoothed.
-// Usage: CardArt <outDir> <pdf1> <pdf2> <foldingHands.png>
+// Usage: CardArt <outDir> --pdf <file.pdf> <CardId for image 1> <CardId for image 2> ...
+//        CardArt <outDir> --png <file.png> <CardId> [<file.png> <CardId> ...]
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,6 +26,12 @@ static class CardArt
             var images = PdfImages(a[2]);
             Console.WriteLine($"{images.Count} images");
             for (int i = 3; i < a.Length && i - 3 < images.Count; i++) Save(images[i - 3], Path.Combine(outDir, a[i] + ".png"));
+            return 0;
+        }
+        // CardArt <outDir> --png <file.png> <CardId> [<file.png> <CardId> ...] (sketches pasted as images)
+        if (a.Length > 3 && a[1] == "--png")
+        {
+            for (int i = 2; i + 1 < a.Length; i += 2) Save(ReadPng(a[i]), Path.Combine(outDir, a[i + 1] + ".png"));
             return 0;
         }
         var first = PdfImages(a[1]);
