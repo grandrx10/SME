@@ -89,7 +89,7 @@ namespace SuddenMageEncounter
                 if (!Inside(d, d.caster.FeetPosition, double.MaxValue, 0f)) { End(d); continue; }
                 foreach (var p in Combatant.Registry)
                 {
-                    if (p == null || p == d.caster || !p.IsAlive) continue;
+                    if (p == null || p == d.caster || !p.IsAlive || Invulnerable(p)) continue;
                     bool full = ManaOf(p, now) >= ManaState.Max - 0.001f;
                     if (d.trapped.Contains(p))
                     {
@@ -158,9 +158,14 @@ namespace SuddenMageEncounter
             return new Vector2(o.x, o.z).magnitude <= SpellPlans.DomainRadius(d.kind) * grow + pad;
         }
 
-        /// <summary>Empress: her damage to people in her domain ×1.25. Emperor: damage from people inside his aura ×0.5.</summary>
+        /// <summary>
+        /// Every hit passes through here. Bubble Away: someone in their bubble takes nothing (the bubble does).
+        /// Empress: her damage to people in her domain ×1.25. Emperor: damage from people inside his aura ×0.5.
+        /// </summary>
         static float ScaleDamage(Combatant victim, ulong attacker, float dmg)
         {
+            if (Invulnerable(victim)) return 0f;          // mid-warp, or Arcane Swiftness
+            if (AbsorbInBubble(victim, dmg)) return 0f; // Bubble Away: the bubble takes it
             if (Domains.Count == 0) return dmg;
             var source = PlayerController.ServerFind(attacker);
             if (source == null || source == victim) return dmg;

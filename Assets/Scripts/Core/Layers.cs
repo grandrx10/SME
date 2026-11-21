@@ -15,6 +15,9 @@ namespace SuddenMageEncounter
         public static int Ragdoll => Get(RagdollName, 10);
         public static int Fx => Get(FxName, 11);
 
+        /// <summary>Render-only layers (nothing collides on them): a warping body, hidden from the see-through camera; portal surfaces, hidden from portal cameras (no feedback).</summary>
+        public const int WarpHidden = 29, PortalSurface = 30;
+
         static int Get(string name, int fallback)
         {
             int l = LayerMask.NameToLayer(name);

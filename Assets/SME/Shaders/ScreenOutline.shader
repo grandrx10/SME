@@ -40,9 +40,13 @@ Shader "SME/ScreenOutline"
             float _FadeStart;
             float _FadeEnd;
 
+            // Distance along the view, rebuilt from the camera's real (inverse) view-projection rather than
+            // _ZBufferParams: that formula assumes an ordinary projection, and the portal cameras use an oblique
+            // one (near plane bent onto the portal), where it gives nonsense and draws false edges.
             float EyeDepth(float2 uv)
             {
-                return LinearEyeDepth(SampleSceneDepth(uv), _ZBufferParams);
+                float3 world = ComputeWorldSpacePosition(uv, SampleSceneDepth(uv), UNITY_MATRIX_I_VP);
+                return dot(world - _WorldSpaceCameraPos, -UNITY_MATRIX_V[2].xyz);
             }
 
             half4 Frag(Varyings input) : SV_Target

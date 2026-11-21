@@ -26,7 +26,18 @@ namespace SuddenMageEncounter
             Singe = 20, Fireball = 21, FireballLaunch = 22, FlameBurst = 23, Hellfire = 24, HellfirePoint = 25, HellfireRise = 26,
             Judgment = 27, JudgmentErase = 28, RockIgnite = 29, FireballEnd = 30,
             Priestess = 31, Domain = 32, DomainEnd = 33,
+            Orb = 34, OrbEnd = 35, Quench = 36, HellfireQuench = 37, RockDouse = 38,
+            Bubble = 39, BubbleHit = 40, BubbleEnd = 41, Tsunami = 42, TsunamiErase = 43, Wash = 44,
+            Warp = 45, WarpEnd = 46, Portal = 47, PortalLink = 48, Swift = 49, SwiftEnd = 50,
+            Fizzle = 60,
         }
+
+        /// <summary>When each caster was last knocked out of a cast (server time), for the views to cancel what they were showing.</summary>
+        static readonly Dictionary<ulong, double> FizzledAt = new();
+
+        /// <summary>Was this caster knocked out of a cast between <paramref name="from"/> and <paramref name="until"/>?</summary>
+        public static bool Fizzled(ulong caster, double from, double until) =>
+            FizzledAt.TryGetValue(caster, out double t) && t >= from - 0.05 && t <= until;
 
         public static WorldNet Instance { get; private set; }
         public static double Now => NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening
@@ -77,8 +88,10 @@ namespace SuddenMageEncounter
             /// <summary>The caster's own every-frame copy of the line while drawing it (only on their machine): smoother than the networked points.</summary>
             public readonly List<Vector3> local = new();
             public double riseStart = -1; public HellfireView view;
+            /// <summary>Put out by water at this time (-1 = still burning).</summary>
+            public double quenched = -1;
         }
-        public class JudgmentFx { public int id; public Vector3 center; public double start; public JudgmentView view; }
+        public class JudgmentFx { public int id; public ulong caster; public Vector3 center; public double start; public JudgmentView view; }
 
         public readonly Dictionary<int, FireballFx> Fireballs = new();
         public readonly Dictionary<int, HellfireFx> Hellfires = new();
@@ -104,6 +117,93 @@ namespace SuddenMageEncounter
             public DomainView view;
         }
         public readonly Dictionary<int, DomainFx> Domains = new();
+
+        /// <summary>A Water of Life orb. how it ended: 0 burst while forming, 1 drunk (by <see cref="who"/>), 2 left too long.</summary>
+        public class OrbFx
+        {
+            public int id; public ulong caster; public Vector3 center; public double start, ended = -1;
+            public byte how; public ulong who; public OrbView view;
+        }
+        /// <summary>A Bubble Away round its caster.</summary>
+        public class BubbleFx
+        {
+            public ulong caster; public double start, ended = -1, lastHit = -10; public bool popped; public BubbleView view;
+        }
+        /// <summary>A Tsunami: rides the floor heights in <see cref="ground"/> from <see cref="origin"/> along <see cref="dir"/>.</summary>
+        public class TsunamiFx
+        {
+            public int id; public ulong caster; public Vector3 origin, dir; public double start; public float[] ground;
+            /// <summary>Lanes erased by Arcane Judgment (bit per lane).</summary>
+            public int dead;
+            public TsunamiView view;
+        }
+        public readonly Dictionary<int, OrbFx> Orbs = new();
+        public readonly List<BubbleFx> Bubbles = new();
+        public readonly Dictionary<int, TsunamiFx> Tsunamis = new();
+
+        /// <summary>(caster object id) — a Bubble Away ended (popped or ran out); its owner drops out of it.</summary>
+        public static event Action<ulong> BubbleEnded;
+
+        /// <summary>Warp Self: a warp to <see cref="dest"/> (feet). how it ended early: 0 cancelled while charging, 1 hit while unfolding (unfolds at once).</summary>
+        public class WarpFx
+        {
+            public int id; public ulong caster; public Vector3 dest; public double start, ended = -1; public byte how;
+            public WarpView view;
+        }
+        /// <summary>A Warp Space portal: its opening faces along <see cref="yaw"/>. Linked to <see cref="pair"/> once the second is cast.</summary>
+        public class PortalFx
+        {
+            public int id, pair; public ulong owner; public Vector3 center; public float yaw, pitch; public double start, linkStart = -1;
+            public PortalView view;
+            public Quaternion Rotation => SpellPlans.PortalRotation(yaw, pitch);
+            /// <summary>The way its opening faces.</summary>
+            public Vector3 Normal => Rotation * Vector3.forward;
+            /// <summary>It closes at this time (the second portal restarts both portals' time).</summary>
+            public double End => (linkStart >= 0 ? linkStart : start) + SpellPlans.PortalLife;
+        }
+        /// <summary>Arcane Swiftness on <see cref="caster"/>.</summary>
+        public class SwiftFx { public ulong caster; public double start, ended = -1; public bool cancelled; public SwiftView view; }
+
+        public readonly Dictionary<int, WarpFx> Warps = new();
+        public readonly Dictionary<int, PortalFx> Portals = new();
+        public readonly List<SwiftFx> Swifts = new();
+
+        /// <summary>(warp id, caster object id, how) — a warp ended early; its owner stops it.</summary>
+        public static event Action<int, ulong, byte> WarpEnded;
+        /// <summary>(caster object id, cancelled) — Arcane Swiftness ended early.</summary>
+        public static event Action<ulong, bool> SwiftEnded;
+
+        /// <summary>The portal linked to this one, if both are still open.</summary>
+        public PortalFx LinkedTo(PortalFx p, double now)
+        {
+            if (p.pair == 0 || now >= p.End || now < p.start) return null;
+            return Portals.TryGetValue(p.pair, out var q) && now < q.End ? q : null;
+        }
+
+        /// <summary>
+        /// Did something moving from a to b go in through a linked portal's opening? (<paramref name="ahead"/>: a ball
+        /// that radius counts as in when it touches the opening; <paramref name="pad"/> shrinks the opening's edges.)
+        /// Gives the portal it went into and the one it comes out of.
+        /// </summary>
+        public static bool PassPortal(Vector3 a, Vector3 b, float ahead, float pad, out PortalFx into, out PortalFx outOf)
+        {
+            into = outOf = null;
+            var i = Instance;
+            if (i == null || i.Portals.Count < 2) return false;
+            double now = Now;
+            foreach (var p in i.Portals.Values)
+            {
+                var q = i.LinkedTo(p, now);
+                if (q == null || !SpellPlans.PortalCrossed(a, b, p.center, p.Rotation, ahead, pad)) continue;
+                into = p;
+                outOf = q;
+                return true;
+            }
+            return false;
+        }
+
+        public static bool BubbleActive(BubbleFx b, double now) =>
+            b.ended < 0 && now >= b.start + SpellPlans.BubbleWindup && now <= b.start + SpellPlans.BubbleWindup + SpellPlans.BubbleTime;
 
         public readonly Dictionary<int, WallFx> Walls = new();
         public readonly Dictionary<int, RockFx> Rocks = new();
@@ -478,15 +578,25 @@ namespace SuddenMageEncounter
 
         // ---------------- arcane judgment ----------------
 
-        public static int ServerJudgment(Vector3 center)
+        public static int ServerJudgment(ulong caster, Vector3 center)
         {
             var i = Instance;
             if (i == null || !IsServer) return 0;
             int id = i._nextId++;
-            var w = NewOp(Op.Judgment, 32);
-            w.WriteValueSafe(id); w.WriteValueSafe(center); w.WriteValueSafe(Now);
+            var w = NewOp(Op.Judgment, 40);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now);
             i.Broadcast(Finish(ref w));
             return id;
+        }
+
+        /// <summary>The caster was knocked down mid-cast: views cancel whatever they were still casting.</summary>
+        public static void ServerFizzle(ulong caster)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Fizzle, 24);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
         }
 
         /// <summary>Takes one layer off the top of the judgment's cylinder.</summary>
@@ -528,6 +638,179 @@ namespace SuddenMageEncounter
             if (i == null || !IsServer) return;
             var w = NewOp(Op.DomainEnd, 16);
             w.WriteValueSafe(id); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- water ----------------
+
+        public static int ServerOrb(ulong caster, Vector3 center)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Orb, 40);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        /// <param name="how">0 burst while forming, 1 drunk by <paramref name="who"/>, 2 left too long.</param>
+        public static void ServerOrbEnd(int id, byte how, ulong who)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.OrbEnd, 16);
+            w.WriteValueSafe(id); w.WriteValueSafe(how); w.WriteValueSafe(who);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Fire put out by water here: a hiss of steam (look only).</summary>
+        public static void ServerQuench(Vector3 point, float scale)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Quench, 20);
+            w.WriteValueSafe(point); w.WriteValueSafe(scale);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerHellfireQuench(int id)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.HellfireQuench, 16);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>A burning lump of ground went through water: it's just ground again.</summary>
+        public static void ServerRockDouse(int id)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.RockDouse, 8);
+            w.WriteValueSafe(id);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerBubble(ulong caster)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Bubble, 20);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerBubbleHit(ulong caster, Vector3 point)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.BubbleHit, 24);
+            w.WriteValueSafe(caster); w.WriteValueSafe(point);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerBubbleEnd(ulong caster, bool popped)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.BubbleEnd, 24);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now); w.WriteValueSafe(popped);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static int ServerTsunami(ulong caster, Vector3 origin, Vector3 dir, float[] ground)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Tsunami, 64 + ground.Length * 4);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(origin); w.WriteValueSafe(dir); w.WriteValueSafe(Now);
+            w.WriteValueSafe((short)ground.Length);
+            foreach (var g in ground) w.WriteValueSafe(g);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        public static void ServerTsunamiErase(int id, int dead)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.TsunamiErase, 12);
+            w.WriteValueSafe(id); w.WriteValueSafe(dead);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- arcane movement ----------------
+
+        public static int ServerWarp(ulong caster, Vector3 dest)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Warp, 40);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(dest); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        /// <param name="how">0 cancelled while charging, 1 hit while unfolding.</param>
+        public static void ServerWarpEnd(int id, byte how)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.WarpEnd, 16);
+            w.WriteValueSafe(id); w.WriteValueSafe(how); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static int ServerPortal(ulong owner, Vector3 center, float yaw, float pitch)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Portal, 44);
+            w.WriteValueSafe(id); w.WriteValueSafe(owner); w.WriteValueSafe(center); w.WriteValueSafe(yaw); w.WriteValueSafe(pitch); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        public static void ServerPortalLink(int a, int b)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.PortalLink, 20);
+            w.WriteValueSafe(a); w.WriteValueSafe(b); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerSwift(ulong caster)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Swift, 20);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerSwiftEnd(ulong caster, bool cancelled)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.SwiftEnd, 24);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now); w.WriteValueSafe(cancelled);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>A wave smashed these cells: broken, the rubble washed along <paramref name="dir"/>.</summary>
+        public static void ServerWash(List<Vector3Int> cells, Vector3 dir)
+        {
+            var i = Instance;
+            if (i == null || !IsServer || cells.Count == 0) return;
+            var w = NewOp(Op.Wash, 32 + cells.Count * 6);
+            WriteCells(ref w, cells);
+            w.WriteValueSafe(dir);
             i.Broadcast(Finish(ref w));
         }
 
@@ -881,9 +1164,16 @@ namespace SuddenMageEncounter
                 case Op.Judgment:
                 {
                     var fx = new JudgmentFx();
-                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.start);
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.start);
                     fx.view = JudgmentView.Create(fx);
                     Judgments[fx.id] = fx;
+                    break;
+                }
+                case Op.Fizzle:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out double t);
+                    FizzledAt[caster] = t; // the views read it (missile orb, barrier, judgment circle, hellfire line, priestess sun)
                     break;
                 }
                 case Op.JudgmentErase:
@@ -925,6 +1215,166 @@ namespace SuddenMageEncounter
                     r.ReadValueSafe(out int id);
                     r.ReadValueSafe(out double t);
                     if (Domains.TryGetValue(id, out var fx)) fx.ended = t;
+                    break;
+                }
+                case Op.Orb:
+                {
+                    var fx = new OrbFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.start);
+                    fx.view = OrbView.Create(fx);
+                    Orbs[fx.id] = fx;
+                    break;
+                }
+                case Op.OrbEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out byte how);
+                    r.ReadValueSafe(out ulong who);
+                    if (Orbs.TryGetValue(id, out var fx)) { fx.ended = Now; fx.how = how; fx.who = who; }
+                    break;
+                }
+                case Op.Quench:
+                {
+                    r.ReadValueSafe(out Vector3 point);
+                    r.ReadValueSafe(out float scale);
+                    WaterVfx.Steam(point, scale);
+                    break;
+                }
+                case Op.HellfireQuench:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    if (Hellfires.TryGetValue(id, out var fx)) fx.quenched = t;
+                    break;
+                }
+                case Op.RockDouse:
+                {
+                    r.ReadValueSafe(out int id);
+                    if (Rocks.TryGetValue(id, out var rock) && rock.body != null)
+                    {
+                        foreach (var a in rock.body.GetComponentsInChildren<FlameAura>()) Destroy(a.gameObject);
+                        WaterVfx.Steam(rock.body.Center, 0.8f);
+                    }
+                    break;
+                }
+                case Op.Bubble:
+                {
+                    var fx = new BubbleFx();
+                    r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start);
+                    fx.view = BubbleView.Create(fx);
+                    Bubbles.Add(fx);
+                    break;
+                }
+                case Op.BubbleHit:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out Vector3 point);
+                    var fx = Bubbles.FindLast(b => b.caster == caster && b.ended < 0);
+                    if (fx != null) fx.lastHit = Now;
+                    WaterVfx.Splash(point, 0.5f);
+                    break;
+                }
+                case Op.BubbleEnd:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out double t);
+                    r.ReadValueSafe(out bool popped);
+                    var fx = Bubbles.FindLast(b => b.caster == caster && b.ended < 0);
+                    if (fx != null) { fx.ended = t; fx.popped = popped; }
+                    BubbleEnded?.Invoke(caster);
+                    break;
+                }
+                case Op.Tsunami:
+                {
+                    var fx = new TsunamiFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.origin); r.ReadValueSafe(out fx.dir);
+                    r.ReadValueSafe(out fx.start);
+                    r.ReadValueSafe(out short n);
+                    fx.ground = new float[Mathf.Max(0, (int)n)];
+                    for (int k = 0; k < fx.ground.Length; k++) r.ReadValueSafe(out fx.ground[k]);
+                    fx.view = TsunamiView.Create(fx);
+                    Tsunamis[fx.id] = fx;
+                    break;
+                }
+                case Op.TsunamiErase:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out int dead);
+                    if (Tsunamis.TryGetValue(id, out var fx)) fx.dead = dead;
+                    break;
+                }
+                case Op.Warp:
+                {
+                    var fx = new WarpFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.dest); r.ReadValueSafe(out fx.start);
+                    fx.view = WarpView.Create(fx);
+                    Warps[fx.id] = fx;
+                    break;
+                }
+                case Op.WarpEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out byte how);
+                    r.ReadValueSafe(out double t);
+                    if (Warps.TryGetValue(id, out var fx))
+                    {
+                        fx.ended = t;
+                        fx.how = how;
+                        WarpEnded?.Invoke(id, fx.caster, how);
+                    }
+                    break;
+                }
+                case Op.Portal:
+                {
+                    var fx = new PortalFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.owner); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.yaw);
+                    r.ReadValueSafe(out fx.pitch); r.ReadValueSafe(out fx.start);
+                    fx.view = PortalView.Create(fx);
+                    Portals[fx.id] = fx;
+                    break;
+                }
+                case Op.PortalLink:
+                {
+                    r.ReadValueSafe(out int a);
+                    r.ReadValueSafe(out int b);
+                    r.ReadValueSafe(out double t);
+                    if (Portals.TryGetValue(a, out var pa) && Portals.TryGetValue(b, out var pb))
+                    {
+                        pa.pair = b; pb.pair = a;
+                        pa.linkStart = pb.linkStart = t;
+                    }
+                    break;
+                }
+                case Op.Swift:
+                {
+                    var fx = new SwiftFx();
+                    r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start);
+                    fx.view = SwiftView.Create(fx);
+                    Swifts.Add(fx);
+                    break;
+                }
+                case Op.SwiftEnd:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out double t);
+                    r.ReadValueSafe(out bool cancelled);
+                    var fx = Swifts.FindLast(s => s.caster == caster && s.ended < 0);
+                    if (fx != null) { fx.ended = t; fx.cancelled = cancelled; }
+                    SwiftEnded?.Invoke(caster, cancelled);
+                    break;
+                }
+                case Op.Wash:
+                {
+                    var cells = ReadCells(ref r);
+                    r.ReadValueSafe(out Vector3 dir);
+                    world.RemoveCells(cells, removed, true, islands);
+                    if (removed.Count > 0)
+                    {
+                        Vector3 mid = Vector3.zero;
+                        foreach (var rc in removed) mid += world.CellCenter(rc.cell);
+                        mid /= removed.Count;
+                        Debris.Spawn(world, removed, mid - dir, 3f, dir * 7f + Vector3.up * 2.5f, 2);
+                    }
                     break;
                 }
                 case Op.Shatter:
@@ -1131,6 +1581,20 @@ namespace SuddenMageEncounter
             _done.Clear();
             foreach (var d in Domains.Values) if (d.ended >= 0 && now - d.ended > 1.0 || now - d.start > 30.0) _done.Add(d.id);
             foreach (var id in _done) Domains.Remove(id);
+            _done.Clear();
+            foreach (var o in Orbs.Values) if (o.ended >= 0 && now - o.ended > 1.0 || now - o.start > SpellPlans.OrbGrow + SpellPlans.OrbLife + 3.0) _done.Add(o.id);
+            foreach (var id in _done) Orbs.Remove(id);
+            Bubbles.RemoveAll(b => b.ended >= 0 && now - b.ended > 1.0 || now - b.start > SpellPlans.BubbleWindup + SpellPlans.BubbleTime + 3.0);
+            _done.Clear();
+            foreach (var t in Tsunamis.Values) if (now - t.start > SpellPlans.TsunamiLife + SpellPlans.TsunamiCollapse + 1.0) _done.Add(t.id);
+            foreach (var id in _done) Tsunamis.Remove(id);
+            _done.Clear();
+            foreach (var w in Warps.Values) if (w.ended >= 0 && now - w.ended > 1.0 || now - w.start > SpellPlans.WarpDone + 2.0) _done.Add(w.id);
+            foreach (var id in _done) Warps.Remove(id);
+            _done.Clear();
+            foreach (var p in Portals.Values) if (now > p.End + 1.0) _done.Add(p.id);
+            foreach (var id in _done) Portals.Remove(id);
+            Swifts.RemoveAll(s => s.ended >= 0 && now - s.ended > 1.0 || now - s.start > SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 2.0);
         }
 
         readonly List<int> _done = new();
@@ -1249,10 +1713,23 @@ namespace SuddenMageEncounter
             foreach (var h in Hellfires.Values) if (h.view) Destroy(h.view.gameObject);
             foreach (var j in Judgments.Values) if (j.view) Destroy(j.view.gameObject);
             foreach (var d in Domains.Values) if (d.view) Destroy(d.view.gameObject);
+            foreach (var o in Orbs.Values) if (o.view) Destroy(o.view.gameObject);
+            foreach (var b in Bubbles) if (b.view) Destroy(b.view.gameObject);
+            foreach (var t in Tsunamis.Values) if (t.view) Destroy(t.view.gameObject);
+            Orbs.Clear();
+            Bubbles.Clear();
+            Tsunamis.Clear();
+            foreach (var w in Warps.Values) if (w.view) Destroy(w.view.gameObject);
+            foreach (var p in Portals.Values) if (p.view) Destroy(p.view.gameObject);
+            foreach (var s in Swifts) if (s.view) Destroy(s.view.gameObject);
+            Warps.Clear();
+            Portals.Clear();
+            Swifts.Clear();
             Domains.Clear();
             Fireballs.Clear();
             Hellfires.Clear();
             Judgments.Clear();
+            FizzledAt.Clear();
             Walls.Clear();
             Rocks.Clear();
             Folds.Clear();

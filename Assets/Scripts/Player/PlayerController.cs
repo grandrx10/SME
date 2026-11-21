@@ -124,6 +124,11 @@ namespace SuddenMageEncounter
                 Motor.Crashed += OnCrashed;
                 Motor.HardLanding += OnHardLanding;
                 Motor.StandBlocked += OnStandBlocked;
+                Motor.BubbleBlocked += OnBubbleBlocked;
+                Motor.SwiftBlocked += OnSwiftBlocked;
+                Motor.Moved += OnMoved;
+                WorldNet.WarpEnded += OnWarpEnded;
+                WorldNet.SwiftEnded += OnSwiftEnded;
                 Health.OnValueChanged += OnOwnHealthChanged;
                 PushName();
                 PushFace();
@@ -159,7 +164,13 @@ namespace SuddenMageEncounter
             FaceArt.Changed -= PushFace;
             Face.OnValueChanged -= OnFaceChanged;
             ColorIndex.OnValueChanged -= OnColorChanged;
-            if (Motor != null) { Motor.Crashed -= OnCrashed; Motor.HardLanding -= OnHardLanding; Motor.StandBlocked -= OnStandBlocked; }
+            if (Motor != null)
+            {
+                Motor.Crashed -= OnCrashed; Motor.HardLanding -= OnHardLanding; Motor.StandBlocked -= OnStandBlocked; Motor.BubbleBlocked -= OnBubbleBlocked;
+                Motor.SwiftBlocked -= OnSwiftBlocked; Motor.Moved -= OnMoved;
+            }
+            WorldNet.WarpEnded -= OnWarpEnded;
+            WorldNet.SwiftEnded -= OnSwiftEnded;
             Health.OnValueChanged -= OnOwnHealthChanged;
             if (Local == this)
             {
@@ -176,6 +187,7 @@ namespace SuddenMageEncounter
                 if (!Dead.Value)
                 {
                     if (Trapped) { Motor.Root(0.15f); ChainTick(); } // held in place by the Empress (knocks still move you; the chains pull you back)
+                    TickOwnWarp();
                     WriteState();
                     CheckHazards();
                 }
@@ -324,6 +336,13 @@ namespace SuddenMageEncounter
         // ---------------- casting (owner -> server) ----------------
 
         readonly double[] _serverLastCast = { -10, -10, -10, -10, -10 };
+        double _serverCastingUntil = -10;
+
+        /// <summary>Server: still in the middle of casting a card (see <see cref="Cards.CastTime"/>).</summary>
+        public bool ServerCasting => WorldNet.Now < _serverCastingUntil;
+
+        /// <summary>Server: knocked out of a cast: free to cast again once back up.</summary>
+        public void ServerEndCast() => _serverCastingUntil = -10;
 
         public void RequestCast(int slot, CardId card, Vector3 target, float yaw, ulong targetId = 0) => CastRpc((byte)slot, (byte)card, target, yaw, targetId);
         public void RequestRockLaunch(int id, Vector3 dir) => RockLaunchRpc(id, dir);
@@ -331,7 +350,7 @@ namespace SuddenMageEncounter
         [Rpc(SendTo.Server)]
         void CastRpc(byte slot, byte cardByte, Vector3 target, float yaw, ulong targetId)
         {
-            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowed || Trapped) return;
+            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowed || Trapped || SpellServer.InBubble(this)) return;
             var card = (CardId)cardByte;
             bool free = IsFoolCard(slot) && FoolCards.Value[slot] == card;
             if (!free && Equipped.Value[slot] != card) return;
@@ -339,7 +358,10 @@ namespace SuddenMageEncounter
             var info = Cards.Get(card);
             if (info == null) return;
             double now = WorldNet.Now;
-            if (now - _serverLastCast[slot] < Cards.Cooldown - 0.15) return;
+            // Warp Space's second portal: free, no cooldown
+            if (card == CardId.WarpSpace && SpellServer.PortalRecastReady(this)) free = true;
+            if (now - _serverLastCast[slot] < Cards.Cooldown - 0.15 && !(free && card == CardId.WarpSpace)) return;
+            if (now < _serverCastingUntil - 0.15) return; // one card at a time (a little slack for lag)
             // cost (a little slack for clock differences); a Fool card is free
             float mana = Mana.Value.At(now + 0.12);
             if (!free && info.costType == CostType.Mana && Mathf.Floor(mana + 0.001f) < info.cost) return;
@@ -353,13 +375,15 @@ namespace SuddenMageEncounter
             }
             else if (!SpellServer.Cast(this, card, target, yaw, targetId)) return;
             else _serverLastCast[slot] = now;
-            if (free)
+            _serverCastingUntil = now + Cards.CastTime(card);
+            if (free && IsFoolCard(slot))
             {
                 // used once: back to The Fool
                 var rolled = FoolCards.Value;
                 rolled[slot] = CardId.None;
                 FoolCards.Value = rolled;
             }
+            else if (free) { } // Warp Space's second portal
             else if (info.costType == CostType.Mana)
                 Mana.Value = Mana.Value.With(now, Mathf.Max(0f, Mana.Value.At(now) - info.cost));
             else
@@ -407,6 +431,7 @@ namespace SuddenMageEncounter
         public override void ServerKnock(Vector3 velocity, float ragdollSeconds)
         {
             if (!IsServer) return;
+            if (SpellServer.Bubbled(this) || SpellServer.Invulnerable(this)) return; // in your bubble, mid-warp, swift: nothing moves you
             if (ragdollSeconds > 0f && SpellServer.Shielded(this)) return; // inside your own barrier: nothing moves you
             _serverRagdollUntil = Mathf.Max(_serverRagdollUntil, Time.time + ragdollSeconds);
             if (ragdollSeconds > 0f) SpellServer.OnInterrupted(this, true);
@@ -417,6 +442,7 @@ namespace SuddenMageEncounter
 
         public override void ServerCarry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
+            if (SpellServer.Invulnerable(this)) return;
             _serverRagdollUntil = Mathf.Max(_serverRagdollUntil, Time.time + SpellPlans.TornadoLife + 1f);
             SpellServer.OnInterrupted(this, true);
             CarryRpc(origin, dir, start, captured, phase);
@@ -484,6 +510,88 @@ namespace SuddenMageEncounter
 
         [Rpc(SendTo.Server)]
         void StandSpaceRpc(Vector3 feet) => SpellServer.ClearStandSpaceFor(this, feet);
+
+        void OnBubbleBlocked(Vector3 center)
+        {
+            // break it here straight away so the bubble keeps rising; the server does the same for everyone
+            var w = VoxelWorld.Current;
+            if (w == null) return;
+            SpellPlans.BubbleBreakBox(w, center, out var min, out var max);
+            var removed = new List<VoxelWorld.RemovedCell>();
+            var islands = new List<List<VoxelWorld.RemovedCell>>();
+            w.RemoveCells(WorldNet.BoxCells(min, max), removed, true, islands);
+            if (removed.Count == 0) return; // nothing breakable in the way
+            Debris.Spawn(w, removed, center, 3f, Vector3.up * 2f, 2);
+            foreach (var island in islands) Debris.Spawn(w, island, center, 0.8f, Vector3.zero, 4);
+            w.FlushRebuilds();
+            BubbleBreakRpc(center);
+        }
+
+        [Rpc(SendTo.Server)]
+        void BubbleBreakRpc(Vector3 center) => SpellServer.BubbleBreak(this, center);
+
+        // ---------------- Warp Self / portals / Arcane Swiftness (owner) ----------------
+
+        /// <summary>Moved in one go (warp, portal): everyone else snaps to the new spot instead of sliding there.</summary>
+        void OnMoved(Vector3 pos) => _teleportCounter++;
+
+        int _warpDone;
+
+        /// <summary>
+        /// Our warp, timed by the server's clock: held still while folding and unfolding, and moved to the
+        /// destination the moment the fold ends (unless the server cancelled it while it charged).
+        /// </summary>
+        void TickOwnWarp()
+        {
+            var net = WorldNet.Instance;
+            if (net == null || net.Warps.Count == 0) return;
+            double now = WorldNet.Now;
+            foreach (var w in net.Warps.Values)
+            {
+                if (w.caster != NetworkObjectId || w.ended >= 0 && w.how == 0) continue;
+                float t = (float)(now - w.start);
+                if (t < SpellPlans.WarpCharge || t > SpellPlans.WarpDone) continue;
+                if (w.ended < 0) Motor.Root(0.1f); // folding / unfolding: stand still
+                if (t >= SpellPlans.WarpArrive && _warpDone != w.id)
+                {
+                    _warpDone = w.id;
+                    Motor.MoveTo(w.dest + Vector3.up * 0.95f, Motor.Yaw, Vector3.zero);
+                }
+            }
+        }
+
+        void OnWarpEnded(int id, ulong caster, byte how)
+        {
+            if (caster != NetworkObjectId) return;
+            if (how == 0) _warpDone = id; // cancelled while charging: never goes
+            if (Caster != null && (Caster.Pose == SpellPose.WarpCast)) Caster.PlayPose(SpellPose.None);
+        }
+
+        void OnSwiftEnded(ulong caster, bool cancelled)
+        {
+            if (caster != NetworkObjectId || Motor == null) return;
+            Motor.EndSwift();
+            if (Caster != null && Caster.Pose == SpellPose.SwiftCast) Caster.PlayPose(SpellPose.None);
+        }
+
+        void OnSwiftBlocked(Vector3 feet, Vector3 dir)
+        {
+            // it comes apart here straight away so the run carries on; the server does the same for everyone
+            var w = VoxelWorld.Current;
+            if (w == null) return;
+            SpellPlans.SwiftBreakBox(w, feet, dir, out var min, out var max);
+            var removed = new List<VoxelWorld.RemovedCell>();
+            var islands = new List<List<VoxelWorld.RemovedCell>>();
+            w.RemoveCells(WorldNet.BoxCells(min, max), removed, true, islands);
+            if (removed.Count == 0) return;
+            Debris.Spawn(w, removed, feet + Vector3.up - dir, 6f, dir * 6f, 1);
+            foreach (var island in islands) Debris.Spawn(w, island, feet + Vector3.up, 0.8f, Vector3.zero, 4);
+            w.FlushRebuilds();
+            SwiftBreakRpc(feet, dir);
+        }
+
+        [Rpc(SendTo.Server)]
+        void SwiftBreakRpc(Vector3 feet, Vector3 dir) => SpellServer.SwiftBreak(this, feet, dir);
 
         [Rpc(SendTo.Server)]
         void CrashRpc(Vector3 point, Vector3 velocity) => SpellServer.Crash(this, point, velocity);

@@ -477,5 +477,298 @@ namespace SuddenMageEncounter
         public const float SiphonTurn = 260f;              // deg/s the mouse can steer the charge (was 100)
         public const float SiphonReach = 2.9f, SiphonHalfWidth = 2f, SiphonHalfHeight = 1.4f; // hit box in front: a wide, flat slab
         public const float SiphonDamage = 10f, SiphonDrain = 2f;
+
+        // ---------------------------------------------------------------- Water of Life
+        public const float OrbReach = 1.6f;              // floats this far in front of the caster (m)
+        public const float OrbLift = 0.35f;              // ... this far above their hips
+        public const float OrbGrow = 1f;                 // grows from a droplet to full size, then it's active
+        public const float OrbStartRadius = 0.12f, OrbRadius = 0.35f;
+        public const float OrbLife = 10f;                // once formed: pops by itself if nobody touches it
+        public const float OrbHeal = 25f, OrbHealTime = 1f;
+
+        /// <summary>Where the orb floats: in front of the caster at chest height, pulled in short of any wall.</summary>
+        public static Vector3 OrbSpot(Vector3 root, float yaw)
+        {
+            Vector3 from = root + Vector3.up * OrbLift;
+            Vector3 dir = Quaternion.Euler(0, yaw, 0) * Vector3.forward;
+            float reach = OrbReach;
+            if (Physics.SphereCast(from, OrbRadius * 0.8f, dir, out var hit, OrbReach, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
+                reach = Mathf.Max(0.6f, hit.distance);
+            return from + dir * reach;
+        }
+
+        /// <summary>The orb's radius <paramref name="t"/> seconds after it was cast.</summary>
+        public static float OrbRadiusAt(float t)
+        {
+            if (t >= OrbGrow) return OrbRadius;
+            float k = Mathf.Clamp01(t / OrbGrow);
+            return Mathf.Lerp(OrbStartRadius, OrbRadius, 1f - (1f - k) * (1f - k));
+        }
+
+        // ---------------------------------------------------------------- Bubble Away
+        public const float BubbleWindup = 0.3f;          // hands come together, then the bubble forms
+        public const float BubbleTime = 2f, BubbleHp = 40f;
+        public const float BubbleRadius = 1.2f;
+        public const float BubbleRise = 1.8f;            // m/s up
+        public const float BubbleMove = 3f;              // m/s steering across
+
+        public static Vector3 BubbleCenter(Vector3 root) => root + Vector3.up * 0.05f;
+
+        /// <summary>The cells over a rising bubble that get broken to let it through.</summary>
+        public static void BubbleBreakBox(VoxelWorld w, Vector3 center, out Vector3Int min, out Vector3Int max)
+        {
+            min = w.CellOf(center + new Vector3(-0.95f, 0.55f, -0.95f));
+            max = w.CellOf(center + new Vector3(0.95f, BubbleRadius + 0.45f, 0.95f));
+        }
+
+        /// <summary>Is there anything in the way above a bubble?</summary>
+        public static bool BubbleRoofBlocked(Vector3 center)
+        {
+            const float lo = 0.55f, hi = BubbleRadius + 0.45f;
+            return Physics.CheckBox(center + Vector3.up * ((lo + hi) * 0.5f), new Vector3(0.9f, (hi - lo) * 0.5f, 0.9f), Quaternion.identity,
+                Layers.EnvironmentMask, QueryTriggerInteraction.Ignore);
+        }
+
+        // ---------------------------------------------------------------- Tsunami
+        public const float TsunamiWindup = 0.5f;         // hands back... shoved forward, then the wave appears
+        public const int TsunamiLanes = 24;              // columns of water across it
+        public const float TsunamiWidth = TsunamiLanes * VoxelWorld.Size; // 6 m
+        public const float TsunamiDepth = 3f;            // tail to front (m)
+        public const float TsunamiHeight = 3f;           // the crest
+        public const float TsunamiLip = 0.75f;           // the crest curls over this far in front
+        public const float TsunamiAhead = 0.8f;          // its tail starts this far in front of the caster
+        public const float TsunamiSpeed = 8f, TsunamiTravel = 16f;
+        public const float TsunamiRise = 0.25f, TsunamiCollapse = 0.5f;
+        public const float TsunamiDamage = 40f, TsunamiKnock = 14f, TsunamiKnockUp = 7f, TsunamiRagdoll = 1.2f;
+        /// <summary>The floor under its path is sampled this often (m).</summary>
+        public const float TsunamiStep = 1f;
+        /// <summary>It climbs onto floor at most this many cells higher per sample (taller things are in the way: smashed), and follows it down this far.</summary>
+        const int TsunamiClimb = 4, TsunamiDrop = 24;
+
+        public static float TsunamiLife => TsunamiTravel / TsunamiSpeed;
+
+        /// <summary>Distance from where it was cast to its front, <paramref name="t"/> seconds after it appeared.</summary>
+        public static float TsunamiFront(float t) => TsunamiAhead + TsunamiDepth + TsunamiSpeed * Mathf.Clamp(t, 0f, TsunamiLife);
+
+        /// <summary>How tall the water stands <paramref name="behind"/> metres behind the front: a tall crest, a long low tail.</summary>
+        public static float TsunamiProfile(float behind)
+        {
+            float f = Mathf.Clamp01(behind / TsunamiDepth);
+            return TsunamiHeight * (0.2f + 0.8f * Mathf.Pow(1f - f, 1.4f));
+        }
+
+        /// <summary>0 → 1 as it rises out of the ground, back to 0 as it collapses at the end.</summary>
+        public static float TsunamiGrowth(float t) => Mathf.Clamp01(t / TsunamiRise) * (1f - Mathf.Clamp01((t - TsunamiLife) / TsunamiCollapse));
+
+        /// <summary>Sideways offset of a lane's centre from the middle of the wave.</summary>
+        public static float LaneU(int lane) => (lane + 0.5f) * VoxelWorld.Size - TsunamiWidth * 0.5f;
+        public static int LaneOf(float u) => Mathf.Clamp(Mathf.FloorToInt((u + TsunamiWidth * 0.5f) / VoxelWorld.Size), 0, TsunamiLanes - 1);
+
+        /// <summary>
+        /// The floor the wave rides on, every <see cref="TsunamiStep"/> along its path from the caster's feet: it follows
+        /// the ground down into dips and up small steps; anything taller (walls, platforms) is in its way, not floor.
+        /// </summary>
+        public static float[] PlanTsunamiGround(VoxelWorld w, Vector3 feet, Vector3 dir)
+        {
+            int n = Mathf.CeilToInt((TsunamiFront(TsunamiLife) + TsunamiLip) / TsunamiStep) + 2;
+            var g = new float[n];
+            var c0 = w.CellOf(feet + Vector3.up * 0.05f);
+            int top = w.TopSolid(c0.x, c0.z, c0.y - 8, c0.y);
+            if (top == int.MinValue) top = c0.y - 1;
+            for (int i = 0; i < n; i++)
+            {
+                var c = w.CellOf(feet + dir * (i * TsunamiStep));
+                // a solid cell with room to stand above it
+                for (int y = top + TsunamiClimb; y >= top - TsunamiDrop; y--)
+                    if (w.IsSolid(c.x, y, c.z) && !w.IsSolid(c.x, y + 1, c.z) && !w.IsSolid(c.x, y + 2, c.z)) { top = y; break; }
+                g[i] = w.Origin.y + (top + 1) * VoxelWorld.Size;
+            }
+            return g;
+        }
+
+        /// <summary>Height of the floor under the wave <paramref name="along"/> metres from where it was cast (smoothed between samples).</summary>
+        public static float TsunamiBase(float[] g, float along)
+        {
+            if (g == null || g.Length == 0) return 0f;
+            if (g.Length == 1) return g[0];
+            float k = Mathf.Clamp(along / TsunamiStep, 0f, g.Length - 1);
+            int i = Mathf.Min((int)k, g.Length - 2);
+            return Mathf.Lerp(g[i], g[i + 1], k - i);
+        }
+
+        /// <summary>The floor height the wave won't break below (the higher of the samples either side, so ledges keep their corners).</summary>
+        public static float TsunamiFloor(float[] g, float along)
+        {
+            if (g == null || g.Length == 0) return 0f;
+            int i = Mathf.Clamp((int)(along / TsunamiStep), 0, g.Length - 1);
+            return Mathf.Max(g[i], g[Mathf.Min(i + 1, g.Length - 1)]);
+        }
+
+        /// <summary>Is the point inside the wave's water <paramref name="t"/> seconds after it appeared? (Also says which lane.)</summary>
+        public static bool TsunamiInside(Vector3 origin, Vector3 dir, float[] ground, float t, Vector3 p, float pad, out int lane)
+        {
+            Vector3 d = p - origin;
+            Vector3 right = Vector3.Cross(Vector3.up, dir);
+            float along = Vector3.Dot(d, dir), u = Vector3.Dot(d, right);
+            lane = LaneOf(u);
+            float g = TsunamiGrowth(t);
+            if (g <= 0f || Mathf.Abs(u) > TsunamiWidth * 0.5f + pad) return false;
+            float behind = TsunamiFront(t) - along;
+            if (behind < -(TsunamiLip + pad) || behind > TsunamiDepth + pad) return false;
+            float y = p.y - TsunamiBase(ground, along);
+            // the lip curling over in front of it: only the top part
+            if (behind < 0f) return y >= TsunamiHeight * 0.6f * g - pad && y <= TsunamiHeight * g + pad;
+            return y >= -pad && y <= TsunamiProfile(behind) * g + pad;
+        }
+
+        // ---------------------------------------------------------------- Warp Self
+        public const float WarpRange = 25f;
+        public const float WarpCharge = 0.4f;            // hands together... pulled apart (you can still move)
+        public const float WarpFold = 0.2f;              // folding away into the rift (untouchable)
+        public const float WarpUnfold = 0.2f;            // unfolding at the destination (a hit finishes it at once)
+        public static float WarpArrive => WarpCharge + WarpFold;
+        public static float WarpDone => WarpCharge + WarpFold + WarpUnfold;
+
+        static bool StandFits(Vector3 feet) =>
+            !Physics.CheckCapsule(feet + Vector3.up * 0.4f, feet + Vector3.up * 1.55f, 0.33f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore);
+
+        /// <summary>
+        /// Where a warp puts your feet: always onto a flat surface with room for your body, never into the air. The
+        /// spot under the crosshair (or, if that's further than <see cref="WarpRange"/> or in the sky, the point at
+        /// the limit along your aim) is dropped straight down onto whatever flat ground is below it; if there's none,
+        /// it comes back towards you until there is. False if there's nowhere (<paramref name="feet"/> is still a
+        /// sensible place to show the preview).
+        /// </summary>
+        public static bool WarpTarget(Vector3 root, Vector3 aimPoint, bool hit, Vector3 aimDir, out Vector3 feet)
+        {
+            int mask = Layers.EnvironmentMask;
+            Vector3 chest = root + Vector3.up * 0.4f;
+            Vector3 to = aimPoint - chest;
+            Vector3 dir = hit && to.sqrMagnitude > 1e-4f ? to.normalized : aimDir.normalized;
+            float far = hit ? Mathf.Min(to.magnitude - 0.3f, WarpRange) : WarpRange; // just off whatever it's on
+            feet = chest + dir * Mathf.Max(0f, far);
+            bool first = true;
+            const float probe = 0.1f;
+            for (float d = far; d > 0.8f; d -= 0.25f)
+            {
+                Vector3 p = chest + dir * d;
+                // only drop from open air: a cast that starts touching (or inside) something ignores it, and would fall
+                // straight through the floor you're aiming at onto whatever is under it
+                if (Physics.CheckSphere(p, probe + 0.02f, mask, QueryTriggerInteraction.Ignore)) continue;
+                // a small ball rather than a ray, so it can't slip through a seam between voxels
+                if (!Physics.SphereCast(p, probe, Vector3.down, out var g, 60f, mask, QueryTriggerInteraction.Ignore)) continue;
+                if (first) { feet = g.point; first = false; }
+                if (g.normal.y < 0.75f || !StandFits(g.point)) continue;
+                feet = g.point;
+                return true;
+            }
+            return false;
+        }
+
+        // ---------------------------------------------------------------- Warp Space
+        public const float PortalRange = 20f;
+        public const float PortalWidth = 4f, PortalHeight = 4f;
+        /// <summary>How thick its bedrock slab is, behind the opening.</summary>
+        public const float PortalDepth = 0.08f;
+        public const float PortalLife = 10f;
+        public const float PortalOpen = 0.25f;           // grows out / shrinks away this fast
+
+        /// <summary>A portal's frame: +Z is the way its opening faces, +Y its top edge. Pitch tilts it (looking up or down at it).</summary>
+        public static Quaternion PortalRotation(float yaw, float pitch) => Quaternion.Euler(pitch, yaw, 0f);
+
+        /// <summary>Pitch rides in the cast's spare id field (the yaw has its own).</summary>
+        public static ulong PackAngle(float a) => unchecked((uint)System.BitConverter.SingleToInt32Bits(a));
+        public static float UnpackAngle(ulong v) => System.BitConverter.Int32BitsToSingle(unchecked((int)(uint)v));
+
+        static bool PortalFits(Vector3 center, Quaternion q)
+        {
+            Vector3 mid = center - q * Vector3.forward * (PortalDepth * 0.5f + 0.01f);
+            var half = new Vector3(PortalWidth * 0.5f - 0.05f, PortalHeight * 0.5f - 0.05f, PortalDepth * 0.5f);
+            return !Physics.CheckBox(mid, half, q, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore);
+        }
+
+        /// <summary>
+        /// Where a portal opens: facing straight back along your aim (look up 45 degrees and it's tilted 45 degrees; look
+        /// straight down and it lies flat on the floor), at the spot under the crosshair, at most <see cref="PortalRange"/>
+        /// away. Never through a surface: it's lifted (along its own top edge) off whatever it would cut into, and pulled
+        /// back towards you until it fits. False if it fits nowhere.
+        /// </summary>
+        public static bool PlanPortal(Vector3 root, Vector3 aimPoint, bool hit, Vector3 aimDir, out Vector3 center, out float yaw, out float pitch)
+        {
+            Vector3 chest = root + Vector3.up * 0.4f;
+            Vector3 to = aimPoint - chest;
+            if (!hit || to.magnitude > PortalRange) aimPoint = chest + (to.sqrMagnitude > 1e-4f ? to.normalized : aimDir) * PortalRange;
+            aimDir = aimDir.sqrMagnitude > 1e-6f ? aimDir.normalized : Vector3.forward;
+            Vector3 n = -aimDir;
+            // its top edge as near to "up" as it can be (lying flat: its top points away from you)
+            Vector3 flat = new(aimDir.x, 0f, aimDir.z);
+            Vector3 upHint = Mathf.Abs(n.y) > 0.98f ? (flat.sqrMagnitude > 1e-6f ? flat.normalized : Vector3.forward) : Vector3.up;
+            Quaternion q = Quaternion.LookRotation(n, upHint);
+            Vector3 e = q.eulerAngles;
+            yaw = e.y;
+            pitch = e.x > 180f ? e.x - 360f : e.x;
+            q = PortalRotation(yaw, pitch);
+            Vector3 top = q * Vector3.up;
+            Vector3 c = aimPoint + n * 0.03f;
+            for (int i = 0; i < 24; i++)
+            {
+                for (float lift = 0f; lift <= PortalHeight * 0.5f + 0.3f; lift += 0.25f)
+                {
+                    Vector3 cc = c + top * lift;
+                    if (PortalFits(cc, q)) { center = cc; return true; }
+                }
+                c += n * 0.25f;
+                if (Vector3.Dot(c - chest, aimDir) < 1.2f) break; // came all the way back to you
+            }
+            center = c;
+            return false;
+        }
+
+        /// <summary>
+        /// Did a point moving from a to b pass in through the front of this portal's opening? The opening is taken
+        /// <paramref name="ahead"/> metres in front of the real one (a ball of that radius touches the slab there) and
+        /// shrunk by <paramref name="pad"/> at its edges.
+        /// </summary>
+        public static bool PortalCrossed(Vector3 a, Vector3 b, Vector3 center, Quaternion q, float ahead, float pad)
+        {
+            Vector3 n = q * Vector3.forward;
+            float da = Vector3.Dot(a - center, n) - ahead, db = Vector3.Dot(b - center, n) - ahead;
+            if (!(da > 0f && db <= 0f)) return false;
+            Vector3 x = Vector3.Lerp(a, b, da / (da - db));
+            Vector3 l = Quaternion.Inverse(q) * (x - center);
+            return Mathf.Abs(l.x) <= PortalWidth * 0.5f - pad && Mathf.Abs(l.y) <= PortalHeight * 0.5f - pad;
+        }
+
+        /// <summary>
+        /// The point that something at <paramref name="p"/> going into portal A comes out at, from portal B. Normally one
+        /// continuous space (a point just behind A is just in front of B); <paramref name="sameSide"/> keeps it the same
+        /// distance in front of B as it was in front of A (for things that cross <see cref="PortalCrossed"/>'s
+        /// <c>ahead</c> plane, before reaching the opening).
+        /// </summary>
+        public static Vector3 ThroughPoint(Vector3 p, Vector3 ca, Quaternion qa, Vector3 cb, Quaternion qb, bool sameSide = false)
+        {
+            Vector3 l = Quaternion.Inverse(qa) * (p - ca);
+            return cb + qb * new Vector3(-l.x, l.y, sameSide ? l.z : -l.z);
+        }
+
+        /// <summary>A direction (velocity, a facing) going into portal A, as it comes out of portal B.</summary>
+        public static Vector3 ThroughDir(Vector3 v, Quaternion qa, Quaternion qb)
+        {
+            Vector3 l = Quaternion.Inverse(qa) * v;
+            return qb * new Vector3(-l.x, l.y, -l.z);
+        }
+
+        // ---------------------------------------------------------------- Arcane Swiftness
+        public const float SwiftPrep = 0.3f;             // crouched, gathering (a knock interrupts it)
+        public const float SwiftTime = 1.6f;             // then running free, untouchable
+        public const float SwiftSpeedScale = 2.3f;         // times running speed (and acceleration)
+
+        /// <summary>The cells a swift dash smashes in front of you when it runs into something.</summary>
+        public static void SwiftBreakBox(VoxelWorld w, Vector3 feet, Vector3 dir, out Vector3Int min, out Vector3Int max)
+        {
+            Vector3 c = feet + dir * 0.6f;
+            min = w.CellOf(c + new Vector3(-0.6f, 0.05f, -0.6f));
+            max = w.CellOf(c + new Vector3(0.6f, 1.95f, 0.6f));
+        }
     }
 }

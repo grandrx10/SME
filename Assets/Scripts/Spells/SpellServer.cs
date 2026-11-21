@@ -61,6 +61,8 @@ namespace SuddenMageEncounter
             Barriers.Clear();
             Siphons.Clear();
             ResetFlame();
+            ResetWater();
+            ResetArcane();
         }
 
         // ------------------------------------------------------------------ barriers
@@ -69,12 +71,12 @@ namespace SuddenMageEncounter
         static bool BarrierActive(BarrierState b, double now) =>
             b.caster != null && b.caster.IsAlive && now >= b.start + SpellPlans.BarrierWindup && now <= b.start + SpellPlans.BarrierWindup + SpellPlans.BarrierTime;
 
-        /// <summary>Is this combatant inside its own active barrier (immune to being thrown or crushed)?</summary>
+        /// <summary>Is this combatant inside its own active barrier or bubble (immune to being thrown or crushed)?</summary>
         public static bool Shielded(Combatant c)
         {
             double now = WorldNet.Now;
             foreach (var b in Barriers) if (b.caster == c && BarrierActive(b, now)) return true;
-            return false;
+            return Bubbled(c) || Invulnerable(c);
         }
 
         /// <summary>Is the point inside an active barrier that doesn't belong to <paramref name="owner"/>?</summary>
@@ -331,6 +333,15 @@ namespace SuddenMageEncounter
                         WorldNet.ServerMissileImpact(v.id, m, ms.pos, default, 0, true);
                         continue;
                     }
+                    if (MissileThroughPortal(v.id, m, ms)) continue;
+                    var bubble = BubbleBlocking(ms.owner, ms.pos, SpellPlans.MissileRadius);
+                    if (bubble != null)
+                    {
+                        ms.alive = false;
+                        HurtBubble(bubble, SpellPlans.MissileDamage, ms.pos);
+                        WorldNet.ServerMissileImpact(v.id, m, ms.pos, default, 0, false);
+                        continue;
+                    }
                     if (ms.age > SpellPlans.MissileLife)
                     {
                         ms.alive = false;
@@ -372,7 +383,7 @@ namespace SuddenMageEncounter
                 if (h.collider.isTrigger)
                 {
                     var hb = h.collider.GetComponent<Hitbox>();
-                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive || hb.Owner.NetworkObjectId == ms.owner) continue;
+                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive || hb.Owner.NetworkObjectId == ms.owner || Folded(hb.Owner)) continue;
                     owner = hb.Owner;
                 }
                 float d = h.distance;
@@ -415,7 +426,7 @@ namespace SuddenMageEncounter
                 float gained = 0f;
                 foreach (var o in struck)
                 {
-                    if (o is PlayerController victim)
+                    if (o is PlayerController victim && !Invulnerable(victim))
                     {
                         float m = victim.ManaNow;
                         float take = Mathf.Min(SpellPlans.SiphonDrain, m);
@@ -536,6 +547,16 @@ namespace SuddenMageEncounter
                     continue;
                 }
                 Vector3 pos = WorldNet.FireballPosition(fx, now);
+                // through a linked portal: it carries on out of the other one
+                if (FireballThroughPortal(f, fx, pos)) continue;
+                // water puts it out (the water isn't harmed)
+                if (WaterAlong(f.lastPos, pos, SpellPlans.FireballRadius, out var wet))
+                {
+                    WorldNet.ServerFireballEnd(f.id, wet, false);
+                    WorldNet.ServerQuench(wet, 1f);
+                    FireballsS.RemoveAt(i);
+                    continue;
+                }
                 if (BarrierBlocks(fx.owner, pos, SpellPlans.FireballRadius))
                 {
                     WorldNet.ServerFireballEnd(f.id, pos, true);
@@ -563,7 +584,7 @@ namespace SuddenMageEncounter
         {
             var owner = WorldNet.FindCaster(fx.owner);
             if (direct != null && direct.IsAlive)
-                direct.ServerApplyDamage(SpellPlans.FireballHitDamage, owner != null ? owner.OwnerClientId : Combatant.NoAttacker, point, fx.velocity.normalized, -1, 0f, DeathCause.Spell);
+                direct.ServerApplyDamage(SpellPlans.FireballHitDamage, owner != null ? owner.OwnerClientId : Combatant.NoAttacker, point, fx.velocity.normalized, -1, 17f, DeathCause.Spell); // killed by it: thrown like the blast would have
             // the blast: everyone close (the thrower too) is set alight and thrown hard
             foreach (var c in Combatant.Registry.ToArray())
             {
@@ -596,7 +617,7 @@ namespace SuddenMageEncounter
                 if (h.collider.isTrigger)
                 {
                     var hb = h.collider.GetComponent<Hitbox>();
-                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive || hb.Owner.NetworkObjectId == owner) continue;
+                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive || hb.Owner.NetworkObjectId == owner || Folded(hb.Owner)) continue;
                     who = hb.Owner;
                 }
                 if (h.distance <= 0f && h.point == Vector3.zero) h.point = from;
@@ -638,6 +659,13 @@ namespace SuddenMageEncounter
                 float t = (float)(now - h.riseAt);
                 if (t > SpellPlans.HellfireRise + SpellPlans.HellfireStand) { HellfiresS.RemoveAt(i); continue; }
                 float lit = Mathf.Clamp01(t / SpellPlans.HellfireRise); // how far along the wall has risen
+                // touching water anywhere puts the whole wall out
+                if (WallInWater(h, lit))
+                {
+                    HellfiresS.RemoveAt(i);
+                    WorldNet.ServerHellfireQuench(h.id);
+                    continue;
+                }
                 // anyone stepping in: 15 now and a burn (no ragdoll), once per wall
                 foreach (var c in Combatant.Registry.ToArray())
                 {
@@ -696,6 +724,12 @@ namespace SuddenMageEncounter
                 if (me == null || !me.IsAlive) continue;
                 Vector3 fwd = Quaternion.Euler(0, me.ViewYaw, 0) * Vector3.forward;
                 Vector3 point = me.transform.position + fwd * SpellPlans.EscapeReach + Vector3.up * 0.1f;
+                // set off in water: it fizzles out in a puff of steam
+                if (InWater(point, 0.4f))
+                {
+                    WorldNet.ServerQuench(point, 1.2f);
+                    continue;
+                }
                 foreach (var c in Combatant.Registry.ToArray())
                 {
                     if (c == null || c == me || !c.IsAlive || Shielded(c)) continue;
@@ -801,10 +835,60 @@ namespace SuddenMageEncounter
         /// <summary>A caster got thrown or hurt: whatever they were doing with their body stops.</summary>
         public static void OnInterrupted(PlayerController pc, bool knocked)
         {
+            InterruptArcane(pc, knocked);
             Dashes.RemoveAll(d => d.caster == pc);
             if (knocked) Siphons.RemoveAll(s => s.caster == pc);
             if (knocked) DispelMagician(pc);
             CancelDomainStartup(pc);
+            if (knocked) Fizzle(pc);
+        }
+
+        /// <summary>
+        /// Knocked down mid-cast: whatever the caster hadn't finished casting (see <see cref="Cards.CastTime"/>) never
+        /// happens. Spells already out of their hands (a thrown rock, a risen wall, a formed domain...) carry on.
+        /// </summary>
+        static void Fizzle(PlayerController pc)
+        {
+            double now = WorldNet.Now;
+            var net = WorldNet.Instance;
+            bool shown = pc.ServerCasting; // something on screen the clients have to cancel
+            pc.ServerEndCast();
+
+            // a rock still being gathered or held just drops
+            for (int i = Rocks.Count - 1; i >= 0; i--)
+            {
+                var r = Rocks[i];
+                if (r.caster != pc || r.launched) continue;
+                if (net != null && net.Rocks.TryGetValue(r.id, out var fx)) Impact(r, fx.body ? fx.body.Center : fx.home, null, 0, null);
+                Rocks.RemoveAt(i);
+            }
+            // the missile orb in your hand, a barrier that hasn't gone up, a circle being drawn: gone
+            shown |= Volleys.RemoveAll(v => v.caster == pc && !v.launched) > 0;
+            shown |= Barriers.RemoveAll(b => b.caster == pc && now < b.start + SpellPlans.BarrierWindup) > 0;
+            shown |= JudgmentsS.RemoveAll(j => j.caster == pc && now < j.start + SpellPlans.JudgmentDraw) > 0;
+            shown |= HellfiresS.RemoveAll(h => h.caster == pc && h.riseAt < 0) > 0;
+            Escapes.RemoveAll(e => e.caster == pc);
+            PendingWaves.RemoveAll(p => p.caster == pc);
+            // a fireball still forming fizzles
+            for (int i = FireballsS.Count - 1; i >= 0; i--)
+            {
+                var f = FireballsS[i];
+                if (f.caster != pc || f.launched) continue;
+                Vector3 at = net != null && net.Fireballs.TryGetValue(f.id, out var fx) ? WorldNet.FireballPosition(fx, now) : pc.transform.position;
+                WorldNet.ServerFireballEnd(f.id, at, true);
+                FireballsS.RemoveAt(i);
+            }
+            // a domain whose hands never met, a bubble that never formed, an orb still in the caster's hands
+            foreach (var d in Domains.ToArray()) if (d.caster == pc && !d.formed && now < d.formAt) End(d);
+            foreach (var b in BubblesS.ToArray()) if (b.caster == pc && now < b.start + SpellPlans.BubbleWindup) EndBubble(b, true);
+            for (int i = OrbsS.Count - 1; i >= 0; i--)
+            {
+                var o = OrbsS[i];
+                if (o.caster != pc || now >= o.start + Cards.CastTime(CardId.WaterOfLife)) continue;
+                OrbsS.RemoveAt(i);
+                WorldNet.ServerOrbEnd(o.id, 0, 0);
+            }
+            if (shown) WorldNet.ServerFizzle(pc.NetworkObjectId);
         }
 
         // ------------------------------------------------------------------ casting
@@ -876,6 +960,14 @@ namespace SuddenMageEncounter
                 case CardId.TheEmpress:
                 case CardId.TheEmperor:
                     return CastTarot(caster, card, now);
+                case CardId.WaterOfLife:
+                case CardId.BubbleAway:
+                case CardId.Tsunami:
+                    return CastWater(caster, card, target, yaw, now);
+                case CardId.WarpSelf:
+                case CardId.WarpSpace:
+                case CardId.ArcaneSwiftness:
+                    return CastArcane(caster, card, target, yaw, targetId, now);
                 case CardId.BallOfFlame:
                 {
                     int id = WorldNet.ServerFireball(caster.NetworkObjectId);
@@ -896,7 +988,7 @@ namespace SuddenMageEncounter
                 case CardId.ArcaneJudgment:
                 {
                     var center = target;
-                    int id = WorldNet.ServerJudgment(center);
+                    int id = WorldNet.ServerJudgment(caster.NetworkObjectId, center);
                     JudgmentsS.Add(new JudgmentState { id = id, caster = caster, center = center, start = now, nextLayer = now + SpellPlans.JudgmentLaserStart });
                     return true;
                 }
@@ -1031,10 +1123,27 @@ namespace SuddenMageEncounter
                 }
 
                 Vector3 pos = WorldNet.RockPosition(fx, now);
+                if (RockThroughPortal(rock, fx, pos, now)) continue;
+                ulong thrower = rock.caster != null ? rock.caster.NetworkObjectId : ulong.MaxValue;
+                // burning ground flying through water stops burning
+                if (FlamingRocks.Contains(rock.id) && InWater(pos, rock.radius))
+                {
+                    FlamingRocks.Remove(rock.id);
+                    WorldNet.ServerRockDouse(rock.id);
+                }
                 // an enemy barrier: gone
-                if (BarrierBlocks(rock.caster != null ? rock.caster.NetworkObjectId : ulong.MaxValue, pos, rock.radius))
+                if (BarrierBlocks(thrower, pos, rock.radius))
                 {
                     WorldNet.ServerRockImpact(rock.id, pos, default, 0, true);
+                    Rocks.RemoveAt(i);
+                    continue;
+                }
+                // someone's bubble: it breaks on it, and the bubble takes the hit
+                var bubble = BubbleBlocking(thrower, pos, rock.radius);
+                if (bubble != null)
+                {
+                    HurtBubble(bubble, rock.damage, pos);
+                    WorldNet.ServerRockImpact(rock.id, pos, default, 0);
                     Rocks.RemoveAt(i);
                     continue;
                 }
@@ -1082,7 +1191,7 @@ namespace SuddenMageEncounter
                 if (h.collider.isTrigger)
                 {
                     var hb = h.collider.GetComponent<Hitbox>();
-                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive) continue;
+                    if (hb == null || hb.Owner == null || !hb.Owner.IsAlive || Folded(hb.Owner)) continue;
                     owner = hb.Owner;
                     if (owner == rock.caster) continue;
                 }
@@ -1103,6 +1212,7 @@ namespace SuddenMageEncounter
         {
             var world = VoxelWorld.Current;
             Vector3Int cell = default;
+            if (col != null && col.GetComponentInParent<PortalView>() != null) r4 = 0; // a portal's bedrock: nothing breaks
             if (world != null)
             {
                 Vector3 inside = normal.HasValue ? point - normal.Value * 0.12f : point;
@@ -1154,6 +1264,8 @@ namespace SuddenMageEncounter
             TickDashes(now);
             TickVolleys(net, now);
             TickSiphons(now);
+            TickWater(net, now, Time.deltaTime);
+            TickArcane(now);
             TickFlame(net, now, Time.deltaTime);
         }
 
@@ -1208,7 +1320,8 @@ namespace SuddenMageEncounter
             if (victim == null || !victim.IsAlive) return;
             ulong who = attacker != null ? attacker.OwnerClientId : Combatant.NoAttacker;
             Vector3 dir = knock.sqrMagnitude > 0.01f ? knock.normalized : Vector3.up;
-            if (damage > 0f) victim.ServerApplyDamage(damage, who, point, dir, -1, knock.magnitude * 6f, DeathCause.Spell);
+            // (if it kills, the body is thrown by the same knock as a ragdoll)
+            if (damage > 0f) victim.ServerApplyDamage(damage, who, point, dir, -1, knock.magnitude, DeathCause.Spell);
             if (victim.IsAlive && (ragdoll > 0f || knock.sqrMagnitude > 0f)) victim.ServerKnock(knock, ragdoll);
         }
     }

@@ -10,9 +10,12 @@ namespace SuddenMageEncounter
         Shove = 4, Tornado = 5, NomadicDash = 6, ManaMissiles = 7, MagicalBarrier = 8, ManaSiphon = 9,
         BallOfFlame = 10, HellfireWall = 11, ExplosiveEscape = 12, ArcaneJudgment = 13, Tug = 14, SummonPlatform = 15,
         TheFool = 16, TheMagician = 17, TheHighPriestess = 18, TheEmpress = 19, TheEmperor = 20,
+        WaterOfLife = 21, BubbleAway = 22, Tsunami = 23,
+        WarpSelf = 24, WarpSpace = 25, ArcaneSwiftness = 26,
     }
 
-    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot }
+    /// <summary>Saved with cards: append new elements at the end, never reorder.</summary>
+    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot, Water }
 
     /// <summary>What a card costs to cast (shown top right: a bubble for mana, a heart for health).</summary>
     public enum CostType : byte { Mana, Health }
@@ -140,6 +143,72 @@ namespace SuddenMageEncounter
                 id = CardId.TheEmperor, name = "The Emperor", element = Element.Tarot, costType = CostType.Mana, cost = 6,
                 description = "Create an aura around you that reduces damage taken.", castOnPress = true,
             },
+            new()
+            {
+                id = CardId.WaterOfLife, name = "Water of Life", element = Element.Water, costType = CostType.Mana, cost = 5,
+                description = "After a delay, summon a ball of healing Water.",
+            },
+            new()
+            {
+                id = CardId.BubbleAway, name = "Bubble Away", element = Element.Water, costType = CostType.Mana, cost = 5,
+                description = "Encase yourself in a Water bubble.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.Tsunami, name = "Tsunami", element = Element.Water, costType = CostType.Mana, cost = 8,
+                description = "Summon a tidal wave of Water.",
+            },
+            new()
+            {
+                id = CardId.WarpSelf, name = "Warp Self", element = Element.Arcane, costType = CostType.Mana, cost = 3,
+                description = "Warp to a position within view.",
+            },
+            new()
+            {
+                id = CardId.WarpSpace, name = "Warp Space", element = Element.Arcane, costType = CostType.Mana, cost = 5,
+                description = "Summon a Warp between two spaces.",
+            },
+            new()
+            {
+                id = CardId.ArcaneSwiftness, name = "Arcane Swiftness", element = Element.Arcane, costType = CostType.Mana, cost = 4,
+                description = "Become invulnerable and swift for a short duration.", castOnPress = true,
+            },
+        };
+
+        /// <summary>
+        /// Seconds the caster is busy casting this card, counted from the cast (key release, or press for press cards).
+        /// No other card can be cast until it's over. Being knocked down (ragdolled, caught by a tornado) during it
+        /// stops the spell: whatever hasn't left the caster's hands yet never happens.
+        /// Cards whose effect appears the moment they're cast only lock for their short gesture.
+        /// </summary>
+        public static float CastTime(CardId id) => id switch
+        {
+            CardId.SummonWall => SpellPlans.WallRise,
+            CardId.RockBarrage => SpellPlans.RockGather + SpellPlans.RockHold, // gathered, held, thrown
+            CardId.FoldingHands => 0.4f,
+            CardId.Shove => 0.3f,
+            CardId.Tornado => 0.4f,
+            CardId.NomadicDash => SpellPlans.DashTime,
+            CardId.ManaMissiles => SpellPlans.MissileCharge,                   // the orb charges in your hand
+            CardId.MagicalBarrier => SpellPlans.BarrierWindup,
+            CardId.ManaSiphon => SpellPlans.SiphonArm,
+            CardId.BallOfFlame => SpellPlans.FireballCharge,                   // the ball forms, then it's thrown
+            CardId.HellfireWall => SpellPlans.HellfireDraw,                    // drawing the line
+            CardId.ExplosiveEscape => SpellPlans.EscapeDelay,                  // the clap
+            CardId.ArcaneJudgment => SpellPlans.JudgmentDraw,                  // drawing the circle
+            CardId.Tug => 0.3f,
+            CardId.SummonPlatform => 0.3f,
+            CardId.TheFool => 0.3f,
+            CardId.TheMagician => 0.3f,
+            CardId.TheHighPriestess => SpellPlans.PriestessDelay,              // the sun, until the flash
+            CardId.TheEmpress or CardId.TheEmperor => SpellPlans.DomainDelay,  // hands together
+            CardId.WaterOfLife => 0.6f,
+            CardId.BubbleAway => SpellPlans.BubbleWindup,
+            CardId.Tsunami => SpellPlans.TsunamiWindup,                        // hands back, shoved forward
+            CardId.WarpSelf => SpellPlans.WarpCharge,                          // hands together, pulled apart
+            CardId.WarpSpace => 0f,                                            // the second portal can follow at once
+            CardId.ArcaneSwiftness => SpellPlans.SwiftPrep,                    // crouched, gathering
+            _ => 0.3f,
         };
 
         static Dictionary<CardId, CardInfo> _byId;
@@ -163,6 +232,7 @@ namespace SuddenMageEncounter
             Element.Lightning => new Color(0.98f, 0.85f, 0.25f),
             Element.Wind => new Color(0.68f, 0.7f, 0.72f),
             Element.Tarot => new Color(0.75f, 0.33f, 0.2f), // mahogany
+            Element.Water => new Color(0.3f, 0.78f, 0.86f), // cyan / aqua
             _ => new Color(0.82f, 0.68f, 0.5f), // Ground: light brown
         };
 

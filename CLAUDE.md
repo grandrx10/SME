@@ -13,8 +13,9 @@ The user is strict about this. New effects must match it:
 - **Wind** is cartoony inked swooshes and trails (`Spells/ToonWind.cs`). Never dusty smoke.
 - **Fire** is outlined flame tongues with yellow, orange and red HDR (`Spells/FireVfx.cs`).
 - **Arcane** is deep saturated blue with rune drawings and rune circles.
-- **Element colours** (cards and effects): Flame red, Arcane blue, Lightning yellow, Wind grey, Ground light brown, Tarot mahogany (Emperor effects gold).
-- **Card art** is the user's own sketches from the PDFs, with lines thickened. Don't redraw them. `Tools/CardArt/CardArt.cs --pdf <file.pdf> <CardId...>` extracts them to `Assets/Resources/CardArt/<CardId>.png`.
+- **Element colours** (cards and effects): Flame red, Arcane blue, Lightning yellow, Wind grey, Ground light brown, Tarot mahogany (Emperor effects gold), Water cyan/aqua (healing symbols green).
+- **Water** (`Spells/WaterVfx.cs`, server rules in `Spells/SpellServer.Water.cs`): every Water spell puts out fire it touches (fireballs, hellfire walls, burning ground, burning people); fire never breaks water.
+- **Card art** is the user's own sketches from the PDFs (or pasted images), with lines thickened. Don't redraw them. `Tools/CardArt/CardArt.cs <outDir> --pdf <file.pdf> <CardId...>` or `--png <file.png> <CardId> ...` extracts them to `Assets/Resources/CardArt/<CardId>.png`. Give a new PNG a `.meta` copied from an existing card's (new guid) so it imports the same way.
 - **UI:** minimal text. Show things with icons and colour instead of explaining them in words.
 
 ## Reference: the user's previous game, "The Last Chromatist"
@@ -29,7 +30,7 @@ The VFX style above comes from this game. Read its code before making new effect
 
 ## Working here
 
-- The Unity editor is usually open, so check compilation offline with `powershell -File Tools/check.ps1` (it uses Unity's bundled Roslyn). Run it after every change. It cannot run gameplay, so tell the user what still needs testing in Unity.
+- The Unity editor is usually open, so check compilation offline with `powershell -File Tools/check.ps1` (it uses the bundled Roslyn of whichever editor `ProjectSettings/ProjectVersion.txt` names, and finds the project from its own location). Run it after every change. It cannot run gameplay, so tell the user what still needs testing in Unity.
 - There is no Python or .NET SDK on this PC. Git is at `C:\Program Files\Git\cmd\git.exe` (may not be on PATH); repo is https://github.com/grandrx10/SME. To push from the agent shell, set `$env:GCM_INTERACTIVE="always"; $env:GIT_TERMINAL_PROMPT="1"` first. `Assets/StreamingAssets/Tools/*.exe` are stored in Git LFS (ffmpeg is over GitHub's 100 MB limit).
 - Networking is server-authoritative. Voxel edits go through the ordered op stream in `Spells/WorldNet.cs` as integer cell ops, so every peer's world stays identical. Spell logic runs on the server in `Spells/SpellServer.cs`. Input, aiming and previews are in `Spells/AbilityCaster.cs`. Debris and effects are client-side only.
 - Spells have a 20 m max range unless the card says otherwise. Knockback ragdolls people. A caster's own spells don't hurt or ragdoll them unless the card says so.

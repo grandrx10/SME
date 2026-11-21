@@ -142,6 +142,16 @@ namespace SuddenMageEncounter
                 }
             }
 
+            // through a linked portal: out of the other one
+            // (the dummy's ball counts as in when it touches the opening, and comes out that far in front of the other one)
+            if (WorldNet.PassPortal(transform.position, pos, BallRadius + 0.05f, 0f, out var portalIn, out var portalOut))
+            {
+                pos = SpellPlans.ThroughPoint(pos, portalIn.center, portalIn.Rotation, portalOut.center, portalOut.Rotation, true);
+                _vel = SpellPlans.ThroughDir(_vel, portalIn.Rotation, portalOut.Rotation);
+                Vector3 facing = SpellPlans.ThroughDir(transform.forward, portalIn.Rotation, portalOut.Rotation);
+                facing.y = 0f;
+                if (facing.sqrMagnitude > 1e-4f) transform.rotation = Quaternion.LookRotation(facing);
+            }
             transform.position = pos;
             if (_netPos.Value != pos) _netPos.Value = pos;
             if (_netVel.Value != _vel) _netVel.Value = _vel;

@@ -34,6 +34,16 @@ namespace SuddenMageEncounter
         Magician = 24,       // wand hand up, other hand down
         SunRaise = 25,       // holding the sun up... flash
         Prayer = 26,         // hands come together (Empress, Emperor)
+        WaterHold = 27,      // hands cupped in front, holding the water
+        WaterCast = 28,      // lifted out: the orb floats off them
+        BubbleCast = 29,     // hands come together, and stay together while the bubble carries you
+        TsunamiHold = 30,    // arms low and ready
+        TsunamiCast = 31,    // drawn back behind the hips... shoved forward
+        WarpHold = 32,       // hands close together in front of the chest
+        WarpCast = 33,       // hands together... pulled apart, opening the rift
+        PortalHold = 34,     // right hand out, palm forward, framing the portal
+        PortalCast = 35,     // a sweep of the hand: the portal opens
+        SwiftCast = 36,      // crouched, gathering... then the forced run, leaning in
     }
 
     /// <summary>Owner-authoritative movement snapshot replicated to everyone.</summary>

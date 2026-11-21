@@ -14,6 +14,7 @@ namespace SuddenMageEncounter
         RuneDrawing _circle;
         Transform _circleT, _beam, _ink, _core;
         readonly List<Transform> _motes = new();
+        float _fizzledAt = -1f;
         static Mesh _tube;
         static Material _beamMat, _inkMat;
 
@@ -151,6 +152,17 @@ namespace SuddenMageEncounter
             float end = SpellPlans.JudgmentLaserEnd + SpellPlans.JudgmentFade;
             if (t > end || WorldNet.Instance == null) { Destroy(gameObject); return; }
             float R = SpellPlans.JudgmentRadius;
+
+            // the caster was knocked down while drawing it: the half-written circle shrinks away, no beam
+            if (_fizzledAt < 0f && WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + SpellPlans.JudgmentDraw)) _fizzledAt = t;
+            if (_fizzledAt >= 0f)
+            {
+                float s = 1f - Mathf.Clamp01((t - _fizzledAt) / 0.25f);
+                if (s <= 0f) { Destroy(gameObject); return; }
+                _circleT.localScale = Vector3.one * (s * s);
+                _circleT.localRotation = Quaternion.Euler(0f, t * 12f, 0f);
+                return;
+            }
 
             // writing the circle, slowly turning
             _circle.Progress = t / SpellPlans.JudgmentDraw;
