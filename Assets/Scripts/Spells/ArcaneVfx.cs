@@ -22,6 +22,8 @@ namespace SuddenMageEncounter
         /// <summary>Both faces (trails and flat strips, whose winding can come out either way).</summary>
         public static Material DoubleSided => _doubleSided ??= Make("Glow (double sided)", 0f);
         public static Mesh SphereMesh => _sphere ??= Resources.GetBuiltinResource<Mesh>("Sphere.fbx");
+        /// <summary>The scale that makes <see cref="SphereMesh"/> a ball of this radius (the built-in mesh isn't one unit across).</summary>
+        public static Vector3 SphereScale(float radius) => Vector3.one * (radius / Mathf.Max(0.01f, SphereMesh.bounds.extents.x));
         public static Mesh CubeMesh => _cube ??= Resources.GetBuiltinResource<Mesh>("Cube.fbx");
 
         static Mesh _prism;

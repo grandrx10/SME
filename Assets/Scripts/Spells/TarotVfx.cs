@@ -132,6 +132,9 @@ namespace SuddenMageEncounter
             // "on your screen": in front of the camera and inside the view (any distance)
             Vector3 vp = cam.WorldToViewportPoint(caster.transform.position + Vector3.up * 0.3f);
             if (vp.z <= 0f || vp.x < 0f || vp.x > 1f || vp.y < 0f || vp.y > 1f) return;
+            // the sun hidden behind something (a wall, the ground, a hill): it can't blind you
+            Vector3 eye = cam.transform.position, sun = transform.position;
+            if (Physics.Linecast(eye, sun, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore)) return;
             _checked = true;
             BlindOverlay.Blind(SpellPlans.BlindFade);
         }
@@ -233,6 +236,8 @@ namespace SuddenMageEncounter
             return v;
         }
 
+        const float GoTime = 0.07f;
+        float _going;
         ArcaneCharge _charge;
         RuneSpew _spew;
         bool _startupDone;
@@ -258,7 +263,7 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Double ring with a band of runes (tops outward) between, in unit coordinates.</summary>
-        static List<List<Vector2>> Strokes()
+        public static List<List<Vector2>> Strokes()
         {
             var s = new List<List<Vector2>> { TarotVfx.Ring(1f, 0f, 80), TarotVfx.Ring(0.84f, 0f, 72) };
             const int n = 14;
@@ -291,11 +296,12 @@ namespace SuddenMageEncounter
                 if (c != null) transform.position = c.FeetPosition;
             }
             float scale;
-            if (_fx.ended >= 0)
+            // over: it goes the moment we hear (timed here: the server's clock runs a little behind on this screen), motes and all
+            if (_fx.ended >= 0 || t >= (_fx.kind == 0 ? SpellPlans.EmpressTime : SpellPlans.EmperorTime))
             {
-                float u = Mathf.Clamp01((float)(now - _fx.ended) / 0.3f);
-                if (u >= 1f || t < 0f) { Destroy(gameObject); return; }
-                scale = (1f - u) * (1f - u);
+                _going += Time.deltaTime / GoTime;
+                if (_going >= 1f || t < 0f) { Destroy(gameObject); return; }
+                scale = (1f - _going) * (1f - _going);
             }
             else if (t < 0f) scale = 0f; // the hands are still coming together
             else scale = 1f - Mathf.Pow(1f - Mathf.Clamp01(t / SpellPlans.DomainGrow), 3f);
@@ -377,7 +383,7 @@ namespace SuddenMageEncounter
             }
 
             // The Empress: shackle rings round the trapped body, chained to her
-            bool trapped = alive && _pc.Trapped;
+            bool trapped = alive && _pc.Trapped && DomainUp(_pc.TrappedBy.Value); // (gone with her domain, not a moment later)
             UpdateChain(trapped, body, dt);
             if (trapped && _shackles == null)
             {
@@ -398,6 +404,9 @@ namespace SuddenMageEncounter
         }
 
         // ---------------- the Empress's chain ----------------
+
+        static bool DomainUp(int id) =>
+            WorldNet.Instance != null && WorldNet.Instance.Domains.TryGetValue(id, out var fx) && fx.ended < 0;
 
         Transform _chainRoot;
         readonly List<Transform> _links = new();
@@ -426,7 +435,7 @@ namespace SuddenMageEncounter
                     _taut = Mathf.Clamp01(new Vector2(o.x, o.z).magnitude / (SpellPlans.EmpressRadius - SpellPlans.ChainSlack));
                 }
             }
-            _chainGrow = Mathf.MoveTowards(_chainGrow, _chainShown ? 1f : 0f, dt / ChainGrowTime);
+            _chainGrow = Mathf.MoveTowards(_chainGrow, _chainShown ? 1f : 0f, dt / (_chainShown ? ChainGrowTime : 0.07f));
             if (_chainGrow <= 0f)
             {
                 if (_chainRoot != null) { Destroy(_chainRoot.gameObject); _chainRoot = null; _links.Clear(); }

@@ -19,7 +19,7 @@ namespace SuddenMageEncounter
     /// Every peer holds the same grid; it only changes through <see cref="WorldNet"/> ops, applied in the same
     /// order everywhere, and every edit is integer-only so the result is identical on all machines.
     /// </summary>
-    public class VoxelWorld : MonoBehaviour
+    public partial class VoxelWorld : MonoBehaviour
     {
         public const float Size = 0.25f;
         public const int ChunkBits = 4;
@@ -35,13 +35,17 @@ namespace SuddenMageEncounter
         public int AnchorY { get; private set; }
         public readonly List<VoxelMaterial> Palette = new();
         public readonly Dictionary<Vector3Int, VoxelChunk> Chunks = new();
-        public Material RenderMaterial { get; private set; }
+        /// <summary>Materials for voxel meshes, one per <see cref="VoxelMesher"/> submesh (solid, glass).</summary>
+        public Material[] RenderMaterials { get; private set; }
 
         readonly HashSet<VoxelChunk> _dirty = new();
 
         // ------------------------------------------------------------------ setup
 
-        /// <param name="live">True in play mode (becomes <see cref="Current"/>); false for an editor preview.</param>
+        /// <param name="live">
+        /// True in play mode (becomes <see cref="Current"/>, and builds itself over the next few seconds instead of
+        /// freezing the game: see <see cref="Building"/>); false for an editor preview (built at once).
+        /// </param>
         public static VoxelWorld Create(Transform parent, Vector3 origin, VoxelArenaData data, bool live)
         {
             var go = new GameObject("VoxelWorld");
@@ -50,23 +54,128 @@ namespace SuddenMageEncounter
             go.transform.rotation = Quaternion.identity;
             var w = go.AddComponent<VoxelWorld>();
             w.Origin = origin;
-            w.RenderMaterial = VoxelRender.Material;
+            w.RenderMaterials = VoxelRender.Materials;
             w.Palette.Clear();
             w.Palette.Add(default); // air
             for (int i = 1; i < data.palette.Count; i++) w.Palette.Add(data.palette[i]);
             int minY = int.MaxValue;
+            Vector3Int kMin = new(int.MaxValue, int.MaxValue, int.MaxValue), kMax = new(int.MinValue, int.MinValue, int.MinValue);
             foreach (var kv in data.chunks)
             {
                 var c = w.GetOrCreateChunk(kv.Key);
                 Array.Copy(kv.Value, c.Cells, c.Cells.Length);
                 c.RecountSolid();
-                if (c.Solid > 0) minY = Mathf.Min(minY, kv.Key.y * ChunkSize + c.LowestSolidY());
+                if (c.Solid <= 0) continue;
+                minY = Mathf.Min(minY, kv.Key.y * ChunkSize + c.LowestSolidY());
+                kMin = Vector3Int.Min(kMin, kv.Key);
+                kMax = Vector3Int.Max(kMax, kv.Key);
             }
             w.AnchorY = minY == int.MaxValue ? 0 : minY;
-            w.ComputeAnchors();
-            if (live) Current = w;
+            if (minY == int.MaxValue) kMin = kMax = Vector3Int.zero;
+            Vector3 lo = origin + (Vector3)(kMin * ChunkSize) * Size, hi = origin + (Vector3)((kMax + Vector3Int.one) * ChunkSize) * Size;
+            w.ArenaBounds = new Bounds((lo + hi) * 0.5f, hi - lo);
+            if (live)
+            {
+                Current = w;
+                w.StartBuild(kMin, kMax);
+                return w;
+            }
+            w._anchors.Clear();
+            w.ComputeAnchors(w.Chunks.Values);
             w.RebuildAll();
             return w;
+        }
+
+        /// <summary>Where the arena's voxels were when it loaded (for the camera that circles it while it builds).</summary>
+        public Bounds ArenaBounds { get; private set; }
+
+        // ------------------------------------------------------------------ building over time
+
+        /// <summary>Roughly how long the arena takes to rise (well inside the match's build phase).</summary>
+        public const float BuildSeconds = 3.5f;
+        /// <summary>Per-frame budgets (ms) for meshing chunks and for the anchor flood fill.</summary>
+        const double MeshBudgetMs = 9.0, AnchorBudgetMs = 5.0;
+
+        List<VoxelChunk> _buildQueue;
+        int _buildNext;
+        float _buildStart;
+        IEnumerator<bool> _anchorJob;
+        Vector3Int _jobMin, _jobMax;
+        static readonly System.Diagnostics.Stopwatch BuildClock = new();
+
+        /// <summary>Still meshing chunks or working out which cells hold the arena up.</summary>
+        public bool Building => _buildQueue != null || _anchorJob != null;
+        /// <summary>0..1: how much of the arena has been put up.</summary>
+        public float BuildProgress => _buildQueue == null ? 1f : _buildQueue.Count == 0 ? 1f : (float)_buildNext / _buildQueue.Count;
+
+        /// <summary>
+        /// Instead of meshing every chunk (and cooking every collider) in one frame, the arena rises layer by layer
+        /// over <see cref="BuildSeconds"/>, and the anchor flood fill runs a few milliseconds a frame alongside it.
+        /// The grid itself is complete from the start, so world ops can be applied at any time; an op that edits the
+        /// arena before its anchors are known finishes them first (<see cref="Set"/>), so every peer agrees.
+        /// </summary>
+        void StartBuild(Vector3Int kMin, Vector3Int kMax)
+        {
+            var center = (Vector3)(kMin + kMax) * 0.5f;
+            _buildQueue = new List<VoxelChunk>(Chunks.Values);
+            _buildQueue.Sort((a, b) =>
+            {
+                if (a.Key.y != b.Key.y) return a.Key.y.CompareTo(b.Key.y); // bottom up
+                float da = new Vector2(a.Key.x - center.x, a.Key.z - center.z).sqrMagnitude;
+                float db = new Vector2(b.Key.x - center.x, b.Key.z - center.z).sqrMagnitude;
+                return da.CompareTo(db);                                    // each layer spreading out from the middle
+            });
+            _buildNext = 0;
+            _buildStart = Time.unscaledTime;
+            _anchors.Clear();
+            _jobMin = kMin - Vector3Int.one;
+            _jobMax = kMax + Vector3Int.one;
+            _anchorJob = AnchorSteps(new List<VoxelChunk>(_buildQueue));
+        }
+
+        void StepBuild()
+        {
+            BuildClock.Restart();
+            if (_anchorJob != null)
+                while (BuildClock.Elapsed.TotalMilliseconds < AnchorBudgetMs)
+                    if (!_anchorJob.MoveNext()) { _anchorJob = null; break; }
+            if (_buildQueue == null) return;
+            BuildClock.Restart();
+            float k = Mathf.Clamp01((Time.unscaledTime - _buildStart) / BuildSeconds);
+            int target = Mathf.CeilToInt(_buildQueue.Count * k);
+            while (_buildNext < target && BuildClock.Elapsed.TotalMilliseconds < MeshBudgetMs) BuildNext();
+            if (_buildNext >= _buildQueue.Count) _buildQueue = null;
+        }
+
+        void BuildNext()
+        {
+            var c = _buildQueue[_buildNext++];
+            if (c != null && !_dirty.Contains(c)) c.Rebuild(); // a dirty one gets built by the flush anyway
+        }
+
+        /// <summary>Put up whatever's left of the arena right now (someone's about to stand on it).</summary>
+        public void FinishBuild()
+        {
+            FinishAnchors();
+            if (_buildQueue == null) return;
+            while (_buildNext < _buildQueue.Count) BuildNext();
+            _buildQueue = null;
+        }
+
+        void FinishAnchors()
+        {
+            if (_anchorJob == null) return;
+            var job = _anchorJob;
+            _anchorJob = null; // first, so the flood fill can't re-enter through Set
+            while (job.MoveNext()) { }
+        }
+
+        /// <summary>Called on every edit: the arena's anchors must be known before its cells change.</summary>
+        void EnsureAnchorsFor(Vector3Int chunkKey)
+        {
+            if (chunkKey.x >= _jobMin.x && chunkKey.x <= _jobMax.x && chunkKey.y >= _jobMin.y && chunkKey.y <= _jobMax.y &&
+                chunkKey.z >= _jobMin.z && chunkKey.z <= _jobMax.z)
+                FinishAnchors();
         }
 
         void OnDestroy()
@@ -78,41 +187,145 @@ namespace SuddenMageEncounter
         /// Every separate piece of the arena as built (floating platforms included) is held up by its own bottom
         /// layer: those cells are anchors. Break a piece so part of it no longer reaches its anchors and that part falls.
         /// </summary>
-        void ComputeAnchors()
+        /// <summary>Adds the anchors of every piece that has a cell in these chunks (all at once).</summary>
+        void ComputeAnchors(IEnumerable<VoxelChunk> chunks)
         {
-            _anchors.Clear();
-            var visited = new HashSet<Vector3Int>();
-            var queue = new Queue<Vector3Int>();
-            var comp = new List<Vector3Int>();
-            foreach (var chunk in Chunks.Values)
+            var job = AnchorSteps(new List<VoxelChunk>(chunks));
+            while (job.MoveNext()) { }
+        }
+
+        /// <summary>
+        /// The anchor flood fill, in steps (it yields every couple of thousand cells so it can be spread over frames).
+        /// The result only depends on the grid, which mustn't change in these chunks until it's done.
+        /// </summary>
+        IEnumerator<bool> AnchorSteps(List<VoxelChunk> chunks)
+        {
+            // Visited cells are one bit per cell, per chunk, and neighbours inside the same chunk are plain array
+            // offsets: arenas carry millions of solid cells (the volcano: 3 million), so no hashing per cell.
+            var visited = new Dictionary<VoxelChunk, ulong[]>();
+            var queue = new Queue<(VoxelChunk c, int i)>();
+            var lowest = new List<Vector3Int>();
+            const int Batch = 4096;
+            int work = 0;
+            foreach (var chunk in chunks)
             {
-                var o = chunk.Key * ChunkSize;
-                for (int i = 0; i < chunk.Cells.Length; i++)
+                if (chunk == null) continue;
+                var cells = chunk.Cells;
+                var seen = VisitedBits(visited, chunk);
+                for (int i = 0; i < cells.Length; i++)
                 {
-                    if (chunk.Cells[i] == 0) continue;
-                    var start = o + new Vector3Int(i & ChunkMask, i >> (ChunkBits * 2), (i >> ChunkBits) & ChunkMask);
-                    if (!visited.Add(start)) continue;
-                    comp.Clear();
-                    queue.Enqueue(start);
-                    int minY = start.y;
+                    if ((i & 63) == 0 && ++work >= Batch) { work = 0; yield return true; }
+                    if (cells[i] == 0 || (seen[i >> 6] & (1UL << i)) != 0) continue;
+                    seen[i >> 6] |= 1UL << i;
+                    queue.Enqueue((chunk, i));
+                    lowest.Clear();
+                    int minY = int.MaxValue;
                     while (queue.Count > 0)
                     {
-                        var p = queue.Dequeue();
-                        comp.Add(p);
-                        if (p.y < minY) minY = p.y;
-                        foreach (var d in Dirs)
-                        {
-                            var n = p + d;
-                            if (IsSolid(n) && visited.Add(n)) queue.Enqueue(n);
-                        }
+                        if (++work >= Batch) { work = 0; yield return true; }
+                        var (c, idx) = queue.Dequeue();
+                        var bits = VisitedBits(visited, c);
+                        int lx = idx & ChunkMask, lz = (idx >> ChunkBits) & ChunkMask, ly = idx >> (ChunkBits * 2);
+                        int y = c.Key.y * ChunkSize + ly;
+                        if (y < minY) { minY = y; lowest.Clear(); }
+                        if (y == minY) lowest.Add(c.Key * ChunkSize + new Vector3Int(lx, ly, lz));
+                        const int SZ = 1 << ChunkBits, SY = 1 << (ChunkBits * 2);
+                        FloodTo(c, bits, lx > 0, idx - 1, new Vector3Int(-1, 0, 0), idx + ChunkMask, visited, queue);
+                        FloodTo(c, bits, lx < ChunkMask, idx + 1, new Vector3Int(1, 0, 0), idx - ChunkMask, visited, queue);
+                        FloodTo(c, bits, ly > 0, idx - SY, new Vector3Int(0, -1, 0), idx + ChunkMask * SY, visited, queue);
+                        FloodTo(c, bits, ly < ChunkMask, idx + SY, new Vector3Int(0, 1, 0), idx - ChunkMask * SY, visited, queue);
+                        FloodTo(c, bits, lz > 0, idx - SZ, new Vector3Int(0, 0, -1), idx + ChunkMask * SZ, visited, queue);
+                        FloodTo(c, bits, lz < ChunkMask, idx + SZ, new Vector3Int(0, 0, 1), idx - ChunkMask * SZ, visited, queue);
                     }
-                    foreach (var p in comp) if (p.y == minY) _anchors.Add(p);
+                    // a piece standing on the floor is held up by it already (IsAnchor)
+                    if (minY > AnchorY) foreach (var p in lowest) _anchors.Add(p);
                 }
             }
         }
 
+        static ulong[] VisitedBits(Dictionary<VoxelChunk, ulong[]> visited, VoxelChunk c)
+        {
+            if (!visited.TryGetValue(c, out var bits)) visited[c] = bits = new ulong[ChunkSize * ChunkSize * ChunkSize / 64];
+            return bits;
+        }
+
+        /// <summary>One step of the anchor flood fill: to the neighbour in this chunk, or across into the next one.</summary>
+        void FloodTo(VoxelChunk c, ulong[] bits, bool inside, int inIdx, Vector3Int dk, int outIdx,
+            Dictionary<VoxelChunk, ulong[]> visited, Queue<(VoxelChunk, int)> queue)
+        {
+            if (!inside)
+            {
+                if (!Chunks.TryGetValue(c.Key + dk, out c) || c == null) return;
+                inIdx = outIdx;
+                if (c.Cells[inIdx] == 0) return;
+                bits = VisitedBits(visited, c);
+            }
+            else if (c.Cells[inIdx] == 0) return;
+            ulong m = 1UL << inIdx;
+            if ((bits[inIdx >> 6] & m) != 0) return;
+            bits[inIdx >> 6] |= m;
+            queue.Enqueue((c, inIdx));
+        }
+
         readonly HashSet<Vector3Int> _anchors = new();
         bool IsAnchor(Vector3Int p) => p.y <= AnchorY || _anchors.Contains(p);
+
+        // ------------------------------------------------------------------ regions (practice chambers)
+
+        /// <summary>
+        /// Copies a whole arena into the grid, shifted by <paramref name="offset"/> cells (a multiple of the chunk size),
+        /// for a practice chamber living off to the side of the main arena. Its materials are matched to (or added to)
+        /// this world's palette in order, so every peer that applies the same stamps ends up with the same palette.
+        /// </summary>
+        public void Stamp(VoxelArenaData data, Vector3Int offset)
+        {
+            var map = new ushort[data.palette.Count];
+            for (int i = 1; i < data.palette.Count; i++)
+            {
+                var m = data.palette[i];
+                int found = -1;
+                for (int j = 1; j < Palette.Count && found < 0; j++)
+                {
+                    var p = Palette[j];
+                    if (!_isSoot.Contains((ushort)j) && !_isIce.Contains((ushort)j) && !_worldStuff.ContainsKey((ushort)j) && p.indestructible == m.indestructible && p.color.Equals(m.color)) found = j;
+                }
+                if (found < 0) { Palette.Add(m); found = Palette.Count - 1; }
+                map[i] = (ushort)found;
+            }
+            var chunkOffset = new Vector3Int(offset.x >> ChunkBits, offset.y >> ChunkBits, offset.z >> ChunkBits);
+            var stamped = new List<VoxelChunk>();
+            foreach (var kv in data.chunks)
+            {
+                var c = GetOrCreateChunk(kv.Key + chunkOffset);
+                var src = kv.Value;
+                for (int i = 0; i < src.Length; i++) c.Cells[i] = src[i] < map.Length ? map[src[i]] : (ushort)0;
+                c.RecountSolid();
+                _dirty.Add(c);
+                stamped.Add(c);
+            }
+            ComputeAnchors(stamped);
+            FlushRebuilds();
+        }
+
+        /// <summary>Empties every chunk whose x lies in [minCellX, maxCellX) (a practice chamber closing or resetting).</summary>
+        public void ClearRegion(int minCellX, int maxCellX)
+        {
+            var gone = new List<Vector3Int>();
+            foreach (var key in Chunks.Keys)
+            {
+                int x = key.x * ChunkSize;
+                if (x >= minCellX && x < maxCellX) gone.Add(key);
+            }
+            foreach (var key in gone)
+            {
+                var c = Chunks[key];
+                Chunks.Remove(key);
+                _dirty.Remove(c);
+                if (c != null) { c.gameObject.SetActive(false); Destroy(c.gameObject); } // its collider is gone this frame
+            }
+            _anchors.RemoveWhere(p => p.x >= minCellX && p.x < maxCellX);
+            _summoned.RemoveWhere(p => p.x >= minCellX && p.x < maxCellX);
+        }
 
         // ------------------------------------------------------------------ coordinates
 
@@ -147,6 +360,7 @@ namespace SuddenMageEncounter
         public void Set(int x, int y, int z, ushort v)
         {
             var key = ChunkOf(x, y, z);
+            if (_anchorJob != null) EnsureAnchorsFor(key);
             if (!Chunks.TryGetValue(key, out var c))
             {
                 if (v == 0) return;
@@ -193,19 +407,25 @@ namespace SuddenMageEncounter
 
         // ------------------------------------------------------------------ rebuild
 
-        void LateUpdate() => FlushRebuilds();
+        void LateUpdate()
+        {
+            if (Building) StepBuild();
+            StepLate();
+            FlushRebuilds();
+        }
 
         /// <summary>Re-mesh every chunk that changed (also called before physics queries that must see edits).</summary>
         public void FlushRebuilds()
         {
             if (_dirty.Count == 0) return;
-            foreach (var c in _dirty) if (c != null) c.Rebuild();
+            if (_late.Count > 0) foreach (var c in _dirty) _late.Remove(c); // (up to date now: no need to do it again later)
+            VoxelChunk.RebuildMany(_dirty);
             _dirty.Clear();
         }
 
         void RebuildAll()
         {
-            foreach (var c in Chunks.Values) c.Rebuild();
+            VoxelChunk.RebuildMany(Chunks.Values);
             _dirty.Clear();
         }
 
@@ -278,7 +498,7 @@ namespace SuddenMageEncounter
         /// </summary>
         ushort SootOf(ushort v)
         {
-            if (v == 0 || _isSoot.Contains(v)) return v;
+            if (v == 0 || _isSoot.Contains(v) || _worldStuff.ContainsKey(v)) return v; // (The World's shell doesn't scorch)
             if (_soot.TryGetValue(v, out var s)) return s;
             var m = Palette[v];
             Color c = m.color;
@@ -289,8 +509,37 @@ namespace SuddenMageEncounter
             s = (ushort)(Palette.Count - 1);
             _soot[v] = s;
             _isSoot.Add(s);
+            if (_isIce.Contains(v)) _isIce.Add(s); // singed ice still crumbles as ice
             return s;
         }
+
+        /// <summary>The scorched version of a material (see <see cref="SootOf"/>). Adds a palette entry: call it only while applying an op.</summary>
+        public ushort Scorched(ushort v) => SootOf(v);
+
+        // ------------------------------------------------------------------ ice
+
+        readonly Dictionary<byte, ushort> _ice = new();
+        readonly HashSet<ushort> _isIce = new();
+        /// <summary>Ice Spike's shades, base to tip: a clear blue, paler, nearly white.</summary>
+        static readonly Color32[] IceShades = { new(120, 200, 238, 255), new(172, 228, 248, 255), new(228, 248, 255, 255) };
+
+        /// <summary>
+        /// The palette entry for ice of this shade (0..2), added the first time it's needed. Call it only while
+        /// applying an op, so every peer adds it at the same point and the palettes stay the same.
+        /// </summary>
+        public ushort IceValue(byte shade)
+        {
+            shade = (byte)Mathf.Min(shade, IceShades.Length - 1);
+            if (_ice.TryGetValue(shade, out var v)) return v;
+            Palette.Add(new VoxelMaterial { color = IceShades[shade] });
+            v = (ushort)(Palette.Count - 1);
+            _ice[shade] = v;
+            _isIce.Add(v);
+            return v;
+        }
+
+        /// <summary>Is this ice (an Ice Spike's), singed or not?</summary>
+        public bool IsIce(ushort v) => v != 0 && _isIce.Contains(v);
 
         /// <summary>Scorches the exposed surface (cells touching air) within radius r4/4 cells: turned to soot.</summary>
         /// <remarks>With <paramref name="all"/>, every cell in the ball is scorched, not just the surface (rubble about to be blown out).</remarks>
@@ -322,17 +571,23 @@ namespace SuddenMageEncounter
             for (int z = cz - radius; z <= cz + radius; z++)
             {
                 if ((x - cx) * (x - cx) + (z - cz) * (z - cz) > lim) continue;
-                for (int y = yMax; y >= yMin; y--)
+                EraseTop(x, z, yMin, yMax, removed);
+            }
+        }
+
+        /// <summary>Removes the topmost voxel of one column between yMin and yMax (an indestructible top shields what's under it).</summary>
+        public void EraseTop(int x, int z, int yMin, int yMax, List<RemovedCell> removed)
+        {
+            for (int y = yMax; y >= yMin; y--)
+            {
+                ushort v = Get(x, y, z);
+                if (v == 0) continue;
+                if (!IsIndestructible(v))
                 {
-                    ushort v = Get(x, y, z);
-                    if (v == 0) continue;
-                    if (!IsIndestructible(v))
-                    {
-                        removed?.Add(new RemovedCell { cell = new Vector3Int(x, y, z), value = v });
-                        Set(x, y, z, 0);
-                    }
-                    break; // only the top one (an indestructible top shields what's under it)
+                    removed?.Add(new RemovedCell { cell = new Vector3Int(x, y, z), value = v });
+                    Set(x, y, z, 0);
                 }
+                return;
             }
         }
 
@@ -382,29 +637,36 @@ namespace SuddenMageEncounter
         /// After cells were removed, any piece that is no longer connected (6-neighbour) to the anchored ground
         /// falls: it's removed from the grid and handed back as an island (the caller turns it into debris).
         /// Deterministic: the same grid and the same boundary list give the same result on every peer.
+        /// <para>
+        /// The search always grows from its lowest cell first (anchors are at the bottom of things), so in solid ground
+        /// it runs more or less straight down to them instead of flooding a ball of terrain around the hole, which
+        /// could be tens of thousands of cells for every break high up on a mountain.
+        /// </para>
         /// </summary>
         void DropIslands(List<Vector3Int> boundary, List<RemovedCell> _, List<List<RemovedCell>> islands)
         {
             if (boundary == null || boundary.Count == 0) return;
-            var settled = new HashSet<Vector3Int>(); // cells already proven anchored
-            var queue = new Queue<Vector3Int>();
-            var comp = new List<Vector3Int>();
-            var seen = new HashSet<Vector3Int>();
+            using var marker = IslandsMarker.Auto();
+            var settled = _settled; // cells already proven anchored
+            var comp = _comp;
+            var seen = _seen;
+            settled.Clear();
             foreach (var b in boundary)
             foreach (var d in Dirs)
             {
                 var start = b + d;
                 if (!IsSolid(start) || settled.Contains(start)) continue;
-                // flood this component
+                // search this piece
                 comp.Clear();
                 seen.Clear();
-                queue.Clear();
-                queue.Enqueue(start);
+                _heap.Clear();
+                _heapSeq = 0;
+                HeapPush(start);
                 seen.Add(start);
                 bool anchored = false;
-                while (queue.Count > 0)
+                while (_heap.Count > 0)
                 {
-                    var p = queue.Dequeue();
+                    var p = HeapPop();
                     comp.Add(p);
                     if (IsAnchor(p) || settled.Contains(p) || IsIndestructible(Get(p)) || seen.Count > IslandSearchLimit)
                     {
@@ -416,7 +678,7 @@ namespace SuddenMageEncounter
                         var n = p + dd;
                         if (seen.Contains(n) || !IsSolid(n)) continue;
                         seen.Add(n);
-                        queue.Enqueue(n);
+                        HeapPush(n);
                     }
                 }
                 if (anchored)
@@ -430,6 +692,56 @@ namespace SuddenMageEncounter
                 foreach (var p in comp) Set(p, 0);
                 islands?.Add(island);
             }
+            settled.Clear();
+            seen.Clear();
+            comp.Clear();
+            _heap.Clear();
+        }
+
+        static readonly Unity.Profiling.ProfilerMarker IslandsMarker = new("SME.VoxelWorld.DropIslands");
+        readonly HashSet<Vector3Int> _settled = new(), _seen = new();
+        readonly List<Vector3Int> _comp = new();
+
+        // min-heap on (y, then order pushed): lowest first, ties in a fixed order so every peer searches the same way
+        readonly List<(int y, int seq, Vector3Int p)> _heap = new();
+        int _heapSeq;
+
+        static bool Less((int y, int seq, Vector3Int p) a, (int y, int seq, Vector3Int p) b) => a.y < b.y || (a.y == b.y && a.seq < b.seq);
+
+        void HeapPush(Vector3Int p)
+        {
+            var item = (p.y, _heapSeq++, p);
+            int i = _heap.Count;
+            _heap.Add(item);
+            while (i > 0)
+            {
+                int parent = (i - 1) >> 1;
+                if (!Less(item, _heap[parent])) break;
+                _heap[i] = _heap[parent];
+                i = parent;
+            }
+            _heap[i] = item;
+        }
+
+        Vector3Int HeapPop()
+        {
+            var top = _heap[0].p;
+            int last = _heap.Count - 1;
+            var item = _heap[last];
+            _heap.RemoveAt(last);
+            if (last == 0) return top;
+            int i = 0;
+            while (true)
+            {
+                int l = 2 * i + 1;
+                if (l >= last) break;
+                int r = l + 1, m = r < last && Less(_heap[r], _heap[l]) ? r : l;
+                if (!Less(_heap[m], item)) break;
+                _heap[i] = _heap[m];
+                i = m;
+            }
+            _heap[i] = item;
+            return top;
         }
 
         /// <summary>Is this collider part of the voxel world (and not an indestructible-only spot)?</summary>

@@ -19,7 +19,10 @@ namespace SuddenMageEncounter
 
         static readonly Dictionary<Vector3Int, List<Vector3Int>> Groups = new();
 
-        public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed)
+        public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed) => Spawn(w, removed, Glow.Arcane);
+
+        /// <param name="rim">The colour the clumps' edges glow.</param>
+        public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed, Color rim)
         {
             Groups.Clear();
             foreach (var rc in removed)
@@ -29,10 +32,10 @@ namespace SuddenMageEncounter
                 if (!Groups.TryGetValue(key, out var list)) Groups[key] = list = new List<Vector3Int>();
                 list.Add(c);
             }
-            foreach (var g in Groups.Values) Make(w, g);
+            foreach (var g in Groups.Values) Make(w, g, rim);
         }
 
-        static void Make(VoxelWorld w, List<Vector3Int> cells)
+        static void Make(VoxelWorld w, List<Vector3Int> cells, Color rimColour)
         {
             Vector3 center = Vector3.zero;
             foreach (var c in cells) center += w.CellCenter(c);
@@ -42,9 +45,9 @@ namespace SuddenMageEncounter
             go.transform.position = center;
             var mesh = BuildMesh(w, cells, center);
             var t = Glow.Piece(go.transform, mesh, Black, "Clump");
-            // the rim glows arcane blue instead of ink
+            // the rim glows (arcane blue; mahogany for Judgement) instead of ink
             var rim = t.Find("Outline")?.GetComponent<MeshRenderer>();
-            if (rim != null) Glow.Tint(rim, Glow.Arcane);
+            if (rim != null) Glow.Tint(rim, rimColour);
             var v = go.AddComponent<VoidRise>();
             v._start = center;
             v._rise = Random.Range(1.2f, 2.4f);

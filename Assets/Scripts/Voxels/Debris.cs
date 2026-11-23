@@ -12,6 +12,20 @@ namespace SuddenMageEncounter
     {
         const int MaxPieces = 450;
         const float SplitSpeed = 6f;
+        /// <summary>More rubble than this flying: new pieces don't collide with other rubble and don't split.</summary>
+        const int Crowded = 150;
+        /// <summary>Each piece builds a mesh and a body, so cap how many one frame makes (a big break thins out instead of hitching).</summary>
+        const int SpawnsPerFrame = 100;
+        /// <summary>Lets resting rubble go to sleep sooner (Unity's default is 0.005), so a settled pile costs almost nothing.</summary>
+        const float SleepThreshold = 0.05f;
+        static int _spawnFrame = -1, _spawned;
+        static readonly Unity.Profiling.ProfilerMarker SpawnMarker = new("SME.Debris.Spawn");
+
+        static int SpawnRoom()
+        {
+            if (Time.frameCount != _spawnFrame) { _spawnFrame = Time.frameCount; _spawned = 0; }
+            return SpawnsPerFrame - _spawned;
+        }
         static readonly List<Debris> Live = new();
         public static bool Suppressed; // replaying history for a late joiner: no rubble
 
@@ -40,15 +54,22 @@ namespace SuddenMageEncounter
         /// <summary>Throws the removed cells as clumps of <paramref name="block"/>³ voxels, pushed away from <paramref name="center"/>.</summary>
         /// <param name="frame">Cells are laid out in this transform's space (a moving body's mesh root, cell (0,0,0) at its origin);
         /// null = where they sit in the world grid.</param>
-        public static void Spawn(VoxelWorld world, List<VoxelWorld.RemovedCell> cells, Vector3 center, float push, Vector3 extraVelocity, int block, Transform frame = null)
+        /// <param name="maxPieces">At most about this many clumps from this one break (spells that break a lot, often).</param>
+        public static void Spawn(VoxelWorld world, List<VoxelWorld.RemovedCell> cells, Vector3 center, float push, Vector3 extraVelocity, int block, Transform frame = null, int maxPieces = int.MaxValue)
         {
             if (Suppressed || world == null || cells == null || cells.Count == 0) return;
+            using var marker = SpawnMarker.Auto();
             // too much rubble at once: thin it out (keep the clumps, drop a random share)
             float keep = Mathf.Clamp01(1500f / cells.Count);
             var groups = Group(cells, block);
+            if (groups.Count > maxPieces) keep = Mathf.Min(keep, maxPieces / (float)groups.Count);
+            int room = SpawnRoom();
+            if (room <= 0) return;
+            if (groups.Count * keep > room) keep = room / (float)groups.Count;
             foreach (var g in groups)
             {
                 if (keep < 1f && Random.value > keep) continue;
+                if (SpawnRoom() <= 0) return;
                 var min = Min(g);
                 Vector3 pos = frame != null ? frame.TransformPoint((Vector3)min * VoxelWorld.Size) : world.CellMin(min);
                 Quaternion rot = frame != null ? frame.rotation : Quaternion.identity;
@@ -68,7 +89,9 @@ namespace SuddenMageEncounter
                 Live.RemoveAt(0);
                 if (old != null) Destroy(old.gameObject);
             }
-            var go = new GameObject("Debris") { layer = Layers.Fx };
+            _spawned++;
+            bool crowded = Live.Count >= Crowded;
+            var go = new GameObject("Debris") { layer = crowded ? Layers.LightRubble : Layers.Fx };
             go.transform.SetPositionAndRotation(pos, rot);
             var d = go.AddComponent<Debris>();
             d._cells = cells;
@@ -77,7 +100,8 @@ namespace SuddenMageEncounter
             VoxelMesher.BuildCells(d._mesh, cells, min, world.ColorOf, VoxelWorld.Size, out var cmin, out var cmax);
             go.AddComponent<MeshFilter>().sharedMesh = d._mesh;
             var mr = go.AddComponent<MeshRenderer>();
-            mr.sharedMaterial = world.RenderMaterial;
+            mr.sharedMaterials = world.RenderMaterials;
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off; // hundreds of small shadow casters add up
             var box = go.AddComponent<BoxCollider>();
             Vector3 size = (Vector3)(cmax - cmin + Vector3Int.one) * VoxelWorld.Size;
             box.center = (Vector3)(cmin - min) * VoxelWorld.Size + size * 0.5f;
@@ -86,8 +110,11 @@ namespace SuddenMageEncounter
             d._rb.mass = Mathf.Max(0.2f, cells.Count * 0.15f);
             d._rb.linearVelocity = vel;
             d._rb.angularVelocity = angVel;
-            d._rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            d._rb.collisionDetectionMode = crowded ? CollisionDetectionMode.Discrete : CollisionDetectionMode.ContinuousSpeculative;
             d._rb.interpolation = RigidbodyInterpolation.Interpolate;
+            d._rb.sleepThreshold = SleepThreshold;
+            // only clumps that can still break need contact reports
+            if (cells.Count > 1 && !crowded) go.AddComponent<DebrisSplit>().Owner = d;
             d._born = Time.time;
             d._dieAt = Time.time + Random.Range(4f, 6.5f) * (cells.Count > 1 ? 1f : 0.6f);
             d._scale0 = Vector3.one;
@@ -108,22 +135,25 @@ namespace SuddenMageEncounter
             }
         }
 
-        void OnCollisionEnter(Collision c)
+        /// <summary>Called by <see cref="DebrisSplit"/> when this clump hits something.</summary>
+        public void OnHit(Collision c)
         {
             if (_split || Held || _cells.Count <= 1 || Time.time - _born < 0.06f) return;
             if (c.relativeVelocity.magnitude < SplitSpeed) return;
             Split();
         }
 
-        /// <summary>Breaks into clumps half the size (or single voxels).</summary>
+        /// <summary>Breaks into clumps half the size (or single voxels). Stays whole when there's already too much rubble.</summary>
         void Split()
         {
-            if (_world == null) return;
-            _split = true;
+            if (_world == null || Live.Count >= Crowded) return;
             int block = Mathf.Max(1, _block / 2);
+            var groups = Group(_cells, block);
+            if (groups.Count > SpawnRoom()) return; // busy frame: stay whole (it may still break on a later hit)
+            _split = true;
             var parentMin = Min(_cells);
             Vector3 v = _rb.linearVelocity, w = _rb.angularVelocity;
-            foreach (var g in Group(_cells, block))
+            foreach (var g in groups)
             {
                 var min = Min(g);
                 Vector3 local = (Vector3)(min - parentMin) * VoxelWorld.Size;

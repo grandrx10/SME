@@ -53,7 +53,11 @@ namespace SuddenMageEncounter.EditorTools
                     for (int t = 0; t + 2 < idx.Length; t += 3)
                     {
                         Color col = baseCol;
-                        if (hasVertexColors) col *= (colors[idx[t]] + colors[idx[t + 1]] + colors[idx[t + 2]]) / 3f;
+                        if (hasVertexColors)
+                        {
+                            Color vc = (colors[idx[t]] + colors[idx[t + 1]] + colors[idx[t + 2]]) / 3f;
+                            col.r *= vc.r; col.g *= vc.g; col.b *= vc.b; // alpha stays the material's (glass or not)
+                        }
                         list.Add(new Tri { a = verts[idx[t]], b = verts[idx[t + 1]], c = verts[idx[t + 2]], material = data.AddMaterial(Quantize(col), indestructible) });
                     }
                 }
@@ -135,21 +139,33 @@ namespace SuddenMageEncounter.EditorTools
 
         static long Key(int x, int z) => ((long)x << 32) | (uint)z;
 
+        /// <summary>Alpha 255 = solid; anything less is a glass voxel (see <see cref="VoxelMesher.IsGlass"/>).</summary>
         static Color32 Quantize(Color c)
         {
             byte Q(float f) => (byte)(Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(f) * 255f / 4f) * 4, 0, 255));
-            return new Color32(Q(c.r), Q(c.g), Q(c.b), 255);
+            byte a = c.a >= 1f ? (byte)255 : (byte)Mathf.Min(Q(c.a), 252);
+            return new Color32(Q(c.r), Q(c.g), Q(c.b), a);
         }
 
-        /// <summary>Material colour × the average colour of its main texture.</summary>
+        /// <summary>Glass face opacity when the material doesn't give one (an opaque-alpha glass shader).</summary>
+        const float DefaultGlassAlpha = 0.25f;
+
+        /// <summary>
+        /// Material colour × the average colour of its main texture. Alpha is 1 for solid materials; for glass (a shader
+        /// with "Glass" in its name, a URP Transparent surface, or a transparent render queue) it is the face opacity, under 1.
+        /// </summary>
         static Color MaterialColor(Material mat, Dictionary<Material, Color> cache)
         {
             if (mat == null) return new Color(0.75f, 0.75f, 0.75f);
             if (cache.TryGetValue(mat, out var c)) return c;
             Color col = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : mat.HasProperty("_Color") ? mat.GetColor("_Color") : Color.white;
+            float alpha = col.a;
             Texture tex = mat.HasProperty("_BaseMap") ? mat.GetTexture("_BaseMap") : mat.HasProperty("_MainTex") ? mat.GetTexture("_MainTex") : null;
             if (tex != null) col *= AverageColor(tex);
-            col.a = 1f;
+            bool glass = mat.shader != null && mat.shader.name.IndexOf("glass", System.StringComparison.OrdinalIgnoreCase) >= 0
+                         || mat.HasProperty("_Surface") && mat.GetFloat("_Surface") > 0.5f
+                         || mat.renderQueue > 2500;
+            col.a = glass ? Mathf.Clamp(alpha < 0.99f ? alpha : DefaultGlassAlpha, 0.05f, 0.95f) : 1f;
             cache[mat] = col;
             return col;
         }

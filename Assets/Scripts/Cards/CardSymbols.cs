@@ -249,7 +249,24 @@ namespace SuddenMageEncounter
                     if (i > 0) a.Line(prev, p, 0.045f);
                     prev = p;
                 }
-                return _bubble = a.Render(128, Color.black);
+                _bubble = a.Render(128, Color.black);
+                // filled with mana blue (the HUD's mana colour), under the ink lines
+                var fill = new Color(0.45f, 0.75f, 1f, 1f);
+                var px = _bubble.GetPixels();
+                int n = _bubble.width;
+                float rIn = 0.42f * n;
+                for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = x + 0.5f - n * 0.5f, dy = y + 0.5f - n * 0.5f;
+                    if (dx * dx + dy * dy > rIn * rIn) continue;
+                    int i = y * n + x;
+                    var ink = px[i];
+                    px[i] = new Color(Mathf.Lerp(fill.r, ink.r, ink.a), Mathf.Lerp(fill.g, ink.g, ink.a), Mathf.Lerp(fill.b, ink.b, ink.a), 1f);
+                }
+                _bubble.SetPixels(px);
+                _bubble.Apply();
+                return _bubble;
             }
         }
 
@@ -264,7 +281,36 @@ namespace SuddenMageEncounter
                 a.Bezier(V(0.1f, 0.7f), V(0.14f, 0.9f), V(0.42f, 0.92f), V(0.5f, 0.72f));
                 a.Bezier(V(0.5f, 0.72f), V(0.58f, 0.92f), V(0.86f, 0.9f), V(0.9f, 0.7f));
                 a.Bezier(V(0.9f, 0.7f), V(0.94f, 0.48f), V(0.7f, 0.3f), V(0.5f, 0.12f));
-                return _heart = a.Render(128, Color.black);
+                _heart = a.Render(128, Color.black);
+                // filled red inside the outline (flooded out from the middle, stopping at the ink)
+                var fill = new Color(0.9f, 0.16f, 0.14f, 1f);
+                var px = _heart.GetPixels();
+                int n = _heart.width;
+                var seen = new bool[px.Length];
+                var open = new Stack<int>();
+                open.Push((int)(n * 0.5f) * n + n / 2);
+                while (open.Count > 0)
+                {
+                    int i = open.Pop();
+                    if (i < 0 || i >= px.Length || seen[i] || px[i].a > 0.5f) continue;
+                    seen[i] = true;
+                    int x = i % n;
+                    if (x > 0) open.Push(i - 1);
+                    if (x < n - 1) open.Push(i + 1);
+                    open.Push(i - n);
+                    open.Push(i + n);
+                }
+                for (int i = 0; i < px.Length; i++)
+                {
+                    var ink = px[i];
+                    // inside, or the soft inner edge of the line: red under the ink
+                    bool inside = seen[i] || ink.a > 0f && ink.a <= 0.5f && (i % n > 0 && seen[i - 1] || i % n < n - 1 && seen[i + 1] || i >= n && seen[i - n] || i + n < px.Length && seen[i + n]);
+                    if (!inside) continue;
+                    px[i] = new Color(Mathf.Lerp(fill.r, ink.r, ink.a), Mathf.Lerp(fill.g, ink.g, ink.a), Mathf.Lerp(fill.b, ink.b, ink.a), 1f);
+                }
+                _heart.SetPixels(px);
+                _heart.Apply();
+                return _heart;
             }
         }
 

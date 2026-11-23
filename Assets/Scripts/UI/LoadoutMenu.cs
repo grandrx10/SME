@@ -44,9 +44,10 @@ namespace SuddenMageEncounter
         bool _faceOpen;
         float _deckScroll = 1f;
 
-        public LoadoutMenu(Transform canvas, Action onVisibilityChanged)
+        public LoadoutMenu(Transform canvas, Action onVisibilityChanged, Action openShop)
         {
             _onVisibilityChanged = onVisibilityChanged;
+            _openShop = openShop;
             var dim = UIFactory.Image("LoadoutMenu", canvas, new Color(0.02f, 0.03f, 0.05f, 0.86f));
             _root = UIFactory.Stretch(dim.rectTransform);
             // its own canvas: the HUD changing every frame no longer forces this whole menu to be rebuilt
@@ -65,7 +66,12 @@ namespace SuddenMageEncounter
             _music = MusicPanel.Create(_root, new Vector2(total / 2 - MusicSize.x / 2, 0), MusicSize).gameObject;
             _root.gameObject.SetActive(false);
             Loadouts.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
+            // new cards from a pack, gold earned or spent
+            Collection.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
+            Wallet.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
         }
+
+        readonly Action _openShop;
 
         public void SetMusicVisible(bool on)
         {
@@ -77,6 +83,7 @@ namespace SuddenMageEncounter
         {
             IsOpen = true;
             _faceOpen = false;
+            Collection.LoadoutHint = false; // made it here after the first pack
             Rebuild();
             _root.gameObject.SetActive(true);
             _onVisibilityChanged?.Invoke();
@@ -87,6 +94,7 @@ namespace SuddenMageEncounter
             if (!IsOpen) return;
             IsOpen = false;
             _faceOpen = false;
+            SecretReveal.Stop();
             DragCard.Cancel();
             FacePreview.SetRendering(false);
             _root.gameObject.SetActive(false);
@@ -103,6 +111,7 @@ namespace SuddenMageEncounter
 
         public void Back()
         {
+            if (SecretReveal.Playing) { SecretReveal.Dismiss(); return; }
             if (_faceOpen) { _faceOpen = false; FacePreview.SetRendering(false); Rebuild(); }
             else Close();
         }
@@ -150,6 +159,39 @@ namespace SuddenMageEncounter
             thumb.raycastTarget = false;
             UIFactory.Stretch(thumb.rectTransform, 4, 4, 4, 4);
 
+            // shop: a pack and your gold
+            var shop = RoundButton(page, "", () => _openShop?.Invoke(), new Color(0.17f, 0.19f, 0.24f, 1f));
+            UIFactory.Place((RectTransform)shop.transform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(Pad + Loadouts.Count * (BarH + 10) + 20, -Pad), new Vector2(200, BarH));
+            var pack = UIFactory.Rect("Pack", shop.transform).gameObject.AddComponent<RawImage>();
+            pack.texture = ShopArt.Pack;
+            pack.raycastTarget = false;
+            UIFactory.Place(pack.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(12, 0), new Vector2(36, 50));
+            var coin = UIFactory.Rect("Coin", shop.transform).gameObject.AddComponent<RawImage>();
+            coin.texture = ShopArt.Coin;
+            coin.raycastTarget = false;
+            UIFactory.Place(coin.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(60, 0), new Vector2(30, 30));
+            var gold = UIFactory.Text("Gold", shop.transform, Wallet.Gold.ToString(), 28, TextAnchor.MiddleLeft, new Color(1f, 0.86f, 0.4f), FontStyle.Bold);
+            UIFactory.Place(gold.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(98, 0), new Vector2(96, 40));
+
+            // practice range (in a game only): lit while you're in there, and pressing it again leaves
+            var me = PlayerController.Local;
+            if (me != null && me.IsSpawned)
+            {
+                bool inside = me.InPractice;
+                var practice = RoundButton(page, "", () =>
+                {
+                    var pc = PlayerController.Local;
+                    if (pc == null || !pc.IsSpawned) return;
+                    pc.RequestPractice(pc.InPractice ? PlayerController.PracticeAction.Leave : PlayerController.PracticeAction.Enter);
+                    Close();
+                }, inside ? UIFactory.Accent : new Color(0.17f, 0.19f, 0.24f, 1f));
+                UIFactory.Place((RectTransform)practice.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad - 2 * (BarH + 12), -Pad), new Vector2(BarH, BarH));
+                var target = UIFactory.Rect("Target", practice.transform).gameObject.AddComponent<RawImage>();
+                target.texture = ShopArt.Target;
+                target.raycastTarget = false;
+                UIFactory.Stretch(target.rectTransform, 6, 6, 6, 6);
+            }
+
             // ---- the five ability slots ----
             float slotsTop = Pad + BarH + 26;
             float rowW = Loadout.Slots * SlotW + (Loadout.Slots - 1) * SlotGap;
@@ -179,6 +221,25 @@ namespace SuddenMageEncounter
             float deckTop = slotsTop + 32 + slotH + 28;
             var line = UIFactory.Image("Divider", page, new Color(1, 1, 1, 0.07f));
             UIFactory.Place(line.rectTransform, new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0, -(deckTop - 14)), new Vector2(W - Pad * 2, 2));
+
+            // collection, as a tag on the divider: a card back, then how many cards you own out of every card in the game
+            // (a secret card only counts once it's found)
+            int ownedAll = 0, cardsAll = 0;
+            foreach (var c in Cards.All)
+            {
+                bool own = Collection.Owns(c.id);
+                if (own) ownedAll++;
+                if (own || c.rarity != Rarity.Secret) cardsAll++;
+            }
+            var tag = UIFactory.Image("Collection", page, new Color(0.17f, 0.19f, 0.24f, 1f), CardView.Rounded);
+            tag.type = Image.Type.Sliced;
+            UIFactory.Place(tag.rectTransform, new Vector2(0.5f, 1), new Vector2(0.5f, 0.5f), new Vector2(0, -(deckTop - 14)), new Vector2(124, 26));
+            var back = UIFactory.Rect("CardBack", tag.rectTransform).gameObject.AddComponent<RawImage>();
+            back.texture = ShopArt.CardBack;
+            back.raycastTarget = false;
+            UIFactory.Place(back.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(12, 0), new Vector2(16, 16 * CardView.Aspect - 1));
+            var count = UIFactory.Text("Count", tag.rectTransform, ownedAll + " / " + cardsAll, 20, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+            UIFactory.Stretch(count.rectTransform, 30, 0, 6, 0);
             var deckArea = UIFactory.Rect("Deck", page);
             UIFactory.Place(deckArea, new Vector2(0, 1), new Vector2(0, 1), new Vector2(Pad, -deckTop), new Vector2(W - Pad * 2, WindowSize.y - deckTop - Pad));
             var deckBg = deckArea.gameObject.AddComponent<Image>();
@@ -224,7 +285,7 @@ namespace SuddenMageEncounter
             // every copy you own, grouped by element; copies this loadout uses up show faded
             var copies = new List<(CardId id, bool free)>();
             var cards = new List<CardInfo>(Cards.All);
-            cards.Sort((a, b) => a.element != b.element ? a.element.CompareTo(b.element) : a.id.CompareTo(b.id));
+            cards.Sort((a, b) => a.element != b.element ? a.element.CompareTo(b.element) : Cards.Order(a.id).CompareTo(Cards.Order(b.id)));
             foreach (var c in cards)
             {
                 int owned = Collection.CopiesOf(c.id);
@@ -254,30 +315,63 @@ namespace SuddenMageEncounter
             column.padding = new RectOffset(0, 0, 4, 10);
             content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
+            // per type: how many you own, out of how many there are (every type shows, even with none owned)
+            var have = new Dictionary<Element, int>();
+            var total = new Dictionary<Element, int>();
+            foreach (var c in cards)
+            {
+                bool own = Collection.Owns(c.id);
+                total.TryGetValue(c.element, out int t);
+                have.TryGetValue(c.element, out int h);
+                total[c.element] = t + (own || c.rarity != Rarity.Secret ? 1 : 0);
+                have[c.element] = h + (own ? 1 : 0);
+            }
+
             Element? current = null;
             RectTransform grid = null;
+            int next = 0; // walks the sorted cards so types with nothing owned still get a heading
+            void Heading(Element e)
+            {
+                current = e;
+                string count = " <size=20><color=#ffffff88>" + have[e] + " / " + total[e] + "</color></size>";
+                var heading = UIFactory.Text("Heading " + e, content, Cards.ElementName(e) + count, 26, TextAnchor.LowerLeft,
+                    Color.Lerp(Cards.ElementColor(e), Color.white, 0.25f), FontStyle.Bold);
+                heading.supportRichText = true;
+                heading.gameObject.AddComponent<LayoutElement>().preferredHeight = 40;
+                heading.gameObject.AddComponent<Outline>().effectColor = new Color(0, 0, 0, 0.7f);
+                grid = UIFactory.Rect("Cards " + e, content);
+                var g = grid.gameObject.AddComponent<GridLayoutGroup>();
+                g.cellSize = new Vector2(cellW, cellW * CardView.Aspect);
+                g.spacing = new Vector2(DeckGap, DeckGap);
+                g.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+                g.constraintCount = 5;
+                g.childAlignment = TextAnchor.UpperCenter;
+                g.padding = new RectOffset(0, 0, 2, 6);
+            }
+            void HeadingsUpTo(Element? e)
+            {
+                // headings for every type up to (and including) e that hasn't had one yet
+                for (; next < cards.Count && (e == null || cards[next].element <= e.Value); next++)
+                    if (current != cards[next].element) Heading(cards[next].element);
+            }
+            // The World waits, blacked out, at the end of a complete set of Tarot cards
+            bool secret = Collection.SecretReady, secretShown = false;
+            void SecretCell()
+            {
+                secretShown = true;
+                var cell = UIFactory.Rect("Secret", grid);
+                SecretCard.Add(cell, cellW, _root, CardId.TheWorld);
+            }
             foreach (var (id, free) in copies)
             {
                 var info = Cards.Get(id);
-                if (current != info.element)
-                {
-                    current = info.element;
-                    var heading = UIFactory.Text("Heading " + info.element, content, Cards.ElementName(info.element), 26, TextAnchor.LowerLeft,
-                        Color.Lerp(Cards.ElementColor(info.element), Color.white, 0.25f), FontStyle.Bold);
-                    heading.gameObject.AddComponent<LayoutElement>().preferredHeight = 40;
-                    heading.gameObject.AddComponent<Outline>().effectColor = new Color(0, 0, 0, 0.7f);
-                    grid = UIFactory.Rect("Cards " + info.element, content);
-                    var g = grid.gameObject.AddComponent<GridLayoutGroup>();
-                    g.cellSize = new Vector2(cellW, cellW * CardView.Aspect);
-                    g.spacing = new Vector2(DeckGap, DeckGap);
-                    g.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-                    g.constraintCount = 5;
-                    g.childAlignment = TextAnchor.UpperCenter;
-                    g.padding = new RectOffset(0, 0, 2, 6);
-                }
+                if (secret && !secretShown && current == Element.Tarot && info.element != Element.Tarot) SecretCell();
+                if (current != info.element) HeadingsUpTo(info.element);
                 var cell = UIFactory.Rect("Cell", grid);
                 AddCard(cell, id, cellW, -1, free);
             }
+            if (secret && !secretShown && current == Element.Tarot) SecretCell();
+            HeadingsUpTo(null); // types after the last one you own
 
             var track = UIFactory.Image("Scrollbar", area, new Color(1, 1, 1, 0.06f));
             var tr = track.rectTransform;
@@ -543,6 +637,9 @@ namespace SuddenMageEncounter
         public static CardId Hovered { get; private set; }
         static CardHover _over;
 
+        /// <summary>The card under the pointer is somewhere inside <paramref name="root"/>.</summary>
+        public static bool HoveredUnder(Transform root) => _over != null && _over.transform.IsChildOf(root);
+
         public void OnPointerEnter(PointerEventData e) { _over = this; Hovered = card; }
 
         public void OnPointerExit(PointerEventData e)
@@ -558,19 +655,28 @@ namespace SuddenMageEncounter
         }
     }
 
-    /// <summary>Hold Alt over a card: a big copy of it in the middle of the screen, so you can read it properly.</summary>
+    /// <summary>
+    /// Hold Alt over a card: a big copy of it in the middle of the screen, so you can read it properly.
+    /// While a card is hovered (and not being inspected), "ALT to Inspect" shows at the bottom of the screen.
+    /// </summary>
     public class CardInspector : MonoBehaviour
     {
         const float Width = 420f;
         RectTransform _shown;
         CardId _card;
         float _t;
+        Text _hint;
 
         void Update()
         {
             var kb = Keyboard.current;
             bool alt = kb != null && (kb.leftAltKey.isPressed || kb.rightAltKey.isPressed);
             CardId want = alt && !DragCard.Dragging ? CardHover.Hovered : CardId.None;
+
+            // only the screen the hovered card is on shows the hint (the shop sits over the loadout screen)
+            bool hint = want == CardId.None && !DragCard.Dragging && CardHover.Hovered != CardId.None && CardHover.HoveredUnder(transform);
+            if (hint && _hint == null) _hint = MakeHint();
+            if (_hint != null && _hint.gameObject.activeSelf != hint) _hint.gameObject.SetActive(hint);
             if (want != _card)
             {
                 if (_shown != null) Destroy(_shown.gameObject);
@@ -600,6 +706,20 @@ namespace SuddenMageEncounter
                 float k = 1f - Mathf.Pow(1f - Mathf.Clamp01(_t / 0.12f), 3f);
                 _shown.localScale = Vector3.one * Mathf.Lerp(0.85f, 1f, k);
             }
+        }
+
+        Text MakeHint()
+        {
+            var t = UIFactory.Text("AltHint", transform, "ALT to Inspect", 26, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+            t.raycastTarget = false;
+            var o = t.gameObject.AddComponent<Outline>();
+            o.effectColor = new Color(0.05f, 0.03f, 0.08f, 1f);
+            o.effectDistance = new Vector2(2f, -2f);
+            UIFactory.Place(t.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0, 14), new Vector2(400, 40));
+            var sub = t.gameObject.AddComponent<Canvas>();
+            sub.overrideSorting = true;
+            sub.sortingOrder = 50;
+            return t;
         }
     }
 }

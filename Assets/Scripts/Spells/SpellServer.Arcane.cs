@@ -7,8 +7,8 @@ namespace SuddenMageEncounter
     public static partial class SpellServer
     {
         class WarpState { public int id; public PlayerController caster; public Vector3 dest; public double start; }
-        class PortalState { public int id, pair; public PlayerController owner; public double start, linkStart = -1; }
-        class SwiftState { public PlayerController caster; public double start; }
+        class PortalState { public int id, pair, foolSlot = -1; public PlayerController owner; public double start, linkStart = -1; }
+        class SwiftState { public PlayerController caster; public double start; public Vector3 lastPos, heading; public readonly HashSet<Combatant> hit = new(); }
 
         static readonly List<WarpState> WarpsS = new();
         static readonly List<PortalState> PortalsS = new();
@@ -30,7 +30,7 @@ namespace SuddenMageEncounter
                 case CardId.WarpSelf:
                 {
                     if (WarpsS.Exists(w => w.caster == caster)) return false;
-                    if ((target - caster.FeetPosition).magnitude > SpellPlans.WarpRange + 4f) return false; // a little slack for lag
+                    if ((target - caster.FeetPosition).magnitude > SpellPlans.WarpRange + 2.5f) return false; // a little slack for lag
                     int id = WorldNet.ServerWarp(caster.NetworkObjectId, target);
                     WarpsS.Add(new WarpState { id = id, caster = caster, dest = target, start = now });
                     return true;
@@ -65,11 +65,17 @@ namespace SuddenMageEncounter
                     if (SwiftsS.Exists(s => s.caster == caster)) return false;
                     Combatant.DamageScale ??= ScaleDamage;
                     WorldNet.ServerSwift(caster.NetworkObjectId);
-                    SwiftsS.Add(new SwiftState { caster = caster, start = now });
+                    SwiftsS.Add(new SwiftState { caster = caster, start = now, lastPos = caster.transform.position, heading = caster.transform.forward });
                     return true;
                 }
             }
             return false;
+        }
+
+        /// <summary>The first portal just cast came from a card The Fool rolled into <paramref name="slot"/> (kept until its partner is cast).</summary>
+        public static void MarkFoolPortal(PlayerController pc, int slot)
+        {
+            foreach (var p in PortalsS) if (p.owner == pc && p.pair == 0) p.foolSlot = slot;
         }
 
         /// <summary>Warp Space's second portal is free and has no cooldown: is this player's first one waiting for it?</summary>
@@ -92,6 +98,8 @@ namespace SuddenMageEncounter
                 }
                 if (now > w.start + SpellPlans.WarpDone) WarpsS.RemoveAt(i);
             }
+            foreach (var p in PortalsS)
+                if (now > PortalEnd(p) && p.pair == 0 && p.foolSlot >= 0 && p.owner != null) p.owner.ServerDropFoolCard(p.foolSlot, CardId.WarpSpace); // never got its partner: the rolled card is spent
             PortalsS.RemoveAll(p => now > PortalEnd(p));
             for (int i = SwiftsS.Count - 1; i >= 0; i--)
             {
@@ -102,7 +110,33 @@ namespace SuddenMageEncounter
                     if (s.caster != null) WorldNet.ServerSwiftEnd(s.caster.NetworkObjectId, true);
                     continue;
                 }
-                if (now > s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime) SwiftsS.RemoveAt(i);
+                if (now > s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime) { SwiftsS.RemoveAt(i); continue; }
+                if (now >= s.start + SpellPlans.SwiftPrep) SwiftBump(s);
+            }
+        }
+
+        /// <summary>
+        /// Arcane Swiftness running: anyone the caster runs into is bowled over and ragdolled (as Nomadic Dash does),
+        /// thrown the way the caster is running. Once each per cast.
+        /// </summary>
+        static void SwiftBump(SwiftState s)
+        {
+            Vector3 pos = s.caster.transform.position;
+            Vector3 moved = pos - s.lastPos;
+            moved.y = 0f;
+            s.lastPos = pos;
+            if (moved.sqrMagnitude > 1e-4f) s.heading = moved.normalized;
+            foreach (var c in Combatant.Registry.ToArray())
+            {
+                if (c == null || c == s.caster || !c.IsAlive || s.hit.Contains(c)) continue;
+                Vector3 rel = c.transform.position - pos;
+                if (rel.magnitude > SpellPlans.SwiftBumpReach) continue;
+                s.hit.Add(c);
+                // mostly the way the caster runs, partly straight away from them (so a glancing bump pushes aside)
+                rel.y = 0f;
+                Vector3 away = rel.sqrMagnitude > 1e-4f ? rel.normalized : s.heading;
+                Vector3 dir = (s.heading + away * 0.5f).normalized;
+                Hit(c, s.caster, 0f, c.transform.position, dir * SpellPlans.DashKnockForward + Vector3.up * SpellPlans.DashKnockUp, 1f);
             }
         }
 
@@ -136,6 +170,7 @@ namespace SuddenMageEncounter
         {
             if (c == null) return false;
             double now = WorldNet.Now;
+            if (c.IsSpawned && c.Status.Value.Taken(now)) return true; // crushed away by The World
             foreach (var w in WarpsS)
                 if (w.caster == c && now >= w.start + SpellPlans.WarpCharge && now < w.start + SpellPlans.WarpArrive) return true;
             return false;
@@ -146,6 +181,8 @@ namespace SuddenMageEncounter
         {
             if (c == null) return false;
             if (Folded(c)) return true;
+            if (Flowing(c, WorldNet.Now)) return true;  // mid Flowing Cut
+            if (Fusing(c)) return true;                 // forming the purple ball
             double now = WorldNet.Now;
             foreach (var s in SwiftsS)
                 if (s.caster == c && now >= s.start + SpellPlans.SwiftPrep && now <= s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 0.1) return true;

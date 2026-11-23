@@ -1,66 +1,146 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SuddenMageEncounter
 {
     /// <summary>
-    /// The cards the player owns (how many copies of each), saved on this PC. Everything is unlocked for now:
-    /// every card starts with <see cref="StartingCopies"/> copies. A loadout may use a card as many times as
-    /// you own copies of it.
+    /// The cards the player owns, saved on this PC. One of each at most: no duplicates. A new player (no save yet)
+    /// owns just the starter cards; after that the save is what you own (N clears it, "," gives you everything).
+    /// Starter cards are always owned, even after a reset, so packs never give them.
     /// </summary>
     public static class Collection
     {
-        public const int StartingCopies = 1;
         const string PrefKey = "sme_collection";
 
         [Serializable]
         class SaveData { public int[] copies; }
 
-        static int[] _copies;
+        static int[] _owned; // 0 or 1 per CardId
         public static event Action Changed;
 
-        static int[] Copies
+        static int[] Owned
         {
             get
             {
-                if (_copies == null) Load();
-                return _copies;
+                if (_owned == null) Load();
+                return _owned;
             }
         }
 
-        public static int CopiesOf(CardId id)
+        public static bool Owns(CardId id)
         {
             int i = (int)id;
-            return i > 0 && i < Copies.Length ? Copies[i] : 0;
+            if (Cards.Get(id)?.rarity == Rarity.Starter) return true; // everyone always has the starters
+            return i > 0 && i < Owned.Length && Owned[i] > 0;
         }
 
-        public static void SetCopies(CardId id, int n)
+        /// <summary>1 if you own it, 0 if not (a loadout can use a card as many times as this).</summary>
+        public static int CopiesOf(CardId id) => Owns(id) ? 1 : 0;
+
+        /// <summary>Every card packs can give that you don't own yet (never a secret one).</summary>
+        public static List<CardId> Unowned()
         {
-            int i = (int)id;
-            if (i <= 0 || i >= Copies.Length) return;
-            Copies[i] = Mathf.Max(0, n);
+            var list = new List<CardId>();
+            foreach (var c in Cards.All) if (c.rarity != Rarity.Secret && !c.companion && !Owns(c.id)) list.Add(c.id);
+            return list;
+        }
+
+        /// <summary>
+        /// The World can be found: you own every other Tarot card, and not it yet. A blacked-out card waits in the
+        /// inventory until then (see <see cref="SecretReveal"/>).
+        /// </summary>
+        public static bool SecretReady
+        {
+            get
+            {
+                if (Owns(CardId.TheWorld)) return false;
+                foreach (var c in Cards.All) if (c.element == Element.Tarot && c.id != CardId.TheWorld && !Owns(c.id)) return false;
+                return true;
+            }
+        }
+
+        /// <summary>Adds the cards listed (a pack's cards). Ones you already own change nothing.</summary>
+        public static void Add(IEnumerable<CardId> cards)
+        {
+            foreach (var id in cards)
+            {
+                int i = (int)id;
+                if (i > 0 && i < Owned.Length) Owned[i] = 1;
+                int with = (int)Cards.CompanionOf(id); // (Remote Detonation, with a card that places flame bombs)
+                if (with > 0) Owned[with] = 1;
+            }
             Save();
+        }
+
+        /// <summary>Admin panel: own every card packs give (secret ones still have to be found).</summary>
+        public static void AddAll()
+        {
+            foreach (var c in Cards.All) if (c.rarity != Rarity.Secret) Owned[(int)c.id] = 1;
+            Save();
+        }
+
+        /// <summary>
+        /// Admin panel "Fresh Inventory": back to a brand-new player. Own only the starters, every loadout is the
+        /// starter loadout again (loadout 1 selected), and the next pack counts as your first.
+        /// </summary>
+        public static void Clear()
+        {
+            Array.Clear(Owned, 0, Owned.Length);
+            // Starter cards stay: Owns() always says yes to them
+            LoadoutHint = false;
+            Save();
+            Loadouts.ResetToStarters();
         }
 
         static void Load()
         {
             int max = 0;
             foreach (var c in Cards.All) max = Mathf.Max(max, (int)c.id);
-            _copies = new int[max + 1];
+            _owned = new int[max + 1];
             SaveData d = null;
-            try { d = JsonUtility.FromJson<SaveData>(PlayerPrefs.GetString(PrefKey, "")); } catch { d = null; }
+            string json = PlayerPrefs.GetString(PrefKey, "");
+            if (!string.IsNullOrEmpty(json))
+            {
+                try { d = JsonUtility.FromJson<SaveData>(json); } catch { d = null; }
+            }
             foreach (var c in Cards.All)
             {
                 int i = (int)c.id;
-                int saved = d?.copies != null && i < d.copies.Length ? d.copies[i] : 0;
-                _copies[i] = Mathf.Max(saved, StartingCopies); // everything unlocked for now
+                // no save yet: a new player owns only the starters (Owns() covers those). Old saves counted copies; any copy means you own it.
+                _owned[i] = d?.copies != null && i < d.copies.Length && d.copies[i] > 0 ? 1 : 0;
+            }
+        }
+
+        /// <summary>You own nothing but the starter cards (so the next pack is your first).</summary>
+        public static bool OnlyStarters
+        {
+            get
+            {
+                foreach (var c in Cards.All) if (c.rarity != Rarity.Starter && Owns(c.id)) return false;
+                return true;
+            }
+        }
+
+        const string LoadoutHintKey = "sme_loadout_hint";
+
+        /// <summary>Your first pack was just opened: point you at the loadout screen until you've been there.</summary>
+        public static bool LoadoutHint
+        {
+            get => PlayerPrefs.GetInt(LoadoutHintKey, 0) != 0;
+            set
+            {
+                if (LoadoutHint == value) return;
+                PlayerPrefs.SetInt(LoadoutHintKey, value ? 1 : 0);
+                PlayerPrefs.Save();
             }
         }
 
         static void Save()
         {
-            PlayerPrefs.SetString(PrefKey, JsonUtility.ToJson(new SaveData { copies = Copies }));
+            PlayerPrefs.SetString(PrefKey, JsonUtility.ToJson(new SaveData { copies = Owned }));
             PlayerPrefs.Save();
+            Loadouts.DropUnowned();
             Changed?.Invoke();
         }
     }
@@ -161,6 +241,28 @@ namespace SuddenMageEncounter
             Save();
         }
 
+        /// <summary>The collection changed: take cards you no longer own out of every loadout.</summary>
+        public static void DropUnowned()
+        {
+            if (_data == null) return; // not loaded yet; Load fixes them
+            bool changed = false;
+            foreach (var l in _data.loadouts)
+            {
+                var before = (int[])l.cards.Clone();
+                FillIfBlank(Loadout.Fix(l));
+                for (int i = 0; i < Loadout.Slots; i++) changed |= before[i] != l.cards[i];
+            }
+            if (changed) Save();
+        }
+
+        /// <summary>Every loadout back to the starter loadout, the first one selected (a fresh inventory).</summary>
+        public static void ResetToStarters()
+        {
+            for (int i = 0; i < Count; i++) Data.loadouts[i] = FillIfBlank(new Loadout());
+            Data.selected = 0;
+            Save();
+        }
+
         static void Load()
         {
             SaveData d = null;
@@ -169,22 +271,26 @@ namespace SuddenMageEncounter
             {
                 try { d = JsonUtility.FromJson<SaveData>(json); } catch { d = null; }
             }
-            bool fresh = d == null;
             d ??= new SaveData();
             var arr = new Loadout[Count];
             for (int i = 0; i < Count; i++)
-                arr[i] = Loadout.Fix(d.loadouts != null && i < d.loadouts.Length ? d.loadouts[i] : null);
+                arr[i] = FillIfBlank(Loadout.Fix(d.loadouts != null && i < d.loadouts.Length ? d.loadouts[i] : null));
             d.loadouts = arr;
             d.selected = Mathf.Clamp(d.selected, 0, Count - 1);
-            if (fresh)
-            {
-                // a starter loadout so the first game isn't empty-handed
-                arr[0].cards[0] = (int)CardId.RockBarrage;
-                arr[0].cards[1] = (int)CardId.SummonWall;
-                arr[0].cards[2] = (int)CardId.FoldingHands;
-                Loadout.Fix(arr[0]);
-            }
             _data = d;
+        }
+
+        /// <summary>
+        /// A blank loadout gets the starter cards, so nobody goes into a round empty-handed:
+        /// Rock Barrage on ability 1 (LMB), Summon Wall on ability 2 (E), Shove on ability 5 (Shift).
+        /// </summary>
+        static Loadout FillIfBlank(Loadout l)
+        {
+            for (int i = 0; i < Loadout.Slots; i++) if (l.cards[i] != 0) return l;
+            l.cards[0] = (int)CardId.RockBarrage;
+            l.cards[1] = (int)CardId.SummonWall;
+            l.cards[4] = (int)CardId.Shove;
+            return Loadout.Fix(l);
         }
 
         static void Save()

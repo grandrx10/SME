@@ -6,7 +6,8 @@ namespace SuddenMageEncounter
     /// <summary>
     /// Drives Camera.main. In game: third person over the right shoulder, aimed by the mouse (the centre dot
     /// marks where spells go). Knocked down: follows the tumbling ragdoll. Eliminated: watches your body for a
-    /// moment, then spectates the players still standing (click to switch). Menus: a fixed view.
+    /// moment, then spectates the players still standing (left / right click: next / previous). While a new arena
+    /// builds itself: circles it. Menus: a fixed view.
     /// </summary>
     [DefaultExecutionOrder(300)]
     public class CameraRig : MonoBehaviour
@@ -55,7 +56,7 @@ namespace SuddenMageEncounter
         Vector3 _menuPos;
         Quaternion _menuRot;
         Vector3 _pivot;
-        float _pivotY;
+        float _pivotY, _ads;
         float _deadTime = -1f, _specYaw, _specPitch = 15f;
         int _specIndex;
 
@@ -66,6 +67,8 @@ namespace SuddenMageEncounter
             _menuPos = transform.position;
             _menuRot = transform.rotation;
             _cam.nearClipPlane = 0.05f;
+            // practice chambers sit 384 m apart along +x: stop short of seeing the next one on the horizon
+            _cam.farClipPlane = Practice.ViewDistance;
         }
 
         void LateUpdate()
@@ -79,6 +82,14 @@ namespace SuddenMageEncounter
                 _cam.fieldOfView = 60f;
                 Spectating = null;
                 _deadTime = -1f;
+                return;
+            }
+
+            // the new arena building itself: everyone in the match watches it go up from a slow circle around it
+            // (and the same while waiting for enough players to start a round)
+            if ((MatchManager.BuildingArena || MatchManager.WaitingForPlayers && pc.Dead.Value) && !pc.InPractice && VoxelWorld.Current != null)
+            {
+                Orbit(VoxelWorld.Current);
                 return;
             }
 
@@ -96,21 +107,56 @@ namespace SuddenMageEncounter
             if (rag != null) _pivot = Vector3.Lerp(_pivot, target, 1f - Mathf.Exp(-10f * dt));
             else
             {
-                _pivotY = Mathf.Abs(_pivotY - target.y) > 2f ? target.y : Mathf.Lerp(_pivotY, target.y, 1f - Mathf.Exp(-18f * dt));
+                // (never lagging more than a step behind: a hard fall used to stretch the lag past 2 m, snap, and
+                // stretch again, so the view jumped down in bursts)
+                _pivotY = Mathf.Abs(_pivotY - target.y) > 6f ? target.y : Mathf.Lerp(_pivotY, target.y, 1f - Mathf.Exp(-18f * dt));
+                _pivotY = Mathf.Clamp(_pivotY, target.y - 0.35f, target.y + 0.35f);
                 _pivot = new Vector3(target.x, _pivotY, target.z);
             }
-            Place(_pivot + Vector3.up * pivotHeight, pc.Motor.ViewRotation, shoulderOffset);
+            // crouched: the view comes down with the head
+            float crouch = rag != null ? 0f : pc.Motor.CrouchBlend * PlayerMotor.CrouchDrop;
+            // Strength: the head is up where the grown body puts it, and the camera stands back a little
+            float big = pc.Animator != null ? pc.Animator.StrongWeight : 0f;
+            big = big * big * (3f - 2f * big) * (SpellPlans.StrengthSize - 1f);
+            // aiming down Sebastian's sights: in close over the rifle (so near its barrel that the centre dot is inside the shot)
+            _ads = Mathf.MoveTowards(_ads, rag == null && pc.Caster != null && pc.Caster.AimingDownSights ? 1f : 0f, dt / 0.2f);
+            float ads = _ads * _ads * (3f - 2f * _ads);
+            _cam.fieldOfView *= Mathf.Lerp(1f, 0.72f, ads);
+            float height = Mathf.Lerp(pivotHeight, 0.52f, ads);
+            Place(_pivot + Vector3.up * (height - crouch + 0.95f * big), pc.Motor.ViewRotation, Vector3.Lerp(shoulderOffset, new Vector3(0.36f, 0.1f, -1.5f), ads) * (1f + 0.5f * big));
         }
 
         /// <summary>Puts the camera at pivot + rotation * offset, pulled in if something is in the way.</summary>
-        void Place(Vector3 pivot, Quaternion rot, Vector3 offset)
+        void Place(Vector3 pivot, Quaternion rot, Vector3 offset, float roll = 0f)
         {
             Vector3 desired = pivot + rot * offset;
             Vector3 d = desired - pivot;
             float len = d.magnitude;
             if (len > 0.001f && Physics.SphereCast(pivot, collisionRadius, d / len, out var hit, len, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
                 desired = pivot + d / len * Mathf.Max(0.2f, hit.distance);
-            transform.SetPositionAndRotation(desired, rot);
+            transform.SetPositionAndRotation(desired, roll != 0f ? rot * Quaternion.Euler(0f, 0f, roll) : rot);
+            ApplyShake();
+        }
+
+        /// <summary>Circles the arena, looking down on it, while it builds.</summary>
+        void Orbit(VoxelWorld w)
+        {
+            Spectating = null;
+            _deadTime = -1f;
+            var point = Arena.Current != null ? Arena.Current.BuildCamera : null;
+            if (point != null)
+            {
+                point.Pose(MatchManager.PhaseTime, out var p, out var r);
+                transform.SetPositionAndRotation(p, r);
+                ApplyShake();
+                return;
+            }
+            var b = w.ArenaBounds;
+            float dist = Mathf.Max(b.extents.x, b.extents.z) * 1.35f + 6f;
+            float angle = MatchManager.Current.round * 67f + MatchManager.PhaseTime * 14f;
+            Vector3 focus = b.center + Vector3.down * (b.extents.y * 0.3f);
+            Vector3 pos = b.center + Quaternion.Euler(0f, angle, 0f) * new Vector3(0f, 0f, -dist) + Vector3.up * (b.extents.y + dist * 0.45f);
+            transform.SetPositionAndRotation(pos, Quaternion.LookRotation(focus - pos));
             ApplyShake();
         }
 
@@ -129,7 +175,7 @@ namespace SuddenMageEncounter
             _specPitch = Mathf.Clamp(_specPitch - look.y, -30f, 75f);
 
             Vector3 focus;
-            if (Time.time - _deadTime < 2.5f || !AnyAlive())
+            if ((Time.time - _deadTime < 2.5f && me.LastRagdoll != null) || me.InPractice || !AnyAlive())
             {
                 // your own body
                 Spectating = null;
@@ -138,16 +184,23 @@ namespace SuddenMageEncounter
             }
             else
             {
-                if (Spectating == null || !Spectating.IsAlive) Spectating = NextAlive(0);
-                if (!InputMap.Blocked && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) Spectating = NextAlive(1);
+                if (Spectating == null || !Watchable(Spectating)) Spectating = NextAlive(0);
+                if (!InputMap.Blocked && Mouse.current != null)
+                {
+                    if (Mouse.current.leftButton.wasPressedThisFrame) Spectating = NextAlive(1);        // next player
+                    else if (Mouse.current.rightButton.wasPressedThisFrame) Spectating = NextAlive(-1); // previous one
+                }
                 focus = Spectating != null ? Spectating.transform.position : me.transform.position;
             }
             Place(focus + Vector3.up * pivotHeight, Quaternion.Euler(_specPitch, _specYaw, 0), new Vector3(0f, 0.3f, -spectateDistance));
         }
 
+        /// <summary>Someone fighting in the match (not dead, not off practising in their own chamber).</summary>
+        static bool Watchable(PlayerController p) => p != null && p.IsAlive && !p.InPractice;
+
         static bool AnyAlive()
         {
-            foreach (var p in PlayerController.All) if (p != null && p.IsAlive) return true;
+            foreach (var p in PlayerController.All) if (Watchable(p)) return true;
             return false;
         }
 
@@ -155,11 +208,12 @@ namespace SuddenMageEncounter
         {
             var all = PlayerController.All;
             if (all.Count == 0) return null;
+            int dir = step < 0 ? -1 : 1;
             for (int k = 0; k < all.Count; k++)
             {
-                _specIndex = ((_specIndex + (k == 0 ? step : 1)) % all.Count + all.Count) % all.Count;
+                _specIndex = ((_specIndex + (k == 0 ? step : dir)) % all.Count + all.Count) % all.Count;
                 var p = all[_specIndex];
-                if (p != null && p.IsAlive) return p;
+                if (Watchable(p)) return p;
             }
             return null;
         }

@@ -12,12 +12,16 @@ namespace SuddenMageEncounter
         public GameObject ragdollPrefab;
 
         public const int MaxPayload = 256 * 1024;
+        public const int MaxPacketQueue = 512;
 
         void Awake()
         {
             // world edits (a summoned wall is ~8 KB) and late-join replays are bigger than the transport's default limit
             var utp = FindAnyObjectByType<Unity.Netcode.Transports.UTP.UnityTransport>();
             if (utp != null && utp.MaxPayloadSize < MaxPayload) utp.MaxPayloadSize = MaxPayload;
+            // packets the transport can take in one frame: a late joiner's replay or a big fight's rubble overflowed 128
+            // (overflowing makes the reliable channel resend and stall)
+            if (utp != null && utp.MaxPacketQueueSize < MaxPacketQueue) utp.MaxPacketQueueSize = MaxPacketQueue;
 
             GameSettings.Load();
             GameSettings.Apply(applyResolution: true);

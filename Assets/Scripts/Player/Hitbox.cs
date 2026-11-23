@@ -11,6 +11,8 @@ namespace SuddenMageEncounter
         public HitRegion Region;
         public Transform Start, End;
         public float Radius;
+        /// <summary>The body grown (Strength): the capsules are this much thicker (their length follows the bones anyway).</summary>
+        public float RadiusScale = 1f;
         bool _capsInside;
         CapsuleCollider _col;
 
@@ -39,8 +41,10 @@ namespace SuddenMageEncounter
             float len = d.magnitude;
             if (len < 0.001f) { d = Vector3.up; len = 0.001f; }
             transform.SetPositionAndRotation(a, Quaternion.LookRotation(d / len));
+            float r = Radius * RadiusScale;
+            _col.radius = r;
             _col.center = new Vector3(0, 0, len * 0.5f);
-            _col.height = _capsInside ? Mathf.Max(len, Radius * 2f) : len + Radius * 2f;
+            _col.height = _capsInside ? Mathf.Max(len, r * 2f) : len + r * 2f;
         }
     }
 
@@ -75,5 +79,11 @@ namespace SuddenMageEncounter
         }
 
         public void SetEnabled(bool on) => _root.SetActive(on);
+
+        /// <summary>Strength: every capsule but the head's this much thicker.</summary>
+        public void SetRadiusScale(float s)
+        {
+            foreach (var b in Boxes) b.RadiusScale = b.Region == HitRegion.Head ? 1f : s;
+        }
     }
 }

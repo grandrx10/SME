@@ -11,6 +11,7 @@ namespace SuddenMageEncounter
             public int id; public byte kind; public PlayerController caster; public Vector3 center;
             public double formAt, endAt; public bool formed;
             public readonly HashSet<Combatant> trapped = new();
+            public readonly Dictionary<Combatant, double> caughtAt = new(); // Empress: when each was caught (held a fixed time, once)
         }
 
         const byte Empress = 0, Emperor = 1;
@@ -27,7 +28,8 @@ namespace SuddenMageEncounter
         public static CardId RollFoolCard()
         {
             var pool = new List<CardId>();
-            foreach (var c in Cards.All) if (c.id != CardId.TheFool && c.id != CardId.None) pool.Add(c.id);
+            foreach (var c in Cards.All)
+                if (c.id != CardId.TheFool && c.id != CardId.None && c.costType != CostType.Passive && c.rarity != Rarity.Secret && !c.companion) pool.Add(c.id); // (a passive card does nothing on its own; a secret stays one)
             return pool[Random.Range(0, pool.Count)];
         }
 
@@ -41,7 +43,7 @@ namespace SuddenMageEncounter
                     // can't be cast again while it runs (refused: no cost, no cooldown)
                     var m = caster.Mana.Value;
                     if (m.Fast(now)) return false;
-                    caster.Mana.Value = new ManaState { Value = m.At(now), Time = now, FastUntil = now + SpellPlans.MagicianTime };
+                    caster.Mana.Value = new ManaState { Value = m.At(now), Time = now, FastUntil = now + SpellPlans.MagicianTime, Flow = m.Flow, Cap = m.Cap };
                     return true;
                 }
                 case CardId.TheHighPriestess:
@@ -90,16 +92,16 @@ namespace SuddenMageEncounter
                 foreach (var p in Combatant.Registry)
                 {
                     if (p == null || p == d.caster || !p.IsAlive || Invulnerable(p)) continue;
-                    bool full = ManaOf(p, now) >= ManaState.Max - 0.001f;
                     if (d.trapped.Contains(p))
                     {
-                        // held until their mana is full
-                        if (full) { d.trapped.Remove(p); RefreshTrapped(p); }
+                        // held for a fixed time
+                        if (now >= d.caughtAt[p] + SpellPlans.EmpressTrapTime) { d.trapped.Remove(p); RefreshTrapped(p); }
                         continue;
                     }
-                    // anyone in it (or walking in) without full mana is caught
-                    if (!full && Inside(d, p.FeetPosition, now, 0.3f))
+                    // anyone in it (or walking in) is caught, once per domain
+                    if (!d.caughtAt.ContainsKey(p) && Inside(d, p.FeetPosition, now, 0.3f))
                     {
+                        d.caughtAt[p] = now;
                         d.trapped.Add(p);
                         RefreshTrapped(p);
                     }
@@ -165,9 +167,12 @@ namespace SuddenMageEncounter
         static float ScaleDamage(Combatant victim, ulong attacker, float dmg)
         {
             if (Invulnerable(victim)) return 0f;          // mid-warp, or Arcane Swiftness
+            if (victim.IsSpawned && victim.Status.Value.Gold(WorldNet.Now)) return 0f; // Wheel of Fortune's 6: nothing hurts you
+            var source = PlayerController.ServerFind(attacker);
+            if (Combatant.Allies(source, victim)) return 0f; // a necromancer and their Undead
+            if (source != null && source != victim && source.Status.Value.Strong(WorldNet.Now)) dmg *= SpellPlans.StrengthDamage; // Strength
             if (AbsorbInBubble(victim, dmg)) return 0f; // Bubble Away: the bubble takes it
             if (Domains.Count == 0) return dmg;
-            var source = PlayerController.ServerFind(attacker);
             if (source == null || source == victim) return dmg;
             double now = WorldNet.Now;
             foreach (var d in Domains)
@@ -193,7 +198,7 @@ namespace SuddenMageEncounter
             if (p == null) return;
             double now = WorldNet.Now;
             var m = p.Mana.Value;
-            if (m.Fast(now)) p.Mana.Value = new ManaState { Value = m.At(now), Time = now };
+            if (m.Fast(now)) p.Mana.Value = new ManaState { Value = m.At(now), Time = now, Flow = m.Flow, Cap = m.Cap };
         }
     }
 }

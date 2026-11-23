@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SuddenMageEncounter
@@ -48,7 +49,7 @@ namespace SuddenMageEncounter
         public event Action<Vector3> StandBlocked;
 
         CharacterController _cc;
-        float _standHeight;
+        float _standHeight, _standRadius;
         Vector3 _standCenter;
         float _lastGroundedTime = -10f, _jumpPressedTime = -10f, _lastJumpTime = -10f;
         float _ragdollUntil, _lastCrash, _getUpUntil;
@@ -58,12 +59,20 @@ namespace SuddenMageEncounter
         Vector3 _groundNormal = Vector3.up;
         float _fallSpeed;
 
+        PlayerController _pc;
+
         void Awake()
         {
             _cc = GetComponent<CharacterController>();
+            _pc = GetComponent<PlayerController>();
             _standHeight = _cc.height;
             _standCenter = _cc.center;
+            _standRadius = _cc.radius;
+            _gravity0 = gravity;
+            _jump0 = jumpUpSpeed;
         }
+
+        float _gravity0, _jump0;
 
         public void SetLook(float yaw, float pitch)
         {
@@ -79,10 +88,19 @@ namespace SuddenMageEncounter
             _bubbleFrom = _bubbleUntil = -1f;
             _inBubble = false;
             _swiftFrom = _swiftUntil = -1f;
+            _blinkStart = -1f;
+            EndLeap();
+            StopCharging();
+            _reeling = false;
+            _pinnedTo = null;
             if (_ragdollUntil == float.MaxValue) _ragdollUntil = 0f;
             EndRagdoll(true);
             _cc.enabled = false;
             transform.position = pos;
+            Crouching = false; // respawned standing
+            CrouchBlend = 0f;
+            _cc.height = _standHeight;
+            _cc.center = _standCenter;
             _cc.enabled = true;
             Velocity = Vector3.zero;
             _fallSpeed = 0f;
@@ -101,9 +119,383 @@ namespace SuddenMageEncounter
         public bool Dashing => Time.time < _dashUntil;
         public bool Siphoning => Time.time < _siphonUntil;
         public bool Rooted => Time.time < _rootUntil;
+        /// <summary>The body stays facing one way (Ice Spike's crouch) while the camera still looks around.</summary>
+        public bool FaceLocked => Time.time < _faceLockUntil && !Ragdolled;
+        /// <summary>The way the body faces: <see cref="Yaw"/> (the camera's), unless it's face-locked.</summary>
+        public float BodyYaw => FaceLocked ? _faceYaw : Yaw;
+        float _faceLockUntil = -1f, _faceYaw;
+
+        /// <summary>Keep the body facing the way it faces now for <paramref name="seconds"/> (the camera stays free).</summary>
+        public void FaceLock(float seconds)
+        {
+            _faceYaw = Yaw;
+            _faceLockUntil = Time.time + seconds;
+        }
         /// <summary>Floating in a Bubble Away right now.</summary>
         public bool Bubbled => Time.time >= _bubbleFrom && Time.time < _bubbleUntil;
-        public bool Busy => Dashing || Siphoning || Rooted || _carried || Time.time < _bubbleUntil || Time.time < _swiftUntil;
+        /// <summary>Taken by The World: held exactly where it is (no gravity, no moving; looking round still works).</summary>
+        public bool Held;
+        public bool Busy => Held || Dashing || Siphoning || Rooted || _carried || Time.time < _bubbleUntil || Time.time < _swiftUntil || Blinking || Charioting || Pinned || Leaping;
+
+        // ---------------- Descending Hammer ----------------
+
+        float _leapPrepUntil = -1f, _leapStart = -1f;
+        bool _leapSwung;
+        Vector3 _lastHitPoint, _lastHitNormal = Vector3.up;
+        Collider _lastHitCollider;
+        /// <summary>Crouched for Descending Hammer, or in the air on its leap (until it touches down).</summary>
+        public bool Leaping => _leapPrepUntil >= 0f || _leapStart >= 0f;
+        /// <summary>The leap is about to touch down: bring the hammer down now.</summary>
+        public event Action HammerSwing;
+        /// <summary>(point, surface normal) — the leap touched down (ground, a wall, a ceiling or someone): the slam.</summary>
+        public event Action<Vector3, Vector3> HammerLanded;
+
+        /// <summary>Descending Hammer: down on one knee for <paramref name="crouch"/>, then leap up and forward the way you face.</summary>
+        public void HammerLeap(float crouch)
+        {
+            _leapPrepUntil = Time.time + crouch;
+            _leapStart = -1f;
+            _leapSwung = false;
+            _dashUntil = _siphonUntil = _rootUntil = 0f;
+        }
+
+        /// <summary>Knocked out of it, or it never came down: no slam.</summary>
+        public void EndLeap()
+        {
+            _leapPrepUntil = _leapStart = -1f;
+        }
+
+        void LeapPrepTick(float dt)
+        {
+            GroundCheck();
+            Velocity = new Vector3(0f, IsGrounded ? -2f : Velocity.y - gravity * dt, 0f);
+            _cc.Move(Velocity * dt);
+            if (Time.time < _leapPrepUntil) return;
+            // off: up and forward the way you face
+            _leapPrepUntil = -1f;
+            _leapStart = Time.time;
+            Velocity = Quaternion.Euler(0f, Yaw, 0f) * Vector3.forward * SpellPlans.LeapForward + Vector3.up * SpellPlans.LeapUp;
+            _lastJumpTime = Time.time;
+            IsGrounded = false;
+            _fallSpeed = 0f;
+        }
+
+        void LeapTick(float dt)
+        {
+            float t = Time.time - _leapStart;
+            if (t > SpellPlans.LeapMaxAir) { EndLeap(); return; } // never came down
+            // the mouse redirects it freely: the way across turns to wherever you face
+            Vector3 h = new(Velocity.x, 0f, Velocity.z);
+            Vector3 want = Quaternion.Euler(0f, Yaw, 0f) * Vector3.forward;
+            if (h.sqrMagnitude > 1e-4f) h = Vector3.RotateTowards(h, want * h.magnitude, SpellPlans.LeapSteer * Mathf.Deg2Rad * dt, 0f);
+            Velocity = new Vector3(h.x, Velocity.y - gravity * dt, h.z);
+
+            // the swing down starts just before it lands
+            if (!_leapSwung && t > 0.1f)
+            {
+                float lead = Velocity.magnitude * SpellPlans.SlamLead;
+                Vector3 c = transform.position + _cc.center;
+                float half = Mathf.Max(0f, _cc.height * 0.5f - _cc.radius);
+                if (lead > 0.01f && Physics.CapsuleCast(c + Vector3.down * half, c + Vector3.up * half, _cc.radius * 0.95f, Velocity.normalized, lead,
+                        Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
+                {
+                    _leapSwung = true;
+                    HammerSwing?.Invoke();
+                }
+            }
+
+            _lastHitCollider = null;
+            var flags = _cc.Move(Velocity * dt);
+            if (t < 0.08f && (flags & CollisionFlags.Below) != 0) flags &= ~CollisionFlags.Below; // still leaving the ground
+            Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+            Combatant on = SomeoneTouching();
+            if (flags == CollisionFlags.None && on == null) return;
+
+            // touched down (anything at all): the slam, right here
+            Vector3 point = feet, normal = Vector3.up;
+            bool body = on != null || (_lastHitCollider != null && _lastHitCollider.GetComponentInParent<Combatant>() != null);
+            if (!body && (flags & CollisionFlags.Below) == 0 && _lastHitCollider != null)
+            {
+                point = _lastHitPoint;
+                normal = _lastHitNormal;
+            }
+            EndLeap();
+            if (!_leapSwung) HammerSwing?.Invoke();
+            Velocity = Vector3.zero;
+            Root(0.25f); // a beat to recover from the blow
+            HammerLanded?.Invoke(point, normal);
+        }
+
+        /// <summary>Someone else's body we've come down on (their capsules aren't always solid to us).</summary>
+        Combatant SomeoneTouching()
+        {
+            Vector3 c = transform.position + _cc.center;
+            foreach (var o in Combatant.Registry)
+            {
+                if (o == null || o.gameObject == gameObject || !o.IsAlive || !o.Visible) continue;
+                Vector3 d = o.transform.position - c;
+                if (Mathf.Abs(d.y) > 1.5f) continue;
+                d.y = 0f;
+                if (d.magnitude < _cc.radius + 0.4f) return o;
+            }
+            return null;
+        }
+
+        // ---------------- The Chariot ----------------
+
+        Vector3 _chariotDir;
+        float _chariotStart = -1f, _lastChariotBlock;
+        /// <summary>Other people's bodies the ball rolls through while charging (the server picks them up or bowls them aside).</summary>
+        readonly List<Collider> _chariotIgnored = new();
+        /// <summary>Someone's stuck on the front of our charge (set each frame by the owner): they hitting a wall is the crash.</summary>
+        public bool ChariotCarrying { get; set; }
+        /// <summary>Charging with The Chariot right now: running on its own, faster and faster, the way it set off.</summary>
+        public bool Charioting => _chariotStart >= 0f;
+        /// <summary>(feet, direction) — the charge ran into terrain (the owner decides: smash through it, or crash).</summary>
+        public event Action<Vector3, Vector3> ChariotBlocked;
+
+        /// <summary>The Chariot: charge along <paramref name="dir"/> (level) until told to stop.</summary>
+        public void Chariot(Vector3 dir)
+        {
+            dir.y = 0f;
+            _chariotDir = dir.sqrMagnitude > 1e-4f ? dir.normalized : transform.forward;
+            Yaw = SpellPlans.YawOf(_chariotDir);
+            _chariotStart = Time.time;
+            _nextIgnore = 0f;
+            Crouching = false; // (rolled up into the ball; it unrolls standing)
+            SetBallShape(true);
+            _dashUntil = _siphonUntil = _rootUntil = 0f;
+        }
+
+        /// <summary>The charge is over: it stops dead (a crash bounces you back a little).</summary>
+        public void EndChariot(bool crashed)
+        {
+            if (!Charioting) return;
+            StopCharging();
+            Velocity = crashed ? -_chariotDir * 4f + Vector3.up * 3f : _chariotDir * 3f;
+            if (crashed) { _lastJumpTime = Time.time; IsGrounded = false; }
+        }
+
+        void StopCharging()
+        {
+            if (_chariotStart < 0f) return;
+            _chariotStart = -1f;
+            ChariotCarrying = false;
+            SetBallShape(false);
+            foreach (var col in _chariotIgnored) if (col != null) Physics.IgnoreCollision(_cc, col, false);
+            _chariotIgnored.Clear();
+        }
+
+        /// <summary>The ball doesn't stop at people: it rolls into them (the server sticks them on the front, or bowls them aside).</summary>
+        static readonly List<Collider> _bodyCols = new();
+        float _nextIgnore;
+
+        void IgnoreBodies()
+        {
+            // (a few times a second is plenty: only someone joining mid-charge is new)
+            if (Time.time < _nextIgnore) return;
+            _nextIgnore = Time.time + 0.25f;
+            foreach (var o in Combatant.Registry)
+            {
+                if (o == null || o.gameObject == gameObject) continue;
+                o.GetComponents(_bodyCols);
+                foreach (var col in _bodyCols)
+                {
+                    if (col == null || col.isTrigger || _chariotIgnored.Contains(col) || Physics.GetIgnoreCollision(_cc, col)) continue;
+                    Physics.IgnoreCollision(_cc, col, true);
+                    _chariotIgnored.Add(col);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Charging, the body is the chariot's ball, so it collides with the world as the ball it's drawn as (bottom at
+        /// the feet, <see cref="SpellPlans.ChariotRadius"/> round). Back to a standing capsule after.
+        /// </summary>
+        void SetBallShape(bool ball)
+        {
+            if (Ragdolled) { _cc.radius = _standRadius; return; } // (the ragdoll keeps its own ball round the hips)
+            _cc.enabled = false;
+            float r = ball ? SpellPlans.ChariotRadius : _standRadius;
+            if (ball)
+            {
+                _cc.radius = r;
+                _cc.height = r * 2f;
+                _cc.center = SpellPlans.ChariotBallOffset;
+            }
+            else
+            {
+                _cc.height = _standHeight;
+                _cc.center = _standCenter;
+                _cc.radius = r;
+            }
+            _cc.enabled = true;
+        }
+
+        void ChariotTick(float dt)
+        {
+            float t = Time.time - _chariotStart;
+            // the server ends it (max time); if that got lost, stop
+            if (t > SpellPlans.ChariotMaxTime + 1.5f) { StopCharging(); return; }
+            float speed = SpellPlans.ChariotSpeed(t);
+            _chariotDir = Quaternion.Euler(0f, Yaw, 0f) * Vector3.forward; // steered (a little) with the mouse
+            IgnoreBodies();
+            // carrying someone: they meet the wall first, and that's the crash
+            if (ChariotCarrying && Time.time - _lastChariotBlock > 0.05f)
+            {
+                var w = VoxelWorld.Current;
+                Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+                if (w != null && SpellPlans.ChariotCarryBlocked(w, feet, _chariotDir))
+                {
+                    _lastChariotBlock = Time.time;
+                    ChariotBlocked?.Invoke(feet + _chariotDir * SpellPlans.ChariotPinAhead, _chariotDir); // (where they are: the wall is tall there)
+                    if (!Charioting) return;
+                }
+            }
+            GroundCheck();
+            Velocity = new Vector3(_chariotDir.x * speed, IsGrounded ? -2f : Velocity.y - gravity * dt, _chariotDir.z * speed);
+            if (!IsGrounded) _fallSpeed = Mathf.Max(_fallSpeed, -Velocity.y);
+            Vector3 before = transform.position;
+            var flags = _cc.Move(Velocity * dt);
+            Vector3 moved = transform.position - before;
+            moved.y = 0f;
+            // stopped by something in front (not just slowed on a step): smash it or crash into it. Only the progress the
+            // way it's heading counts: glancing off a wall, the body slides along it, but the ball still ran into it
+            if ((flags & CollisionFlags.Sides) != 0 && Vector3.Dot(moved, _chariotDir) < speed * dt * 0.5f && Time.time - _lastChariotBlock > 0.05f)
+            {
+                _lastChariotBlock = Time.time;
+                ChariotBlocked?.Invoke(transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f), _chariotDir);
+            }
+        }
+
+        // ---------------- stuck on the front of someone's Chariot ----------------
+
+        Combatant _pinnedTo, _pinRefused;
+        float _pinRefusedUntil;
+        /// <summary>Carried along on the front of someone's Chariot (limp, can't act).</summary>
+        public bool Pinned => _pinnedTo != null;
+
+        /// <summary>Owner, every frame while stuck on <paramref name="driver"/>'s chariot.</summary>
+        public void PinTo(Combatant driver)
+        {
+            if (_pinnedTo == driver || driver == null) return;
+            if (driver == _pinRefused && Time.time < _pinRefusedUntil) return; // just thrown off it: the server's release is on its way
+            _pinnedTo = driver;
+            _dashUntil = _siphonUntil = _rootUntil = 0f;
+            StopCharging();
+            _carried = false;
+            if (!Ragdolled) BeginRagdoll();
+            _ragdollUntil = float.MaxValue;
+        }
+
+        /// <summary>Let go of the front of the chariot: limp a moment more, then up.</summary>
+        public void Unpin()
+        {
+            if (_pinnedTo == null) return;
+            _pinnedTo = null;
+            if (_ragdollUntil == float.MaxValue) _ragdollUntil = Time.time + SpellPlans.ChariotStun;
+        }
+
+        void PinTick(float dt)
+        {
+            if (_pinnedTo == null || !_pinnedTo.IsSpawned) { Unpin(); return; }
+            Vector3 p = SpellPlans.PinPoint(_pinnedTo.transform.position, _pinnedTo.ViewYaw);
+            Velocity = _pinnedTo.ViewVelocity;
+            _cc.enabled = false;
+            transform.position = p;
+            _cc.enabled = true;
+            IsGrounded = false;
+            _fallSpeed = 0f;
+        }
+
+        // ---------------- crouching ----------------
+
+        /// <summary>
+        /// Metres the hips sink when crouched. The drawn body (<see cref="ProceduralAnimator"/>), the camera, and the
+        /// top of the body's capsule all come down by this much, so what you see is what can be hit and what fits.
+        /// </summary>
+        public const float CrouchDrop = 0.45f;
+        /// <summary>Walking speed while crouched, as a share of running.</summary>
+        public const float CrouchSpeedScale = 0.5f;
+        /// <summary>Holding the Crouch key (and not stuck under something when you let go).</summary>
+        public bool Crouching { get; private set; }
+        /// <summary>0 standing .. 1 crouched, eased (how far the camera has come down).</summary>
+        public float CrouchBlend { get; private set; }
+
+        /// <summary>The crouched capsule: <see cref="CrouchDrop"/> off the top, the feet where they were.</summary>
+        public static void CrouchShape(float standHeight, Vector3 standCenter, out float height, out Vector3 center)
+        {
+            height = standHeight - CrouchDrop;
+            center = standCenter + Vector3.down * (CrouchDrop * 0.5f);
+        }
+
+        /// <summary>Crouch, or stand back up if there's head room (under a low roof you stay down).</summary>
+        void SetCrouch(bool on)
+        {
+            if (Crouching == on || Ragdolled || Charioting) return; // (those shape the body themselves)
+            if (!on && !RoomToStand()) return;
+            Crouching = on;
+            _cc.enabled = false;
+            if (on)
+            {
+                CrouchShape(_standHeight, _standCenter, out float h, out Vector3 c);
+                _cc.height = h;
+                _cc.center = c;
+            }
+            else
+            {
+                _cc.height = _standHeight;
+                _cc.center = _standCenter;
+            }
+            _cc.enabled = true;
+        }
+
+        bool RoomToStand()
+        {
+            Vector3 c = transform.position + _standCenter;
+            float half = _standHeight * 0.5f - _cc.radius;
+            return !Physics.CheckCapsule(c + Vector3.down * half + Vector3.up * 0.05f, c + Vector3.up * half, _cc.radius * 0.95f,
+                Layers.EnvironmentMask, QueryTriggerInteraction.Ignore);
+        }
+
+        /// <summary>Down on one knee charging Flowing Cut: no walking or jumping (but still free to cast). Set every frame.</summary>
+        public bool Kneeling { get; set; }
+
+        // ---------------- Flowing Cut: the teleport ----------------
+
+        Vector3 _blinkFrom, _blinkTo;
+        float _blinkStart = -1f, _blinkTime, _blinkArrived = -10f;
+        /// <summary>Flashing along a Flowing Cut right now (through anything: the server cuts the way open).</summary>
+        public bool Blinking => _blinkStart >= 0f && Time.time < _blinkStart + _blinkTime;
+
+        /// <summary>Flowing Cut: cross to <paramref name="to"/> (where the hips end up) in <paramref name="seconds"/>, passing through whatever's in between.</summary>
+        public void Blink(Vector3 to, float seconds)
+        {
+            _blinkFrom = transform.position;
+            _blinkTo = to;
+            _blinkTime = Mathf.Max(0.01f, seconds);
+            _blinkStart = Time.time;
+            _dashUntil = _siphonUntil = _rootUntil = 0f;
+        }
+
+        void BlinkTick()
+        {
+            float u = Mathf.Clamp01((Time.time - _blinkStart) / _blinkTime);
+            float e = 1f - (1f - u) * (1f - u); // fast out of the stance, easing in
+            Vector3 p = Vector3.Lerp(_blinkFrom, _blinkTo, e);
+            Velocity = (_blinkTo - _blinkFrom) / _blinkTime;
+            _cc.enabled = false;
+            transform.position = p;
+            _cc.enabled = true;
+            IsGrounded = false;
+            if (u >= 1f)
+            {
+                _blinkStart = -1f;
+                _blinkArrived = Time.time;
+                Velocity = (_blinkTo - _blinkFrom).normalized * 2f; // a little carry, not the full speed
+                _fallSpeed = 0f;
+            }
+        }
 
         // ---------------- moved by a spell (warp, portal) ----------------
 
@@ -190,7 +582,9 @@ namespace SuddenMageEncounter
         public bool Swifting => Time.time >= _swiftFrom && Time.time < _swiftUntil;
         /// <summary>(feet, direction) — the swift run hit voxels: they come apart.</summary>
         public event Action<Vector3, Vector3> SwiftBlocked;
-        float SpeedScale => Swifting ? SpellPlans.SwiftSpeedScale : 1f;
+        float SpeedScale => (Swifting ? SpellPlans.SwiftSpeedScale : 1f) * (Chilled ? SpellPlans.SlowScale : 1f);
+        /// <summary>Breathed on by Icy Breath: half speed for a moment.</summary>
+        bool Chilled => _pc != null && _pc.IsSpawned && _pc.Status.Value.Slowed(WorldNet.Now);
 
         /// <summary>Arcane Swiftness: crouched for <paramref name="prep"/>, then <paramref name="seconds"/> of running at three times the speed.</summary>
         public void Swift(float prep, float seconds)
@@ -311,9 +705,13 @@ namespace SuddenMageEncounter
 
         public void Unroot() => _rootUntil = 0f;
 
+        /// <summary>Slide by this much (walls still stop it).</summary>
+        public void Nudge(Vector3 delta) { if (_cc.enabled) _cc.Move(delta); }
+
         /// <summary>Caught in a tornado:spun along with it until thrown out (Knock).</summary>
         public void Carry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
+            if (Unstoppable || Held) return; // combo broken: can't be knocked down for a while
             _carryOrigin = origin;
             _carryDir = dir;
             _carryStart = start;
@@ -329,24 +727,37 @@ namespace SuddenMageEncounter
         {
             double now = WorldNet.Now;
             // the tornado should have thrown us out by now; if that got lost, let go
-            if (now > _carryStart + SpellPlans.TornadoLife + 0.6)
+            if (now > _carryStart + SpellPlans.TornadoLife + 0.6 || now > _carryCaptured + SpellPlans.TornadoHold + 0.6)
             {
                 _carried = false;
                 _ragdollUntil = Time.time + 0.5f;
                 return;
             }
+            // spun along its side, but walls stop us (never dragged through one): held back too far, we're flung out there
             Vector3 p = SpellPlans.TornadoCarry(_carryOrigin, _carryDir, _carryStart, _carryCaptured, now, _carryPhase);
-            Velocity = (p - transform.position) / Mathf.Max(dt, 0.001f);
-            _cc.enabled = false;
-            transform.position = p;
-            _cc.enabled = true;
+            Vector3 from = transform.position;
+            _cc.Move(p - from);
+            Velocity = (transform.position - from) / Mathf.Max(dt, 0.001f);
+            if ((transform.position - p).magnitude > SpellPlans.TornadoSlip)
+                Knock(SpellPlans.TornadoFling(transform.position, SpellPlans.TornadoBase(_carryOrigin, _carryDir, _carryStart, now), _carryDir), 1f);
         }
 
         /// <summary>Thrown by a spell: fly off at this velocity, limp for <paramref name="ragdollSeconds"/>.</summary>
         public void Knock(Vector3 velocity, float ragdollSeconds)
         {
+            if (Hanging || Held) return; // the noose (or The World) holds you where you are
+            if (Grasped && (Unstoppable || ragdollSeconds <= 0f) && !Ragdolled) return; // held by the legs: only a knockdown gets you out
+            if (Unstoppable) ragdollSeconds = 0f; // combo broken: still thrown, but stays on their feet
             _carried = false;
-            if (ragdollSeconds > 0f) { _dashUntil = _siphonUntil = 0f; }
+            if (_pinnedTo != null)
+            {
+                // thrown off the front of a chariot (the crash, or a hit): don't climb straight back on before the server lets go
+                _pinRefused = _pinnedTo;
+                _pinRefusedUntil = Time.time + 0.6f;
+                _pinnedTo = null;
+            }
+            if (ragdollSeconds > 0f) { _dashUntil = _siphonUntil = 0f; StopCharging(); _standAt = -1f; _standOnLanding = false; }
+            EndLeap(); // thrown out of the crouch or the leap: no slam
             if (_ragdollUntil == float.MaxValue) _ragdollUntil = 0f;
             Velocity = velocity;
             _lastJumpTime = Time.time; // leave the ground
@@ -358,8 +769,74 @@ namespace SuddenMageEncounter
             }
         }
 
+        /// <summary>Combo break: can't be knocked down (ragdolled or carried) until then.</summary>
+        public float UnstoppableUntil;
+        public bool Unstoppable => Time.time < UnstoppableUntil;
+
+        /// <summary>
+        /// Up on your feet right now, even in mid-air (the get-up animation plays from wherever the body lay), and free
+        /// to act at once. Not while stuck on the front of a chariot (the server holds that).
+        /// </summary>
+        public void StandUpNow()
+        {
+            if (_pinnedTo != null) return;
+            if (_carried) { _carried = false; Velocity = Vector3.zero; }
+            _getUpUntil = 0f;
+            if (!Ragdolled) return;
+            _ragdollUntil = 0f;
+            EndRagdoll(true);
+            Velocity = new Vector3(Velocity.x * 0.2f, Mathf.Min(Velocity.y, 0f) * 0.2f, Velocity.z * 0.2f);
+        }
+
+        float _standAt = -1f;
+        bool _standOnLanding;
+        float _landArmed;
+
+        /// <summary>Infectious Bite: limp until the body comes down on the floor, then straight up.</summary>
+        public void StandOnLanding()
+        {
+            _standOnLanding = true;
+            _landArmed = Time.time + 0.15f; // (not the floor it just left)
+        }
+
+        /// <summary>Stay down <paramref name="seconds"/> more, then up (Infectious Bite: after the bite lands).</summary>
+        public void StandUpIn(float seconds) => _standAt = Time.time + Mathf.Max(0f, seconds);
+
+        /// <summary>Combo break: stand up now and can't be knocked down for <paramref name="seconds"/>.</summary>
+        public void BreakFree(float seconds)
+        {
+            UnstoppableUntil = Time.time + seconds;
+            bool down = Ragdolled;
+            StandUpNow();
+            if (!down || Ragdolled || RoomToStand()) return;
+            // up off the floor where a standing body doesn't fit: break what's in the way; what won't break, crouch under
+            // (being shoved out of it sideways could put you through a wall)
+            StandBlocked?.Invoke(transform.position + _standCenter + Vector3.down * (_standHeight * 0.5f));
+            Physics.SyncTransforms();
+            if (!RoomToStand()) SetCrouch(true);
+        }
+
+        /// <summary>
+        /// Combo broken: hits still throw us, on our feet, but never through anything. Whatever moved the body this frame
+        /// (a hard knock, being pushed out of something it overlapped), if its middle went through a surface it goes
+        /// back, and stops against it.
+        /// </summary>
+        void StayThisSide(Vector3 was)
+        {
+            Vector3 at = transform.position, d = at - was;
+            float dist = d.magnitude;
+            if (dist < 1e-4f || !Physics.Raycast(was, d / dist, out var hit, dist, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore)) return;
+            if (Physics.GetIgnoreCollision(_cc, hit.collider)) return; // (passing into a portal)
+            _cc.enabled = false;
+            transform.position = was;
+            _cc.enabled = true;
+            float into = -Vector3.Dot(Velocity, hit.normal);
+            if (into > 0f) Velocity += hit.normal * into;
+        }
+
         void BeginRagdoll()
         {
+            Crouching = false; // (the ball replaces the crouched shape; getting up is standing)
             Ragdolled = true;
             // the body becomes a ball around the hips
             _cc.height = _cc.radius * 2f;
@@ -400,9 +877,19 @@ namespace SuddenMageEncounter
         void Update()
         {
             float dt = Mathf.Min(Time.deltaTime, 0.05f);
+            // Strength: falling twice as fast, jumping twice as high (twice the speed against twice the gravity)
+            float strong = _pc != null && _pc.IsSpawned && _pc.Status.Value.Strong(WorldNet.Now) ? SpellPlans.StrengthJump : 1f;
+            gravity = _gravity0 * strong;
+            jumpUpSpeed = _jump0 * strong;
             Look();
+            if (Held) { Velocity = Vector3.zero; _fallSpeed = 0f; IsGrounded = true; return; }
+            if (_pinnedTo != null) { PinTick(dt); return; }
+            if (Hanging && (Ragdolled || _carried)) StandUpNow(); // caught by the noose: up off the floor (it can be cast while down)
             if (_carried) { CarryTick(dt); return; }
-            Depenetrate();
+            if (_blinkStart >= 0f && !Ragdolled) { BlinkTick(); return; } // passing through: no pushing out of voxels yet
+            Vector3 was = transform.position;
+            // just arrived: the server's cut may still be on its way here, so don't get shoved out of the tunnel's walls
+            if (Time.time > _blinkArrived + 0.35f) Depenetrate();
             _hitThisFrame = false;
             // the bubble just ended: stop rising, fall from here
             if (_inBubble && !Bubbled)
@@ -410,11 +897,22 @@ namespace SuddenMageEncounter
                 _inBubble = false;
                 if (Velocity.y > 0f) Velocity.y = 0f;
             }
-            if (Ragdolled) RagdollTick(dt);
+            // crouch only while walking about; dashing, leaping, floating and so on stand you up (when there's room)
+            bool walking = !Ragdolled && !Charioting && !Leaping && !Bubbled && !Dashing && !Siphoning;
+            SetCrouch(walking && InputMap.Held(GameAction.Crouch) && !GettingUp);
+            CrouchBlend = Mathf.MoveTowards(CrouchBlend, Crouching ? 1f : 0f, dt * 7f);
+            if (Hanging) HangTick(dt);
+            else if (Ragdolled) RagdollTick(dt);
+            else if (Charioting) ChariotTick(dt);
+            else if (Grasped) GraspTick(dt);
+            else if (_leapPrepUntil >= 0f) LeapPrepTick(dt);
+            else if (_leapStart >= 0f) LeapTick(dt);
             else if (Bubbled) BubbleTick(dt);
             else if (Dashing) DashTick(dt);
             else if (Siphoning) SiphonTick(dt);
+            else if (Reeling) ReelTick(dt);
             else MoveTick(dt);
+            if (Unstoppable && !Ragdolled) StayThisSide(was);
             ThroughPortals();
         }
 
@@ -496,16 +994,20 @@ namespace SuddenMageEncounter
         void Look()
         {
             Vector2 d = InputMap.LookDelta;
-            Yaw = Mathf.Repeat(Yaw + d.x, 360f);
+            // charging: the mouse only says which way to turn; it turns at a fixed rate whatever the sensitivity
+            float turn = Charioting
+                ? (Mathf.Abs(d.x) > 0.01f ? Mathf.Sign(d.x) * SpellPlans.ChariotTurnRate * Time.deltaTime : 0f)
+                : d.x;
+            Yaw = Mathf.Repeat(Yaw + turn, 360f);
             Pitch = Mathf.Clamp(Pitch - d.y, minPitch, maxPitch);
-            if (!Ragdolled) transform.rotation = Quaternion.Euler(0, Yaw, 0);
+            if (!Ragdolled) transform.rotation = Quaternion.Euler(0, BodyYaw, 0);
         }
 
         // ---------------- walking ----------------
 
         void MoveTick(float dt)
         {
-            bool frozen = GettingUp || Rooted;
+            bool frozen = GettingUp || Rooted || Kneeling || MatchManager.MovementLockedFor(_pc); // the 3-2-1: look around, but stay put
             if (InputMap.Down(GameAction.Jump) && !frozen) _jumpPressedTime = Time.time;
             Vector2 input = frozen ? Vector2.zero : InputMap.Move;
             Quaternion yaw = Quaternion.Euler(0, Yaw, 0);
@@ -519,6 +1021,13 @@ namespace SuddenMageEncounter
                 if (!wasGrounded && _fallSpeed > SafeFallSpeed) HardLanding?.Invoke(_fallSpeed);
                 _lastGroundedTime = Time.time;
                 _fallSpeed = 0f;
+                // walking on ice (Icy Breath's): your feet go out from under you
+                if (HorizontalSpeed > SpellPlans.IceSlipSpeed && Time.time >= _iceGraceUntil && OnIce())
+                {
+                    _iceGraceUntil = Time.time + SpellPlans.IceSlipRagdoll + GetUpSeconds + 1.2f; // time to get off it
+                    Knock(new Vector3(Velocity.x * 1.3f, 3f, Velocity.z * 1.3f), SpellPlans.IceSlipRagdoll);
+                    return;
+                }
             }
 
             bool jumpQueued = Time.time - _jumpPressedTime <= jumpBuffer;
@@ -533,7 +1042,7 @@ namespace SuddenMageEncounter
             }
             if (IsGrounded && Time.time - _lastJumpTime > 0.1f)
             {
-                Vector3 target = wish * (runSpeed * SpeedScale);
+                Vector3 target = wish * (runSpeed * SpeedScale * (Crouching ? CrouchSpeedScale : 1f));
                 float rate = (wish.sqrMagnitude > 0.01f ? groundAccel : groundDecel) * SpeedScale;
                 h = Vector3.MoveTowards(h, target, rate * dt);
                 Velocity = new Vector3(h.x, -2f, h.z);
@@ -553,8 +1062,25 @@ namespace SuddenMageEncounter
 
             bool snap = IsGrounded && Time.time - _lastJumpTime > 0.1f;
             Vector3 before3 = transform.position;
+            Vector3 meant = new(Velocity.x, 0f, Velocity.z);
             var flags = _cc.Move(Velocity * dt);
-            if ((flags & CollisionFlags.Sides) != 0 && wish.sqrMagnitude > 0.01f)
+            // walking, but held back (voxel stairs catch the capsule on their edges, which doesn't always count as
+            // hitting a side): step up, and keep the speed the edge took away
+            bool stepped = false;
+            if (snap && wish.sqrMagnitude > 0.01f && !Swifting)
+            {
+                Vector3 moved = transform.position - before3;
+                float want = Vector3.Dot(meant, wish.normalized) * dt;
+                float got = Vector3.Dot(new Vector3(moved.x, 0f, moved.z), wish.normalized);
+                if ((want <= 1e-4f || got < want * 0.6f) && TryStepUp(wish))
+                {
+                    stepped = true;
+                    Vector3 keep = wish.normalized * Mathf.Max(meant.magnitude, runSpeed * SpeedScale * 0.6f);
+                    Velocity.x = keep.x;
+                    Velocity.z = keep.z;
+                }
+            }
+            if (!stepped && (flags & CollisionFlags.Sides) != 0 && wish.sqrMagnitude > 0.01f)
             {
                 if (Swifting) SwiftCrash(wish, before3, dt);
                 TryClimbLedge(wish, before3);
@@ -566,6 +1092,133 @@ namespace SuddenMageEncounter
                 _cc.Move(Vector3.down * hit.distance);
         }
 
+        // ---------------- ice ----------------
+
+        float _iceGraceUntil;
+
+        /// <summary>Standing on ice?</summary>
+        bool OnIce()
+        {
+            var w = VoxelWorld.Current;
+            if (w == null) return false;
+            Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+            return w.IsIce(w.Get(w.CellOf(feet + Vector3.down * 0.1f)));
+        }
+
+        // ---------------- The Hanged Man ----------------
+
+        /// <summary>Hanging from The Hanged Man's noose: lifted steadily by the neck, no walking (turning and casting still work).</summary>
+        public bool Hanging => _pc != null && _pc.IsSpawned && _pc.Status.Value.Hanging(WorldNet.Now);
+
+        void HangTick(float dt)
+        {
+            SetCrouch(false);
+            Velocity = new Vector3(0f, SpellPlans.HangedRise, 0f);
+            _cc.Move(Velocity * dt); // (what the body runs into breaks: the server clears it, see SpellServer.TickHanged)
+            IsGrounded = false;
+            _fallSpeed = 0f;
+            _lastGroundedTime = Time.time; // (a jump straight after letting go still works)
+        }
+
+        // ---------------- Undying Grasp ----------------
+
+        /// <summary>Held by the legs by Undying Grasp.</summary>
+        public bool Grasped => _pc != null && _pc.Grasped;
+
+        void GraspTick(float dt)
+        {
+            // whatever you were in the middle of stops there
+            _dashUntil = _siphonUntil = 0f;
+            _reeling = false;
+            EndLeap();
+            GroundCheck();
+            Velocity = new Vector3(0f, IsGrounded ? -2f : Mathf.Min(Velocity.y, 0f) - gravity * dt, 0f);
+            _cc.Move(Velocity * dt);
+        }
+
+        // ---------------- Grapple Hook ----------------
+
+        bool _reeling;
+        Vector3 _reelTo;
+        float _reelStart;
+
+        /// <summary>Reeled in towards a grapple hook stuck in the ground.</summary>
+        public bool Reeling => _reeling;
+
+        public void Reel(Vector3 anchor)
+        {
+            _reeling = true;
+            _reelTo = anchor;
+            _reelStart = Time.time;
+            _dashUntil = _siphonUntil = 0f;
+        }
+
+        public void EndReel() => _reeling = false;
+
+        /// <summary>The rope's pull (eased off right at the hook so you don't jitter about on it).</summary>
+        void ReelPull(float dt)
+        {
+            Vector3 to = _reelTo - transform.position;
+            float dist = to.magnitude;
+            if (dist <= SpellPlans.HookArrive || Time.time - _reelStart > SpellPlans.HookMaxTime) { _reeling = false; return; }
+            Velocity += to / dist * (SpellPlans.HookPull * Mathf.Clamp01((dist - 0.8f) / 2f) * dt);
+            if (Velocity.magnitude > SpellPlans.HookMaxSpeed) Velocity = Velocity.normalized * SpellPlans.HookMaxSpeed;
+        }
+
+        void ReelTick(float dt)
+        {
+            Vector2 input = InputMap.Move;
+            Vector3 wish = Quaternion.Euler(0, Yaw, 0) * new Vector3(input.x, 0, input.y);
+            Velocity.y -= gravity * dt;
+            Velocity += wish * (airControl * 0.6f * dt); // a little steering on the way
+            ReelPull(dt);
+            Vector3 before = transform.position;
+            var flags = _cc.Move(Velocity * dt);
+            // pulled into a wall short of the hook (it's in the side of it): slide up it rather than sticking
+            if ((flags & CollisionFlags.Sides) != 0 && (transform.position - before).magnitude < Velocity.magnitude * dt * 0.3f) Velocity.y = Mathf.Max(Velocity.y, 4f);
+            IsGrounded = false;
+            _fallSpeed = 0f;
+            if (!_reeling) _lastGroundedTime = Time.time; // arrived: a jump off it still works
+        }
+
+        /// <summary>Steps walked straight up, without slowing: one voxel, or two.</summary>
+        static readonly float[] StepHeights = { VoxelWorld.Size + 0.02f, VoxelWorld.Size * 2f + 0.02f };
+
+        /// <summary>
+        /// On the ground, walking into a step one or two voxels high: up onto it. Only looks a hand's width ahead, so
+        /// steep stairs work too: steps shallower than the body is wide (where the character controller's own
+        /// stepping, and the ledge climb below, hit the next step up and give up). Climbs one step a frame.
+        /// </summary>
+        bool TryStepUp(Vector3 dir)
+        {
+            if (!IsGrounded) return false;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 1e-4f) return false;
+            dir.Normalize();
+            float r = _cc.radius, half = Mathf.Max(0f, _cc.height * 0.5f - r);
+            Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+            foreach (float h in StepHeights)
+            {
+                Vector3 pos = transform.position + Vector3.up * h + dir * 0.12f;
+                Vector3 c = pos + _cc.center;
+                // room for the whole body there
+                if (Physics.CheckCapsule(c + Vector3.down * half + Vector3.up * 0.02f, c + Vector3.up * half, r * 0.95f,
+                        Layers.EnvironmentMask, QueryTriggerInteraction.Ignore)) continue;
+                // and a step to stand on (not a gap, or an overhang we're under)
+                Vector3 from = c + Vector3.down * half;
+                if (!Physics.SphereCast(from, r * 0.9f, Vector3.down, out var hit, h + r, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore)) continue;
+                float rise = hit.point.y - feet.y;
+                // (the cast often meets the step on its edge, so the normal comes out slanted: the room check already rules out walls)
+                if (hit.normal.y < 0.2f || rise < 0.05f || rise > h + 0.01f) continue;
+                _cc.enabled = false;
+                transform.position = pos + Vector3.down * Mathf.Max(0f, h - rise - 0.01f);
+                _cc.enabled = true;
+                Velocity.y = Mathf.Max(0f, Velocity.y);
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// Walking (or jumping) into a voxel ledge that's not too high: pop up onto it. This is what lets you climb
         /// out of craters and up broken terrain without needing perfect jumps.
@@ -574,6 +1227,7 @@ namespace SuddenMageEncounter
         {
             if (Velocity.y > 3f) return; // still rising from a jump: let it play out
             Vector3 dir = wish.normalized;
+            if (TryStepUp(dir)) return;
             Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
             // something solid right in front, low down?
             if (!Physics.Raycast(feet + Vector3.up * 0.1f, dir, _cc.radius + 0.3f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
@@ -604,11 +1258,29 @@ namespace SuddenMageEncounter
                 IsGrounded = true;
                 _groundNormal = hit.normal;
             }
+            else if (hit.collider != null && OnStepEdge(hit))
+            {
+                IsGrounded = true;
+                _groundNormal = Vector3.up;
+            }
             else
             {
                 IsGrounded = _cc.isGrounded && Velocity.y <= 0f;
                 _groundNormal = Vector3.up;
             }
+        }
+
+        /// <summary>
+        /// Standing on stairs: the round bottom of the body rests on a step's edge (so the ground looks steep), with a
+        /// tread a step or so below the middle of the feet. That's still standing, not sliding off a cliff.
+        /// </summary>
+        bool OnStepEdge(RaycastHit hit)
+        {
+            if (hit.normal.y < 0.2f) return false;
+            Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+            if (hit.point.y < feet.y - 0.2f) return false;
+            return Physics.Raycast(feet + Vector3.up * 0.1f, Vector3.down, out var below, 0.1f + _cc.stepOffset,
+                Layers.EnvironmentMask, QueryTriggerInteraction.Ignore) && below.normal.y > 0.7f;
         }
 
         bool SphereDown(out RaycastHit hit, float distance)
@@ -625,9 +1297,12 @@ namespace SuddenMageEncounter
         void RagdollTick(float dt)
         {
             Velocity.y -= gravity * dt;
+            if (Reeling) ReelPull(dt); // a grapple hook already stuck keeps reeling you in, limp or not
+            if (_standAt >= 0f && Time.time >= _standAt) { _standAt = -1f; StandUpNow(); return; }
             var flags = _cc.Move(Velocity * dt);
             bool onGround = (flags & CollisionFlags.Below) != 0;
             IsGrounded = onGround;
+            if (_standOnLanding && onGround && Time.time >= _landArmed) { _standOnLanding = false; StandUpNow(); return; }
             if (onGround)
             {
                 // tumble to a stop
@@ -648,11 +1323,15 @@ namespace SuddenMageEncounter
         void OnControllerColliderHit(ControllerColliderHit hit)
         {
             if (!_hitThisFrame) { _hitThisFrame = true; _intendedVelocity = Velocity; }
+            if (_lastHitCollider == null) { _lastHitCollider = hit.collider; _lastHitPoint = hit.point; _lastHitNormal = hit.normal; }
             Vector3 n = hit.normal;
             float into = -Vector3.Dot(Velocity, n);
             if (!Ragdolled)
             {
                 if (n.y > 0.7f) return; // floor
+                // the edge of a step at your feet, walking: step over it rather than losing speed to it
+                if (n.y > 0.1f && IsGrounded &&
+                    hit.point.y < transform.position.y + _cc.center.y - _cc.height * 0.5f + _cc.stepOffset) return;
                 if (into > 0f) Velocity += n * into; // slide along walls
                 if (n.y < -0.5f && Velocity.y > 0f) Velocity.y = 0f; // ceiling
                 return;

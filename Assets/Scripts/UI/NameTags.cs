@@ -89,7 +89,10 @@ namespace SuddenMageEncounter
 
         void Place(PlayerController p, Tag tag, Camera cam)
         {
-            bool show = cam != null && p.IsSpawned && p.IsAlive && p.Visible;
+            // only people in the same place as you (the match, or your own practice chamber)
+            var me = PlayerController.Local;
+            int mySpace = me != null && me.IsSpawned ? me.PracticeSlot.Value : 0;
+            bool show = cam != null && p.IsSpawned && p.IsAlive && p.Visible && p.PracticeSlot.Value == mySpace && !p.Status.Value.Taken(WorldNet.Now);
             Vector3 world = default, screen = default;
             float alpha = 1f;
             if (show)
@@ -107,7 +110,7 @@ namespace SuddenMageEncounter
             tag.rect.gameObject.SetActive(show);
             if (!show) return;
 
-            string name = p.DisplayName;
+            string name = p.TagName; // (a skinwalker wears the name of the body it took)
             int colorKey = p.ColorIndex.Value;
             if (name != tag.shownName || colorKey != tag.shownColor)
             {

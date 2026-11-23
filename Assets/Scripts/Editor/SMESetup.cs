@@ -216,6 +216,68 @@ namespace SuddenMageEncounter.EditorTools
             Selection.activeGameObject = go;
         }
 
+        /// <summary>A lava pool: a kill volume with lava on, its top (the surface) at the scene view's focus.</summary>
+        [MenuItem(Menu + "Add Lava", priority = 22)]
+        public static void AddLava()
+        {
+            Vector3 pos = SceneView.lastActiveSceneView != null ? SceneView.lastActiveSceneView.pivot : Vector3.zero;
+            var go = new GameObject("Lava");
+            var parent = Selection.activeTransform != null ? Selection.activeTransform.GetComponentInParent<Arena>() : null;
+            if (parent != null) go.transform.SetParent(parent.transform, true);
+            go.transform.position = pos;
+            var box = go.AddComponent<BoxCollider>();
+            box.isTrigger = true;
+            box.size = new Vector3(8, 3, 8);
+            box.center = new Vector3(0, -1.5f, 0); // the object's position is the surface
+            go.AddComponent<KillVolume>().lava = true;
+            Undo.RegisterCreatedObjectUndo(go, "Add Lava");
+            Selection.activeGameObject = go;
+        }
+
+        /// <summary>A practice-chamber dummy's spot, at the scene view's focus, facing the camera, inside the selected arena.</summary>
+        [MenuItem(Menu + "Add Dummy Spot (practice)", priority = 23)]
+        public static void AddDummySpot()
+        {
+            Vector3 pos = Vector3.zero;
+            float yaw = 0;
+            var sv = SceneView.lastActiveSceneView;
+            if (sv != null)
+            {
+                pos = sv.pivot;
+                Vector3 camFwd = sv.camera != null ? sv.camera.transform.forward : Vector3.forward;
+                Vector3 back = new(-camFwd.x, 0, -camFwd.z);
+                yaw = Quaternion.LookRotation(back.sqrMagnitude > 0.001f ? back : Vector3.back).eulerAngles.y;
+            }
+            if (Physics.Raycast(pos + Vector3.up * 50f, Vector3.down, out var hit, 200f))
+                pos = hit.point + Vector3.up * 0.97f;
+            var go = new GameObject("DummySpot");
+            var parent = Selection.activeTransform != null ? Selection.activeTransform.GetComponentInParent<Arena>() : null;
+            if (parent != null) go.transform.SetParent(parent.transform, true);
+            go.transform.SetPositionAndRotation(pos, Quaternion.Euler(0, yaw, 0));
+            go.AddComponent<DummySpot>();
+            Undo.RegisterCreatedObjectUndo(go, "Add Dummy Spot");
+            Selection.activeGameObject = go;
+        }
+
+        /// <summary>The point the camera circles while the selected arena builds, at the scene view's focus.</summary>
+        [MenuItem(Menu + "Add Build Camera Point", priority = 24)]
+        public static void AddBuildCameraPoint()
+        {
+            var parent = Selection.activeTransform != null ? Selection.activeTransform.GetComponentInParent<Arena>() : null;
+            if (parent != null && parent.GetComponentInChildren<BuildCameraPoint>(true) is { } existing)
+            {
+                Selection.activeGameObject = existing.gameObject; // one per arena: select the one it has
+                return;
+            }
+            var sv = SceneView.lastActiveSceneView;
+            var go = new GameObject("BuildCameraPoint");
+            if (parent != null) go.transform.SetParent(parent.transform, true);
+            go.transform.position = sv != null ? sv.pivot : parent != null ? parent.transform.position : Vector3.zero;
+            go.AddComponent<BuildCameraPoint>();
+            Undo.RegisterCreatedObjectUndo(go, "Add Build Camera Point");
+            Selection.activeGameObject = go;
+        }
+
         [MenuItem(Menu + "Add Test Dummy", priority = 22)]
         public static void AddTestDummy()
         {

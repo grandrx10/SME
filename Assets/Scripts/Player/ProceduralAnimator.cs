@@ -30,7 +30,9 @@ namespace SuddenMageEncounter
         readonly List<(Transform t, Quaternion r, Vector3 p)> _bind = new();
         bool _initialised;
 
-        float _phase, _lean, _sideLean, _airW, _moveW, _poseW, _twist;
+        float _phase, _lean, _sideLean, _airW, _moveW, _poseW, _twist, _kneelW, _crouchW;
+        /// <summary>Degrees the body leans forward while crouched.</summary>
+        const float CrouchLean = 14f;
         Vector3 _footL, _footR;
         SpellPose _lastPose;
         Key _lastKey;
@@ -154,9 +156,9 @@ namespace SuddenMageEncounter
         static readonly Key[] CastFoldKeys =
         {
             new(0.00f, new(0.55f, -0.05f, 0.33f), PalmsIn, M(new(0.55f, -0.05f, 0.33f)), PalmsIn),
-            new(0.28f, new(0.6f, -0.3f, 0.3f), new(0f, -0.6f, 1f), M(new(0.6f, -0.3f, 0.3f)), new(0f, -0.6f, 1f)),
-            new(0.48f, new(0.05f, 0.16f, 0.5f), new(-0.25f, 0.45f, 1f), M(new(0.05f, 0.16f, 0.5f)), new(0.25f, 0.45f, 1f)),
-            new(0.70f, new(0.05f, 0.15f, 0.5f), new(-0.25f, 0.45f, 1f), M(new(0.05f, 0.15f, 0.5f)), new(0.25f, 0.45f, 1f)),
+            new(0.14f, new(0.6f, -0.3f, 0.3f), new(0f, -0.6f, 1f), M(new(0.6f, -0.3f, 0.3f)), new(0f, -0.6f, 1f)),
+            new(0.24f, new(0.05f, 0.16f, 0.5f), new(-0.25f, 0.45f, 1f), M(new(0.05f, 0.16f, 0.5f)), new(0.25f, 0.45f, 1f)),
+            new(0.40f, new(0.05f, 0.15f, 0.5f), new(-0.25f, 0.45f, 1f), M(new(0.05f, 0.15f, 0.5f)), new(0.25f, 0.45f, 1f)),
         };
 
         // Ball of Flame: right hand raised over the head while it forms... then hurled forward
@@ -173,8 +175,8 @@ namespace SuddenMageEncounter
         static readonly Key[] HellfireKeys =
         {
             new(0.00f, new(0.2f, -0.1f, 0.4f), new(0f, -0.4f, 1f), new(-0.26f, -0.2f, 0.25f), new(0f, -0.6f, 0.6f)),
-            new(0.20f, new(0.18f, -0.3f, 0.62f), new(0f, -0.6f, 1f), new(-0.3f, -0.15f, 0.15f), new(-0.4f, -0.3f, 0.6f), -10f, 0.1f, 12f),
-            new(1.00f, new(0.22f, -0.28f, 0.64f), new(0f, -0.55f, 1f), new(-0.3f, -0.15f, 0.15f), new(-0.4f, -0.3f, 0.6f), -14f, 0.1f, 12f),
+            new(0.10f, new(0.18f, -0.3f, 0.62f), new(0f, -0.6f, 1f), new(-0.3f, -0.15f, 0.15f), new(-0.4f, -0.3f, 0.6f), -10f, 0.1f, 12f),
+            new(0.50f, new(0.22f, -0.28f, 0.64f), new(0f, -0.55f, 1f), new(-0.3f, -0.15f, 0.15f), new(-0.4f, -0.3f, 0.6f), -14f, 0.1f, 12f),
         };
         // Explosive Escape: glowing hands drawn back... CLAP out front
         static readonly Key[] FlameHandsKeys =
@@ -192,9 +194,9 @@ namespace SuddenMageEncounter
         static readonly Key[] JudgmentCastKeys =
         {
             new(0.00f, new(0.24f, 0.5f, 0.2f), new(0f, 1f, 0.3f), M(new(0.24f, 0.5f, 0.2f)), new(0f, 1f, 0.3f), 0f, 0f, -8f),
-            new(0.25f, new(0.2f, 0.62f, 0.12f), new(0f, 1f, 0.1f), M(new(0.2f, 0.62f, 0.12f)), new(0f, 1f, 0.1f), 0f, 0f, -12f),
-            new(1.20f, new(0.2f, 0.62f, 0.12f), new(0f, 1f, 0.1f), M(new(0.2f, 0.62f, 0.12f)), new(0f, 1f, 0.1f), 0f, 0f, -12f),
-            new(1.35f, new(0.22f, -0.2f, 0.5f), new(0f, -0.6f, 1f), M(new(0.22f, -0.2f, 0.5f)), new(0f, -0.6f, 1f), 0f, 0.12f, 16f),
+            new(0.15f, new(0.2f, 0.62f, 0.12f), new(0f, 1f, 0.1f), M(new(0.2f, 0.62f, 0.12f)), new(0f, 1f, 0.1f), 0f, 0f, -12f),
+            new(0.80f, new(0.2f, 0.62f, 0.12f), new(0f, 1f, 0.1f), M(new(0.2f, 0.62f, 0.12f)), new(0f, 1f, 0.1f), 0f, 0f, -12f),
+            new(0.95f, new(0.22f, -0.2f, 0.5f), new(0f, -0.6f, 1f), M(new(0.22f, -0.2f, 0.5f)), new(0f, -0.6f, 1f), 0f, 0.12f, 16f),
         };
         // Tug: right arm reaching out, fingers open... then yanked back to the chest
         static readonly Key[] TugHoldKeys =
@@ -311,6 +313,268 @@ namespace SuddenMageEncounter
             new(1.90f, new(0.25f, -0.32f, -0.22f), new(0f, -0.6f, -1f), M(new(0.25f, -0.32f, -0.22f)), new(0f, -0.6f, -1f), 0f, 0.12f, 24f),
         };
 
+        // ---- Blade: built from BladeMotion (the same cut the sword follows), sampled densely so it flows ----
+        // Severance: rushing in, both hands on the sword, held low on the left
+        static readonly Key[] SeveranceDashKeys = BladeKeys(SpellPose.SeveranceDash, 0f);
+        // ...then one diagonal cut, bottom left to top right, and its follow-through
+        static readonly Key[] SeveranceSlashKeys = BladeKeys(SpellPose.SeveranceSlash, BladeMotion.Sweep + BladeMotion.Settle);
+        // Flowing Cut: down on one knee, both hands on the sword low on the left, ready to draw
+        static readonly Key[] FlowChargeKeys = BladeKeys(SpellPose.FlowCharge, 0f);
+        // ...the same cut as it flashes along, then the right arm swings out, the sword pointing on to the right
+        static readonly Key[] FlowStrikeKeys = BladeKeys(SpellPose.FlowStrike, BladeMotion.Sweep + BladeMotion.Settle);
+
+        /// <summary>Keyframes every 1/60 s from 0 to <paramref name="until"/> (one key for a held pose).</summary>
+        static Key[] BladeKeys(SpellPose pose, float until)
+        {
+            int n = Mathf.Max(1, Mathf.CeilToInt(until * 60f) + 1);
+            var keys = new Key[n];
+            for (int i = 0; i < n; i++)
+            {
+                float t = n == 1 ? 0f : until * i / (n - 1);
+                var f = BladeMotion.Sample(pose, t);
+                Vector3 fingers = BladeMotion.FingerDir(f.blade);
+                keys[i] = new Key(t, f.hand, fingers, f.left, fingers, f.twist, f.drop, f.lean);
+            }
+            return keys;
+        }
+
+        // ---- Hammer: built from HammerMotion (the same swing the hammer follows), both hands on the handle ----
+        // (built on first use, not in a static initializer: the hand spacing is read from the hammer prefab, and
+        // Unity won't load resources while a MonoBehaviour is being constructed)
+        static Key[] _hammerDrag, _hammerRise, _hammerLeap, _hammerSlam;
+        // Rising Hammer: rushing in, the hammer dragged behind on the left...
+        static Key[] HammerDragKeys => _hammerDrag ??= HammerKeys(SpellPose.HammerDrag, 0f);
+        // ...then brought up from behind and swung upwards
+        static Key[] HammerRiseKeys => _hammerRise ??= HammerKeys(SpellPose.HammerRise, HammerMotion.RiseSwing + HammerMotion.RiseSettle);
+        // Descending Hammer: down on one knee, then in the air, the hammer up behind the head...
+        static Key[] HammerLeapKeys => _hammerLeap ??= HammerKeys(SpellPose.HammerLeap, SpellPlans.HammerCrouch + 0.1f);
+        // ...brought straight down in front on landing
+        static Key[] HammerSlamKeys => _hammerSlam ??= HammerKeys(SpellPose.HammerSlam, HammerMotion.SlamSwing + HammerMotion.SlamSettle);
+
+        /// <summary>Keyframes every 1/60 s from 0 to <paramref name="until"/> (one key for a held pose).</summary>
+        /// <summary>
+        /// The way a hand gripping a handle (along <paramref name="shaft"/>) points: straight on from the shoulder
+        /// through the wrist, squared to the handle, so the wrist stays straight however the hammer is held.
+        /// </summary>
+        static Vector3 GripFingers(Vector3 hand, Vector3 shoulder, Vector3 shaft)
+        {
+            Vector3 d = Vector3.ProjectOnPlane(hand - shoulder, shaft);
+            return d.sqrMagnitude > 1e-4f ? d.normalized : BladeMotion.FingerDir(shaft);
+        }
+
+        static Key[] HammerKeys(SpellPose pose, float until)
+        {
+            int n = Mathf.Max(1, Mathf.CeilToInt(until * 60f) + 1);
+            var keys = new Key[n];
+            for (int i = 0; i < n; i++)
+            {
+                float t = n == 1 ? 0f : until * i / (n - 1);
+                var f = HammerMotion.Sample(pose, t);
+                // each hand carries on the line of its own forearm, wrapped round the handle (no bent wrists)
+                Vector3 r = GripFingers(f.Right, new Vector3(0.17f, 0.06f, -0.02f), f.shaft);
+                Vector3 l = GripFingers(f.Left, new Vector3(-0.17f, 0.06f, -0.02f), f.shaft);
+                keys[i] = new Key(t, f.Right, r, f.Left, l, f.twist, f.drop, f.lean);
+            }
+            return keys;
+        }
+
+        // ---- Attraction / Repulsion ----
+        // Attraction: the left hand goes up, then is held out in front, palm guiding the ball (Repulsion: mirrored)
+        static readonly Key[] AttractKeys =
+        {
+            new(0.00f, new(0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), new(-0.22f, -0.2f, 0.25f), new(0f, -0.5f, 1f)),
+            new(0.25f, new(0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), new(-0.2f, 0.5f, 0.18f), new(0f, 1f, 0.2f), 10f, 0f, -4f),
+            new(0.45f, new(0.22f, -0.36f, 0.12f), new(0f, -1f, 0.3f), new(-0.16f, 0.2f, 0.58f), new(0f, 0.3f, 1f), 6f, 0f, 4f),
+            new(4.30f, new(0.22f, -0.36f, 0.12f), new(0f, -1f, 0.3f), new(-0.16f, 0.18f, 0.58f), new(0f, 0.3f, 1f), 6f, 0f, 4f),
+        };
+        static readonly Key[] RepelKeys = Mirror(AttractKeys);
+        // the fused ball: both hands either side of it as it swells, then thrust out after it
+        static readonly Key[] FuseKeys =
+        {
+            new(0.00f, new(0.2f, 0f, 0.4f), new(-0.5f, 0f, 1f), M(new(0.2f, 0f, 0.4f)), new(0.5f, 0f, 1f), 0f, 0.05f, 2f),
+            new(0.30f, new(0.34f, 0.06f, 0.55f), new(-1f, 0f, 0.4f), M(new(0.34f, 0.06f, 0.55f)), new(1f, 0f, 0.4f), 0f, 0.1f, -2f),
+            new(2.00f, new(0.36f, 0.08f, 0.5f), new(-1f, 0f, 0.4f), M(new(0.36f, 0.08f, 0.5f)), new(1f, 0f, 0.4f), 0f, 0.12f, -6f),
+            new(2.12f, new(0.16f, 0.06f, 0.7f), Fwd, M(new(0.16f, 0.06f, 0.7f)), Fwd, 0f, 0.08f, 12f),
+        };
+
+        // ---- The Hierophant: both palms up and out, framing the wall... then pushed out as it appears ----
+        static readonly Key[] HierophantHoldKeys =
+        {
+            new(0f, new(0.26f, 0.12f, 0.42f), new(0f, 1f, 0.25f), M(new(0.26f, 0.12f, 0.42f)), new(0f, 1f, 0.25f), 0f, 0f, 2f),
+        };
+        static readonly Key[] HierophantCastKeys =
+        {
+            new(0.00f, new(0.26f, 0.12f, 0.42f), new(0f, 1f, 0.25f), M(new(0.26f, 0.12f, 0.42f)), new(0f, 1f, 0.25f), 0f, 0f, 2f),
+            new(0.18f, new(0.24f, 0.16f, 0.66f), new(0f, 1f, 0.15f), M(new(0.24f, 0.16f, 0.66f)), new(0f, 1f, 0.15f), 0f, 0.03f, 8f),
+            new(0.50f, new(0.24f, 0.16f, 0.64f), new(0f, 1f, 0.15f), M(new(0.24f, 0.16f, 0.64f)), new(0f, 1f, 0.15f), 0f, 0.03f, 6f),
+        };
+        // ---- The Lovers: the right hand flung out and held out along the beam, the left hand on the heart ----
+        static readonly Key[] LoversKeys =
+        {
+            new(0.00f, new(0.24f, 0.05f, 0.2f), new(0f, 0.5f, 1f), new(-0.1f, 0.12f, 0.22f), new(0.6f, 0.6f, 0.4f), -6f, 0f, 2f),
+            new(0.15f, new(0.14f, 0.16f, 0.64f), Fwd, new(-0.06f, 0.1f, 0.24f), new(0.6f, 0.6f, 0.4f), 8f, 0f, 6f),
+            new(0.40f, new(0.14f, 0.14f, 0.62f), Fwd, new(-0.06f, 0.1f, 0.24f), new(0.6f, 0.6f, 0.4f), 6f, 0f, 4f),
+        };
+
+        // ---- Rock Swarm: a scoop down... both hands flung up into the air as the rocks rise ----
+        static readonly Key[] SwarmRaiseKeys =
+        {
+            new(0.00f, new(0.22f, -0.15f, 0.36f), PalmsDown, M(new(0.22f, -0.15f, 0.36f)), PalmsDown, 0f, 0.05f, 4f),
+            new(0.08f, new(0.26f, -0.4f, 0.36f), new(0f, -1f, 0.4f), M(new(0.26f, -0.4f, 0.36f)), new(0f, -1f, 0.4f), 0f, 0.15f, 10f),
+            new(0.28f, new(0.3f, 0.66f, 0.1f), new(0.2f, 1f, 0.05f), M(new(0.3f, 0.66f, 0.1f)), new(-0.2f, 1f, 0.05f), 0f, 0f, -10f),
+            new(0.45f, new(0.3f, 0.64f, 0.12f), new(0.2f, 1f, 0.05f), M(new(0.3f, 0.64f, 0.12f)), new(-0.2f, 1f, 0.05f), 0f, 0f, -8f),
+        };
+        // ---- Ice Spike: down in a crouch, both palms flat on the ground... then standing back up ----
+        static readonly Key[] IceCrouchKeys =
+        {
+            new(0.00f, new(0.22f, -0.2f, 0.4f), PalmsDown, M(new(0.22f, -0.2f, 0.4f)), PalmsDown, 0f, 0.1f, 8f),
+            new(0.12f, new(0.22f, -0.82f, 0.44f), new(0f, -1f, 0.3f), M(new(0.22f, -0.82f, 0.44f)), new(0f, -1f, 0.3f), 0f, 0.5f, 22f),
+            new(SpellPlans.IceCrouch, new(0.22f, -0.84f, 0.44f), new(0f, -1f, 0.3f), M(new(0.22f, -0.84f, 0.44f)), new(0f, -1f, 0.3f), 0f, 0.5f, 22f),
+            new(SpellPlans.IceCrouch + 0.15f, new(0.24f, -0.2f, 0.42f), new(0f, -0.4f, 1f), M(new(0.24f, -0.2f, 0.42f)), new(0f, -0.4f, 1f), 0f, 0.08f, 6f),
+        };
+
+        // ---- The Hermit: down on one knee, both palms on the ground while the house goes up ----
+        static readonly Key[] HermitKneelKeys =
+        {
+            new(0.00f, new(0.22f, -0.2f, 0.4f), PalmsDown, M(new(0.22f, -0.2f, 0.4f)), PalmsDown, 0f, 0.1f, 8f),
+            new(0.12f, new(0.24f, -0.72f, 0.46f), new(0f, -1f, 0.3f), M(new(0.24f, -0.72f, 0.46f)), new(0f, -1f, 0.3f), 0f, 0.35f, 20f),
+            new(SpellPlans.HermitKneel + SpellPlans.HermitBuild, new(0.24f, -0.74f, 0.46f), new(0f, -1f, 0.3f), M(new(0.24f, -0.74f, 0.46f)), new(0f, -1f, 0.3f), 0f, 0.35f, 20f),
+        };
+        // ---- Wheel of Fortune: a flick of the right hand up at the die ----
+        static readonly Key[] WheelSpinKeys =
+        {
+            new(0.00f, new(0.22f, -0.1f, 0.3f), new(0f, 0.3f, 1f), new(-0.24f, -0.36f, 0.1f), new(0f, -1f, 0.3f)),
+            new(0.10f, new(0.14f, 0.58f, 0.18f), new(0.2f, 1f, 0.2f), new(-0.24f, -0.36f, 0.1f), new(0f, -1f, 0.3f), -6f, 0f, -4f),
+            new(0.30f, new(0.14f, 0.56f, 0.2f), new(0.3f, 1f, 0.3f), new(-0.24f, -0.36f, 0.1f), new(0f, -1f, 0.3f), -6f, 0f, -4f),
+        };
+        // ---- Justice: hands clasped together in front of the chest ----
+        static readonly Key[] ClaspKeys =
+        {
+            new(0.00f, new(0.3f, -0.1f, 0.25f), new(-0.3f, 0.4f, 1f), M(new(0.3f, -0.1f, 0.25f)), new(0.3f, 0.4f, 1f)),
+            new(0.15f, new(0.03f, 0.04f, 0.34f), new(-0.6f, 0.8f, 0.5f), M(new(0.03f, 0.04f, 0.34f)), new(0.6f, 0.8f, 0.5f), 0f, 0.04f, 4f),
+            new(0.40f, new(0.03f, 0.05f, 0.34f), new(-0.6f, 0.8f, 0.5f), M(new(0.03f, 0.05f, 0.34f)), new(0.6f, 0.8f, 0.5f), 0f, 0.04f, 4f),
+        };
+        // ---- The Hanged Man: the left arm raised straight up ----
+        static readonly Key[] LeftArmUpKeys =
+        {
+            new(0.00f, new(0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), new(-0.24f, -0.1f, 0.2f), new(0f, 0.5f, 1f)),
+            new(0.20f, new(0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), new(-0.17f, 0.66f, 0.04f), Vector3.up, 6f),
+            new(0.50f, new(0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), new(-0.17f, 0.66f, 0.04f), Vector3.up, 6f),
+        };
+        // ---- Death: the head tipped back (arms falling open)... then forward again ----
+        static readonly Key[] HeadBackKeys =
+        {
+            new(0.00f, new(0.24f, -0.35f, 0.1f), new(0f, -1f, 0.2f), M(new(0.24f, -0.35f, 0.1f)), new(0f, -1f, 0.2f)),
+            new(0.15f, new(0.36f, -0.3f, 0.05f), new(0.4f, -1f, 0f), M(new(0.36f, -0.3f, 0.05f)), new(-0.4f, -1f, 0f), 0f, 0f, -18f),
+            new(SpellPlans.DeathDelay, new(0.36f, -0.3f, 0.05f), new(0.4f, -1f, 0f), M(new(0.36f, -0.3f, 0.05f)), new(-0.4f, -1f, 0f), 0f, 0f, -18f),
+            new(SpellPlans.DeathDelay + 0.15f, new(0.26f, -0.32f, 0.12f), new(0f, -1f, 0.3f), M(new(0.26f, -0.32f, 0.12f)), new(0f, -1f, 0.3f), 0f, 0.04f, 6f),
+        };
+        // ---- The Devil: the right hand raised ----
+        static readonly Key[] RightHandUpKeys =
+        {
+            new(0.00f, new(0.24f, -0.1f, 0.2f), new(0f, 0.5f, 1f), new(-0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f)),
+            new(0.15f, new(0.17f, 0.62f, 0.1f), new(0f, 1f, 0.2f), new(-0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), -6f),
+            new(0.40f, new(0.17f, 0.6f, 0.1f), new(0f, 1f, 0.2f), new(-0.22f, -0.38f, 0.1f), new(0f, -1f, 0.3f), -6f),
+        };
+        // ---- The Tower: kneeling, hands together in prayer ----
+        static readonly Key[] TowerPrayKeys =
+        {
+            new(0.00f, new(0.2f, -0.05f, 0.25f), new(-0.3f, 0.8f, 0.5f), M(new(0.2f, -0.05f, 0.25f)), new(0.3f, 0.8f, 0.5f), 0f, 0.05f, 2f),
+            new(0.15f, new(0.03f, 0.1f, 0.3f), new(-0.3f, 1f, 0.15f), M(new(0.03f, 0.1f, 0.3f)), new(0.3f, 1f, 0.15f), 0f, 0.1f, 6f),
+            new(SpellPlans.TowerPray, new(0.03f, 0.12f, 0.3f), new(-0.3f, 1f, 0.15f), M(new(0.03f, 0.12f, 0.3f)), new(0.3f, 1f, 0.15f), 0f, 0.1f, 6f),
+        };
+        // ---- Undead Servitude / Summon Horde: crouched, hands held out over the ground ----
+        static readonly Key[] NecroCrouchKeys =
+        {
+            new(0.00f, new(0.24f, -0.2f, 0.4f), PalmsDown, M(new(0.24f, -0.2f, 0.4f)), PalmsDown, 0f, 0.1f, 6f),
+            new(0.15f, new(0.24f, -0.5f, 0.52f), new(0f, -0.7f, 1f), M(new(0.24f, -0.5f, 0.52f)), new(0f, -0.7f, 1f), 0f, 0.4f, 18f),
+            new(SpellPlans.ReviveTime, new(0.26f, -0.48f, 0.54f), new(0f, -0.7f, 1f), M(new(0.26f, -0.48f, 0.54f)), new(0f, -0.7f, 1f), 0f, 0.4f, 18f),
+        };
+        // ---- Infectious Bite: crouched, arms back, ready to spring ----
+        static readonly Key[] BiteCrouchKeys =
+        {
+            new(0.00f, new(0.25f, -0.3f, -0.15f), new(0f, -0.6f, -1f), M(new(0.25f, -0.3f, -0.15f)), new(0f, -0.6f, -1f), 0f, 0.35f, 24f),
+        };
+        // ---- Flame Thrower: both hands clasped, held straight out ----
+        static readonly Key[] FlameSpewKeys =
+        {
+            new(0.00f, new(0.18f, 0f, 0.4f), Fwd, M(new(0.18f, 0f, 0.4f)), Fwd, 0f, 0.05f, 4f),
+            new(0.12f, new(0.04f, 0.06f, 0.64f), Fwd, M(new(0.04f, 0.06f, 0.64f)), Fwd, 0f, 0.06f, 8f),
+        };
+        // ---- Grapple Hook: the left hand held out, pointing ----
+        static readonly Key[] GrapplePointKeys =
+        {
+            new(0.00f, new(0.22f, -0.3f, 0.1f), new(0f, -1f, 0.3f), new(-0.2f, 0f, 0.35f), Fwd),
+            new(SpellPlans.HookCast, new(0.22f, -0.3f, 0.1f), new(0f, -1f, 0.3f), new(-0.12f, 0.12f, 0.66f), Fwd, 10f, 0f, 4f),
+        };
+
+        // ---- Strength: both arms up, flexing ----
+        static readonly Key[] FlexKeys =
+        {
+            new(0.00f, new(0.24f, -0.3f, 0.1f), new(0f, -1f, 0.2f), M(new(0.24f, -0.3f, 0.1f)), new(0f, -1f, 0.2f)),
+            new(0.12f, new(0.36f, 0.22f, 0.02f), new(-0.4f, 1f, 0f), M(new(0.36f, 0.22f, 0.02f)), new(0.4f, 1f, 0f), 0f, 0.08f, -4f),
+            new(SpellPlans.StrengthFlex + 0.1f, new(0.36f, 0.24f, 0.02f), new(-0.4f, 1f, 0f), M(new(0.36f, 0.24f, 0.02f)), new(0.4f, 1f, 0f), 0f, 0.08f, -4f),
+        };
+        // ---- Icy Breath: leaning forward, breathing out ----
+        static readonly Key[] BreathLeanKeys =
+        {
+            new(0.00f, new(0.24f, -0.3f, 0.05f), new(0f, -1f, 0f), M(new(0.24f, -0.3f, 0.05f)), new(0f, -1f, 0f)),
+            new(SpellPlans.BreathLean, new(0.3f, -0.34f, -0.1f), new(0.3f, -1f, -0.3f), M(new(0.3f, -0.34f, -0.1f)), new(-0.3f, -1f, -0.3f), 0f, 0.05f, 16f),
+        };
+
+        // ---- the guns: these give the crouch and the lean; both hands go wherever GunMotion holds the gun ----
+        static readonly Vector3 GunR = new(0.14f, 0.1f, 0.38f), GunL = new(-0.02f, 0.12f, 0.55f);
+        static readonly Key[] ShotgunAimKeys =
+        {
+            new(0.00f, GunR, Fwd, GunL, Fwd, 0f, 0.02f, 2f),
+            new(SpellPlans.RachDelay, GunR, Fwd, GunL, Fwd, 0f, 0.06f, 6f),
+            new(SpellPlans.RachDelay + 0.06f, GunR, Fwd, GunL, Fwd, 0f, 0.04f, -10f),
+        };
+        static readonly Key[] RifleKneelKeys =
+        {
+            new(0.00f, GunR, Fwd, GunL, Fwd, 0f, 0.05f, 4f),
+            new(0.22f, GunR, Fwd, GunL, Fwd, 0f, SpellPlans.KneelDrop, 6f),
+        };
+        static readonly Key[] RifleFireKeys =
+        {
+            new(0.00f, GunR, Fwd, GunL, Fwd, 0f, SpellPlans.KneelDrop, 6f),
+            new(SpellPlans.SebWindup, GunR, Fwd, GunL, Fwd, 0f, SpellPlans.KneelDrop, 8f),
+            new(SpellPlans.SebWindup + 0.07f, GunR, Fwd, GunL, Fwd, 0f, SpellPlans.KneelDrop, -8f),
+            new(SpellPlans.SebWindup + SpellPlans.SebRecover, GunR, Fwd, GunL, Fwd, 0f, 0f, 0f),
+        };
+        // ---- Undying Grasp: down on one knee, palms over the ground... then hauled up as the hands come ----
+        static readonly Key[] GraspKneelKeys =
+        {
+            new(0.00f, new(0.24f, -0.2f, 0.4f), PalmsDown, M(new(0.24f, -0.2f, 0.4f)), PalmsDown, 0f, 0.1f, 6f),
+            new(0.14f, new(0.26f, -0.62f, 0.5f), new(0f, -0.9f, 0.6f), M(new(0.26f, -0.62f, 0.5f)), new(0f, -0.9f, 0.6f), 0f, SpellPlans.KneelDrop, 18f),
+            new(SpellPlans.GraspCast - 0.04f, new(0.26f, -0.64f, 0.5f), new(0f, -0.9f, 0.6f), M(new(0.26f, -0.64f, 0.5f)), new(0f, -0.9f, 0.6f), 0f, SpellPlans.KneelDrop, 18f),
+            new(SpellPlans.GraspCast + 0.12f, new(0.3f, 0.12f, 0.45f), new(0f, 1f, 0.5f), M(new(0.3f, 0.12f, 0.45f)), new(0f, 1f, 0.5f), 0f, 0.08f, 2f),
+        };
+
+        // ---- Skinwalker: down on one knee over the corpse, hands held out to it ----
+        static readonly Key[] SkinKneelKeys =
+        {
+            new(0.00f, new(0.24f, -0.15f, 0.35f), PalmsDown, M(new(0.24f, -0.15f, 0.35f)), PalmsDown, 0f, 0.1f, 6f),
+            new(0.22f, new(0.2f, -0.34f, 0.55f), new(0f, -0.5f, 1f), M(new(0.2f, -0.34f, 0.55f)), new(0f, -0.5f, 1f), 0f, SpellPlans.KneelDrop, 20f),
+            new(SpellPlans.SkinTime, new(0.24f, -0.24f, 0.56f), new(0f, -0.3f, 1f), M(new(0.24f, -0.24f, 0.56f)), new(0f, -0.3f, 1f), 0f, SpellPlans.KneelDrop, 16f),
+        };
+        // ---- Remote Flame Bomb: the right hand drawn back, then pressed out onto the spot ----
+        static readonly Key[] BombPlaceKeys =
+        {
+            new(0.00f, new(0.24f, -0.05f, 0.25f), Fwd, new(-0.22f, -0.36f, 0.1f), new(0f, -1f, 0.3f)),
+            new(0.12f, new(0.28f, 0.04f, 0.08f), Fwd, new(-0.22f, -0.36f, 0.1f), new(0f, -1f, 0.3f), 10f),
+            new(0.26f, new(0.12f, 0.02f, 0.68f), new(0f, 0.5f, 1f), new(-0.24f, -0.34f, 0.05f), new(0f, -1f, 0.2f), -14f, 0.04f, 10f),
+            new(0.40f, new(0.12f, 0f, 0.66f), new(0f, 0.5f, 1f), new(-0.24f, -0.34f, 0.05f), new(0f, -1f, 0.2f), -12f, 0.03f, 8f),
+        };
+        // ---- Flame Bomb Toss: both hands back by the hips, then thrown forward ----
+        static readonly Key[] BombTossKeys =
+        {
+            new(0.00f, new(0.24f, -0.2f, 0.15f), new(0f, -0.4f, 1f), M(new(0.24f, -0.2f, 0.15f)), new(0f, -0.4f, 1f)),
+            new(0.14f, new(0.27f, -0.2f, -0.15f), new(0f, -0.5f, -0.6f), M(new(0.27f, -0.2f, -0.15f)), new(0f, -0.5f, -0.6f), 0f, 0.1f, -6f),
+            new(0.28f, new(0.2f, 0.18f, 0.6f), new(0f, 0.6f, 1f), M(new(0.2f, 0.18f, 0.6f)), new(0f, 0.6f, 1f), 0f, 0.04f, 14f),
+            new(0.42f, new(0.2f, 0.16f, 0.6f), new(0f, 0.5f, 1f), M(new(0.2f, 0.16f, 0.6f)), new(0f, 0.5f, 1f), 0f, 0.03f, 10f),
+        };
+
         /// <summary>Keyframes of a pose, and when it starts / finishes fading back to rest.</summary>
         static (Key[] keys, float fadeStart, float fadeEnd, bool shake) PoseData(SpellPose p) => p switch
         {
@@ -318,7 +582,7 @@ namespace SuddenMageEncounter
             SpellPose.CastWall => (CastWallKeys, 0.5f, 0.75f, false),
             SpellPose.Gather => (GatherKeys, 0.95f, 1.15f, false),
             SpellPose.HoldFold => (HoldFoldKeys, 99f, 99f, true),
-            SpellPose.CastFold => (CastFoldKeys, 0.7f, 0.95f, false),
+            SpellPose.CastFold => (CastFoldKeys, 0.4f, 0.6f, false),
             SpellPose.Dash => (DashKeys, 0.3f, 0.5f, false),
             SpellPose.ShoveHold => (ShoveHoldKeys, 99f, 99f, true),
             SpellPose.ShoveCast => (ShoveCastKeys, 0.35f, 0.6f, false),
@@ -332,7 +596,7 @@ namespace SuddenMageEncounter
             SpellPose.HellfireDraw => (HellfireKeys, SpellPlans.HellfireDraw, SpellPlans.HellfireDraw + 0.2f, false),
             SpellPose.FlameHands => (FlameHandsKeys, 0.5f, 0.7f, false),
             SpellPose.JudgmentHold => (JudgmentHoldKeys, 99f, 99f, true),
-            SpellPose.JudgmentCast => (JudgmentCastKeys, 1.35f, 1.6f, false),
+            SpellPose.JudgmentCast => (JudgmentCastKeys, 0.95f, 1.2f, false),
             SpellPose.TugHold => (TugHoldKeys, 99f, 99f, true),
             SpellPose.TugCast => (TugCastKeys, 0.5f, 0.7f, false),
             SpellPose.Platform => (PlatformKeys, 0.5f, 0.7f, false),
@@ -350,6 +614,43 @@ namespace SuddenMageEncounter
             SpellPose.PortalHold => (PortalHoldKeys, 99f, 99f, true),
             SpellPose.PortalCast => (PortalCastKeys, 0.3f, 0.5f, false),
             SpellPose.SwiftCast => (SwiftKeys, SpellPlans.SwiftPrep + SpellPlans.SwiftTime, SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 0.2f, false),
+            SpellPose.SeveranceDash => (SeveranceDashKeys, SpellPlans.SeveranceTime + 0.1f, SpellPlans.SeveranceTime + 0.3f, false),
+            SpellPose.SeveranceSlash => (SeveranceSlashKeys, BladeMotion.Sweep + BladeMotion.Settle, BladeMotion.Sweep + BladeMotion.Settle + 0.25f, false),
+            SpellPose.FlowCharge => (FlowChargeKeys, 99f, 99f, false),
+            SpellPose.AttractCast => (AttractKeys, SpellPlans.OrbRaise + SpellPlans.ForceLife, SpellPlans.OrbRaise + SpellPlans.ForceLife + 0.25f, false),
+            SpellPose.RepelCast => (RepelKeys, SpellPlans.OrbRaise + SpellPlans.ForceLife, SpellPlans.OrbRaise + SpellPlans.ForceLife + 0.25f, false),
+            SpellPose.FuseCast => (FuseKeys, SpellPlans.FuseCharge + 0.4f, SpellPlans.FuseCharge + 0.7f, true),
+            SpellPose.FlowStrike => (FlowStrikeKeys, BladeMotion.Sweep + BladeMotion.Settle, BladeMotion.Sweep + BladeMotion.Settle + 0.25f, false),
+            SpellPose.HierophantHold => (HierophantHoldKeys, 99f, 99f, true),
+            SpellPose.HierophantCast => (HierophantCastKeys, SpellPlans.HierophantDelay, SpellPlans.HierophantDelay + 0.25f, false),
+            SpellPose.LoversBeam => (LoversKeys, 99f, 99f, false), // held until the beam ends
+            SpellPose.HammerDrag => (HammerDragKeys, SpellPlans.RisingTime + 0.1f, SpellPlans.RisingTime + 0.3f, false),
+            SpellPose.HammerRise => (HammerRiseKeys, HammerMotion.RiseSwing + HammerMotion.RiseSettle, HammerMotion.RiseSwing + HammerMotion.RiseSettle + 0.25f, false),
+            SpellPose.HammerLeap => (HammerLeapKeys, 99f, 99f, false), // held until it lands
+            SpellPose.HammerSlam => (HammerSlamKeys, HammerMotion.SlamSwing + HammerMotion.SlamSettle, HammerMotion.SlamSwing + HammerMotion.SlamSettle + 0.3f, false),
+            SpellPose.SwarmRaise => (SwarmRaiseKeys, 0.45f, 0.65f, false),
+            SpellPose.IceCrouch => (IceCrouchKeys, SpellPlans.IceCrouch + 0.15f, SpellPlans.IceCrouch + 0.35f, false),
+            SpellPose.HermitKneel => (HermitKneelKeys, SpellPlans.HermitKneel + SpellPlans.HermitBuild, SpellPlans.HermitKneel + SpellPlans.HermitBuild + 0.25f, false),
+            SpellPose.WheelSpin => (WheelSpinKeys, 0.3f, 0.5f, false),
+            SpellPose.Clasp => (ClaspKeys, SpellPlans.JusticeClasp + 0.1f, SpellPlans.JusticeClasp + 0.3f, false),
+            SpellPose.LeftArmUp => (LeftArmUpKeys, 0.4f, 0.6f, false),
+            SpellPose.HeadBack => (HeadBackKeys, SpellPlans.DeathDelay + 0.15f, SpellPlans.DeathDelay + 0.3f, true), // (the body twitching)
+            SpellPose.RightHandUp => (RightHandUpKeys, SpellPlans.DevilRaise + 0.15f, SpellPlans.DevilRaise + 0.35f, false),
+            SpellPose.TowerPray => (TowerPrayKeys, SpellPlans.TowerPray, SpellPlans.TowerPray + 0.3f, true),
+            SpellPose.NecroCrouch => (NecroCrouchKeys, SpellPlans.ReviveTime, SpellPlans.ReviveTime + 0.3f, true),
+            SpellPose.BiteCrouch => (BiteCrouchKeys, SpellPlans.BiteCrouch, SpellPlans.BiteCrouch + 0.1f, false),
+            SpellPose.FlameSpew => (FlameSpewKeys, 99f, 99f, true), // held until it's let go
+            SpellPose.GrapplePoint => (GrapplePointKeys, 99f, 99f, false), // held until the hook lets go
+
+            SpellPose.ShotgunAim => (ShotgunAimKeys, SpellPlans.RachDelay + 0.15f, SpellPlans.RachDelay + 0.35f, false),
+            SpellPose.RifleKneel => (RifleKneelKeys, 99f, 99f, false), // held until it fires, or it's let go
+            SpellPose.RifleFire => (RifleFireKeys, SpellPlans.SebWindup + SpellPlans.SebRecover * 0.5f, SpellPlans.SebWindup + SpellPlans.SebRecover + 0.15f, false),
+            SpellPose.GraspKneel => (GraspKneelKeys, SpellPlans.GraspCast + 0.15f, SpellPlans.GraspCast + 0.35f, true),
+            SpellPose.SkinKneel => (SkinKneelKeys, SpellPlans.SkinTime, SpellPlans.SkinTime + 0.3f, true),
+            SpellPose.BombPlace => (BombPlaceKeys, 0.4f, 0.6f, false),
+            SpellPose.BombToss => (BombTossKeys, 0.42f, 0.6f, false),
+            SpellPose.Flex => (FlexKeys, SpellPlans.StrengthFlex + 0.1f, SpellPlans.StrengthFlex + 0.3f, true),
+            SpellPose.BreathLean => (BreathLeanKeys, SpellPlans.BreathLean + SpellPlans.IceBreathTime, SpellPlans.BreathLean + SpellPlans.IceBreathTime + 0.2f, false),
             _ => (null, 0f, 0f, false),
         };
 
@@ -368,6 +669,8 @@ namespace SuddenMageEncounter
             _legR = MakeLimb(b, "Leg R", 1);
             foreach (var t in _model.GetComponentsInChildren<Transform>(true))
                 _bind.Add((t, t.localRotation, t.localPosition));
+            _modelScale0 = _model.localScale; // (the model's own scale: 0.5)
+            if (_head) _headScale0 = _head.localScale;
             if (_head) _eyeHeight = Vector3.Dot(_head.position + _head.rotation * Vector3.up * 0.15f - _model.position, _model.up);
             _initialised = _rigRoot && _pelvis && _chest && _head && _armL != null && _armR != null && _legL != null && _legR != null;
         }
@@ -401,10 +704,14 @@ namespace SuddenMageEncounter
             _moveW = Mathf.Lerp(_moveW, grounded ? Mathf.Clamp01(speed / 3f) : 0, k);
             _lean = Mathf.Lerp(_lean, grounded ? Mathf.Clamp(lv.z * 0.9f, -6f, 10f) : 0f, k);
             _sideLean = Mathf.Lerp(_sideLean, grounded ? Mathf.Clamp(-lv.x * 0.7f, -8f, 8f) : 0f, k);
+            // crouched: the same speed the owner's camera comes down at
+            _crouchW = Mathf.MoveTowards(_crouchW, (flags & NetState.Crouch) != 0 ? 1f : 0f, dt * 7f);
 
             // ---- reset to bind pose ----
             foreach (var (bt, br, bp) in _bind) { bt.localRotation = br; bt.localPosition = bp; }
             _model.localRotation = Quaternion.identity;
+            _model.localScale = _modelScale0; // (back to its own size; Strength grows it again at the end, after the pose is solved)
+            _head.localScale = _headScale0;
 
             Quaternion frame = _model.rotation;
             Vector3 origin = _model.position;
@@ -422,6 +729,7 @@ namespace SuddenMageEncounter
             // ---- spell gesture state ----
             var pose = _pc.ViewPose;
             float poseT = _pc.ViewPoseTime;
+
             var (keys, fadeStart, fadeEnd, shake) = PoseData(pose);
             float targetW = keys == null ? 0f : poseT < fadeStart ? 1f : 1f - Mathf.Clamp01((poseT - fadeStart) / Mathf.Max(0.01f, fadeEnd - fadeStart));
             if (pose != _lastPose && keys != null && _poseW < 0.05f) _poseW = 0.05f;
@@ -433,30 +741,83 @@ namespace SuddenMageEncounter
             _twist = Mathf.Lerp(_twist, keys != null ? key.twist * _poseW : 0f, 1f - Mathf.Exp(-20f * dt));
 
             // ---- hips & spine ----
-            _rigRoot.position += fUp * (bob - key.drop * _poseW);
-            float lean = _lean + _airW * 6f + key.lean * _poseW;
+            // a spell that crouches you anyway (Magical Barrier, Ice Spike...) doesn't sink you twice
+            float crouchDrop = PlayerMotor.CrouchDrop * _crouchW;
+            float drop = Mathf.Max(key.drop * _poseW, crouchDrop);
+            _rigRoot.position += fUp * (bob - drop);
+            float lean = _lean + _airW * 6f + key.lean * _poseW + CrouchLean * _crouchW * (1f - _poseW);
             _pelvis.rotation = Quaternion.AngleAxis(lean, fRight) * Quaternion.AngleAxis(_sideLean, fFwd) * _pelvis.rotation;
 
-            float p = Mathf.Clamp(pitch, -85f, 85f);
+            // (aiming Sebastian: level, down the sights, wherever the camera looks)
+            _levelW = Mathf.MoveTowards(_levelW, pose == SpellPose.RifleKneel || pose == SpellPose.RifleFire ? 1f : 0f, dt * 6f);
+            float p = Mathf.Clamp(pitch, -85f, 85f) * (1f - _levelW);
             _chest.rotation = Quaternion.AngleAxis(_twist, fUp) * Quaternion.AngleAxis(p * 0.3f - lean * 0.3f, fRight) * _chest.rotation;
-            _head.rotation = Quaternion.AngleAxis(-_twist * 0.8f, fUp) * Quaternion.AngleAxis(p * 0.55f - lean * 0.6f, fRight) * _head.rotation;
+            // Death: the head tips right back while it starts, then comes forward again
+            _headBack = Mathf.MoveTowards(_headBack, pose == SpellPose.HeadBack && poseT < SpellPlans.DeathDelay ? 1f : 0f, dt * 7f);
+            _head.rotation = Quaternion.AngleAxis(-_twist * 0.8f, fUp) * Quaternion.AngleAxis(p * 0.55f - lean * 0.6f - 45f * _headBack, fRight) * _head.rotation;
 
-            EyePosition = origin + fUp * _eyeHeight + (Quaternion.Euler(pitch, yaw, 0) * Vector3.forward) * 0.07f;
+            EyePosition = origin + fUp * (_eyeHeight - crouchDrop) +(Quaternion.Euler(pitch, yaw, 0) * Vector3.forward) * 0.07f;
 
             // ---- arms ----
             Vector3 chest = _chest.position;
+            if (GunMotion.Is(pose))
+            {
+                // both hands on the gun, wherever the aim points it
+                GunMotion.Hold(_pc, pose, poseT, out var trigger, out var gunRot);
+                GunMotion.Hands(GunMotion.Kind(pose), trigger, gunRot, out var gr, out var grd, out var gl, out var gld);
+                Quaternion inv = Quaternion.Inverse(frame);
+                key.r = inv * (gr - chest); key.rd = inv * grd;
+                key.l = inv * (gl - chest); key.ld = inv * gld;
+                _lastKey = key; // (what the arms fade back from)
+            }
             float tremble = shake ? Mathf.Sin(Time.time * 47f) * 0.012f : 0f;
             if (pose == SpellPose.CastFold && poseT < 0.3f) tremble = Mathf.Sin(Time.time * 61f) * 0.02f; // the ground buckling
             SolveArm(_armR, chest, key.r + Vector3.up * tremble, key.rd, fRight, fUp, fFwd);
             SolveArm(_armL, chest, key.l - Vector3.up * tremble, key.ld, fRight, fUp, fFwd);
 
             // ---- legs ----
+            // Flowing Cut's charge, Descending Hammer's crouch: down on the right knee (right foot back, left foot forward)
+            bool kneel = pose == SpellPose.FlowCharge || pose == SpellPose.HammerLeap && poseT < SpellPlans.HammerCrouch
+                || pose == SpellPose.HermitKneel || pose == SpellPose.TowerPray || pose == SpellPose.RifleKneel
+                || pose == SpellPose.RifleFire && poseT < SpellPlans.SebWindup + 0.07f
+                || pose == SpellPose.GraspKneel && poseT < SpellPlans.GraspCast
+                || pose == SpellPose.SkinKneel && poseT < SpellPlans.SkinTime;
+            _kneelW = Mathf.MoveTowards(_kneelW, kneel && grounded ? _poseW : 0f, dt * (pose == SpellPose.HammerLeap ? 10f : 6f));
             SolveLeg(_legL, ref _footL, 0f, dt, origin, frame, moveDir, speed, grounded);
             SolveLeg(_legR, ref _footR, Mathf.PI, dt, origin, frame, moveDir, speed, grounded);
 
             ApplyGetUp();
+            // Strength: everything but the head twice the size, standing on the same feet
+            _strongW = Mathf.MoveTowards(_strongW, _pc.Status.Value.Strong(WorldNet.Now) ? 1f : 0f, dt / SpellPlans.StrengthGrow);
+            float grow = 1f + (SpellPlans.StrengthSize - 1f) * (_strongW * _strongW * (3f - 2f * _strongW));
+            if (grow > 1.001f)
+            {
+                Vector3 feet = transform.position + Vector3.down * 0.95f;
+                _model.position = feet + (_model.position - feet) * grow;
+                _model.localScale = _modelScale0 * grow;
+                _head.localScale = _headScale0 / grow;
+            }
+            // folded (Warp Self) or crushed (The World) about the body's middle
+            Vector2 crush = SpellPlans.WorldFold(_pc.Status.Value, WorldNet.Now);
+            var squash = new Vector2(Fold.x * crush.x, Fold.y * crush.y);
+            if (squash != Vector2.one)
+            {
+                Vector3 s = new(squash.x, squash.y, squash.x), mid = transform.position;
+                _model.position = mid + Vector3.Scale(_model.position - mid, s);
+                _model.localScale = Vector3.Scale(_model.localScale, s);
+            }
+            if (_hitScale != grow) { _hitScale = grow; _pc.Hitboxes?.SetRadiusScale(grow); }
             _pc.Hitboxes?.Sync();
         }
+
+        /// <summary>The body squashed about its middle (x: width, y: height), on top of everything else. Set by Warp Self.</summary>
+        public Vector2 Fold { get; set; } = Vector2.one;
+
+        float _levelW, _headBack, _strongW, _hitScale = 1f;
+        Vector3 _modelScale0 = Vector3.one, _headScale0 = Vector3.one;
+
+        /// <summary>How far grown (Strength) the body is, 0..1.</summary>
+        public float StrongWeight => _strongW;
 
         // ---------------- getting up after a knockdown ----------------
 
@@ -513,7 +874,9 @@ namespace SuddenMageEncounter
                 if (t > keys[i].t) continue;
                 var a = keys[i - 1];
                 var b = keys[i];
-                float u = Mathf.SmoothStep(0f, 1f, (t - a.t) / Mathf.Max(0.0001f, b.t - a.t));
+                float u = (t - a.t) / Mathf.Max(0.0001f, b.t - a.t);
+                // keys far apart ease in and out; densely sampled motion (the Blade cut) is already smooth: straight through
+                if (b.t - a.t > 0.05f) u = Mathf.SmoothStep(0f, 1f, u);
                 return new Key(t, Vector3.Lerp(a.r, b.r, u), Vector3.Slerp(a.rd.normalized, b.rd.normalized, u),
                     Vector3.Lerp(a.l, b.l, u), Vector3.Slerp(a.ld.normalized, b.ld.normalized, u), Mathf.Lerp(a.twist, b.twist, u),
                     Mathf.Lerp(a.drop, b.drop, u), Mathf.Lerp(a.lean, b.lean, u));
@@ -542,6 +905,10 @@ namespace SuddenMageEncounter
             // elbows hang down and back at rest, out and down while casting
             Vector3 restPole = shoulder - fFwd * 0.6f - fUp * 0.3f + fRight * (arm.side * 0.1f);
             Vector3 castPole = shoulder - fUp * 0.6f + fRight * (arm.side * 0.45f) - fFwd * 0.1f;
+            // a hand raised above the shoulder: the elbow goes out and forward, as arms do going overhead (aimed down,
+            // the forearm folded back through the body)
+            float raised = Mathf.Clamp01((Vector3.Dot(target - shoulder, fUp) + 0.05f) / 0.25f);
+            castPole = Vector3.Lerp(castPole, shoulder + fRight * (arm.side * 0.5f) + fFwd * 0.4f + fUp * 0.15f, raised);
             Vector3 pole = Vector3.Lerp(restPole, castPole, _poseW);
             TwoBone(arm.upper, arm.lower, arm.end, target, pole);
             Aim(arm.end, arm.tip.position, arm.end.position + dir);
@@ -566,6 +933,7 @@ namespace SuddenMageEncounter
             Vector3 a = new(side * (stanceWidth + 0.03f), groundY + 0.28f - tuck, side < 0 ? 0.18f : -0.12f);
 
             Vector3 local = Vector3.Lerp(g, a, _airW);
+            if (_kneelW > 0.001f) local += new Vector3(side * 0.02f, 0.02f, side > 0 ? -0.44f : 0.2f) * _kneelW;
             Vector3 world = origin + frame * local;
 
             // plant on uneven ground
@@ -589,7 +957,7 @@ namespace SuddenMageEncounter
         // ---------------- IK helpers ----------------
 
         /// <summary>Rotate a bone so the point 'childPoint' (attached to it) points at target.</summary>
-        static void Aim(Transform bone, Vector3 childPoint, Vector3 target)
+        internal static void Aim(Transform bone, Vector3 childPoint, Vector3 target)
         {
             Vector3 from = childPoint - bone.position;
             Vector3 to = target - bone.position;
@@ -597,7 +965,7 @@ namespace SuddenMageEncounter
             bone.rotation = Quaternion.FromToRotation(from, to) * bone.rotation;
         }
 
-        static void TwoBone(Transform upper, Transform lower, Transform end, Vector3 target, Vector3 pole)
+        internal static void TwoBone(Transform upper, Transform lower, Transform end, Vector3 target, Vector3 pole)
         {
             Vector3 root = upper.position;
             float a = Vector3.Distance(root, lower.position);

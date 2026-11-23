@@ -25,6 +25,8 @@ namespace SuddenMageEncounter
         /// <summary>Voxels made in code (the practice arena) instead of a baked file.</summary>
         public VoxelArenaData RuntimeData { get; set; }
         public readonly List<SpawnPoint> Spawns = new();
+        /// <summary>What the camera circles while this arena builds (null = frame the whole arena).</summary>
+        public BuildCameraPoint BuildCamera { get; private set; }
         public string DisplayName => string.IsNullOrWhiteSpace(displayName) ? name.Replace("(Clone)", "").Trim() : displayName;
         public float KillY => transform.position.y + killHeight;
 
@@ -35,27 +37,38 @@ namespace SuddenMageEncounter
         {
             Current = this;
             GetComponentsInChildren(true, Spawns);
-            VoxelArenaData data = RuntimeData;
-            if (data == null)
+            BuildCamera = GetComponentInChildren<BuildCameraPoint>(true);
+            var data = LoadData();
+            if (data == null) return;
+            HideSources();
+            World = VoxelWorld.Create(transform, transform.position, data, true);
+        }
+
+        /// <summary>The arena's voxels (generated or baked), or null (with a warning) if it has none.</summary>
+        public VoxelArenaData LoadData()
+        {
+            if (RuntimeData != null) return RuntimeData;
+            if (voxelData == null)
             {
-                if (voxelData == null)
-                {
-                    Debug.LogWarning($"[SME] Arena '{name}' has no baked voxels: press Bake Voxels on its Arena component. Playing on the plain meshes.");
-                    return;
-                }
-                try { data = VoxelArenaData.FromBytes(voxelData.bytes); }
-                catch (System.Exception e)
-                {
-                    Debug.LogError($"[SME] Arena '{name}': couldn't read the baked voxels ({e.Message}). Re-bake it.");
-                    return;
-                }
+                Debug.LogWarning($"[SME] Arena '{name}' has no baked voxels: press Bake Voxels on its Arena component. Playing on the plain meshes.");
+                return null;
             }
+            try { return VoxelArenaData.FromBytes(voxelData.bytes); }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[SME] Arena '{name}': couldn't read the baked voxels ({e.Message}). Re-bake it.");
+                return null;
+            }
+        }
+
+        /// <summary>The meshes the voxels were baked from: hidden, and no longer solid.</summary>
+        public void HideSources()
+        {
             foreach (var mf in VoxelSources(transform))
             {
                 if (mf.TryGetComponent<Renderer>(out var r)) r.enabled = false;
                 foreach (var c in mf.GetComponents<Collider>()) if (!c.isTrigger) c.enabled = false;
             }
-            World = VoxelWorld.Create(transform, transform.position, data, true);
         }
 
         void OnDestroy()

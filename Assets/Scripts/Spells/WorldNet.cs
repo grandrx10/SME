@@ -13,7 +13,7 @@ namespace SuddenMageEncounter
     /// local. The server keeps this round's ops and replays them to anyone joining late.
     /// </summary>
     [DefaultExecutionOrder(-150)]
-    public class WorldNet : MonoBehaviour
+    public partial class WorldNet : MonoBehaviour
     {
         const string MsgOps = "sme_world";
         const string MsgHello = "sme_world_hello";
@@ -29,6 +29,12 @@ namespace SuddenMageEncounter
             Orb = 34, OrbEnd = 35, Quench = 36, HellfireQuench = 37, RockDouse = 38,
             Bubble = 39, BubbleHit = 40, BubbleEnd = 41, Tsunami = 42, TsunamiErase = 43, Wash = 44,
             Warp = 45, WarpEnd = 46, Portal = 47, PortalLink = 48, Swift = 49, SwiftEnd = 50,
+            PracticeLoad = 51, PracticeClose = 52,
+            BladeCut = 53, Wave = 54, WaveEnd = 55, Slash = 56, FlowCut = 57,
+            Force = 61, ForceMove = 62, ForceEnd = 63, PullSphere = 64, Fuse = 65, FuseLaunch = 66, FuseEnd = 67, Erase = 68,
+            Hierophant = 69, HierophantReflect = 70, Lovers = 71, LoversTether = 72, LoversEnd = 73, Chariot = 74, ChariotEnd = 75,
+            RepelBlast = 76, HammerSlam = 77, HammerHit = 78,
+            Swarm = 79, SwarmBump = 80, SwarmFly = 81, SwarmBreak = 82, IceSpike = 83, IceCrumble = 84,
             Fizzle = 60,
         }
 
@@ -52,7 +58,9 @@ namespace SuddenMageEncounter
         int _nextId = 1;
 
         // ---- live effects (every peer) ----
-        public class WallFx { public int id; public VoxelBody body; public double start; public int rise; public List<Vector3Int> cells; public List<ushort> values; }
+        public class WallFx { public int id; public VoxelBody body; public double start; public int rise; public List<Vector3Int> cells; public List<ushort> values;
+            /// <summary>Seconds it takes to rise (an Ice Spike shoots up faster than a wall).</summary>
+            public float time = SpellPlans.WallRise; }
         public class RockFx
         {
             public int id; public VoxelBody body; public ulong caster; public double start; public Vector3 home;
@@ -91,7 +99,13 @@ namespace SuddenMageEncounter
             /// <summary>Put out by water at this time (-1 = still burning).</summary>
             public double quenched = -1;
         }
-        public class JudgmentFx { public int id; public ulong caster; public Vector3 center; public double start; public JudgmentView view; }
+        /// <summary><see cref="kind"/>: <see cref="SpellPlans.ArcaneCircle"/> (Arcane Judgment) or <see cref="SpellPlans.TarotCircle"/> (Judgement).</summary>
+        public class JudgmentFx
+        {
+            public int id; public ulong caster; public Vector3 center, dir; public double start; public byte kind; public JudgmentView view;
+            /// <summary>Where the circle is (Judgement's slides along <see cref="dir"/>).</summary>
+            public Vector3 CenterAt(double now) => SpellPlans.JudgmentCenterAt(kind, center, dir, (float)(now - start));
+        }
 
         public readonly Dictionary<int, FireballFx> Fireballs = new();
         public readonly Dictionary<int, HellfireFx> Hellfires = new();
@@ -167,6 +181,79 @@ namespace SuddenMageEncounter
         public readonly Dictionary<int, WarpFx> Warps = new();
         public readonly Dictionary<int, PortalFx> Portals = new();
         public readonly List<SwiftFx> Swifts = new();
+
+        /// <summary>Severance's cut in flight (from <see cref="start"/>, along <see cref="dir"/>, rolled by <see cref="tilt"/>).</summary>
+        public class WaveFx { public int id; public ulong caster; public Vector3 origin, dir; public float tilt; public double start, ended = -1; public SeveranceView view; }
+        public readonly Dictionary<int, WaveFx> Waves = new();
+
+        /// <summary>
+        /// An Attraction (water) or Repulsion (flame) ball. Cast at <see cref="start"/>; out of the hand
+        /// <see cref="SpellPlans.OrbRaise"/> later. Where it is: <see cref="pos"/> at <see cref="posTime"/>, moving at <see cref="vel"/>.
+        /// </summary>
+        public class ForceFx
+        {
+            public int id; public ulong caster; public bool water; public double start, posTime, ended = -1;
+            public Vector3 pos, vel; public bool moved, cut; public ForceView view;
+            public Vector3 PositionAt(double now) => pos + vel * (float)System.Math.Max(0.0, now - posTime);
+        }
+        /// <summary>Attraction and Repulsion fused: the purple ball, forming from <see cref="start"/>, then flying.</summary>
+        public class FuseFx
+        {
+            public int id; public ulong caster; public double start, launchTime = -1, ended = -1;
+            public Vector3 origin, dir; public FuseView view;
+            public bool Launched => launchTime >= 0;
+        }
+        public readonly Dictionary<int, ForceFx> Forces = new();
+        public readonly Dictionary<int, FuseFx> Fuses = new();
+        /// <summary>(fuse id, caster object id, start) — the caster's owner throws it once it has formed.</summary>
+        public static event Action<int, ulong, double> FuseCharging;
+        /// <summary>(caster object id) — an Attraction / Repulsion ball is gone: its caster stops casting.</summary>
+        public static event Action<ulong> ForceEnded;
+
+        /// <summary>Where a fused ball is right now (in front of its caster while forming, then flying straight).</summary>
+        public static Vector3 FusePosition(FuseFx f, double now)
+        {
+            if (f.Launched)
+                return f.origin + f.dir * (SpellPlans.FuseSpeed * Mathf.Clamp((float)(now - f.launchTime), 0f, SpellPlans.FuseRange / SpellPlans.FuseSpeed));
+            var c = FindCombatant(f.caster);
+            float r = SpellPlans.FuseRadiusAt((float)(now - f.start));
+            return c != null ? SpellPlans.FuseHoldPoint(c.transform.position, c.ViewYaw, r) : f.origin;
+        }
+
+        /// <summary>The Hierophant's wall: stands from <see cref="up"/> for <see cref="SpellPlans.HierophantTime"/>, its face along <see cref="Rotation"/>.</summary>
+        public class HierophantFx
+        {
+            public int id; public ulong caster; public Vector3 center; public float yaw, pitch; public double up;
+            public HierophantView view;
+            public Quaternion Rotation => SpellPlans.PortalRotation(yaw, pitch);
+        }
+        /// <summary>
+        /// The Lovers: a beam thrown from <see cref="origin"/> along <see cref="dir"/> at <see cref="target"/> (homing),
+        /// tethered from <see cref="tether"/> on, until <see cref="ended"/> (at <see cref="endPoint"/>).
+        /// </summary>
+        public class LoversFx
+        {
+            public int id; public ulong caster, target; public Vector3 origin, dir, endPoint; public double start, tether = -1, ended = -1;
+            public LoversView view;
+            public bool Active => ended < 0;
+        }
+        /// <summary>The Chariot charging along <see cref="dir"/>; <see cref="crashed"/> into something tall at <see cref="point"/>.</summary>
+        public class ChariotFx { public ulong caster; public Vector3 dir, point; public double start, ended = -1; public bool crashed; public ChariotView view; }
+
+        public readonly Dictionary<int, HierophantFx> Hierophants = new();
+        public readonly Dictionary<int, LoversFx> Tethers = new();
+        public readonly List<ChariotFx> Chariots = new();
+        /// <summary>(caster object id, crashed) — a Chariot charge is over; its owner stops running.</summary>
+        public static event Action<ulong, bool> ChariotEnded;
+        /// <summary>(caster object id) — a Lovers beam ended (missed, blocked, snapped or cancelled); its owner's card goes on cooldown.</summary>
+        public static event Action<ulong> LoversEnded;
+
+        /// <summary>This player's Lovers beam that's still going (thrown or tethered), if any.</summary>
+        public LoversFx ActiveTether(ulong caster)
+        {
+            foreach (var t in Tethers.Values) if (t.caster == caster && t.Active) return t;
+            return null;
+        }
 
         /// <summary>(warp id, caster object id, how) — a warp ended early; its owner stops it.</summary>
         public static event Action<int, ulong, byte> WarpEnded;
@@ -301,6 +388,19 @@ namespace SuddenMageEncounter
         {
             var nm = NetworkManager.Singleton;
             if (client == nm.LocalClientId) return;
+            _one.Clear();
+            _one.Add(client);
+            SendBatch(_one, ops, replay);
+        }
+
+        readonly List<ulong> _one = new(1), _remotes = new();
+        readonly List<byte[]> _single = new(1);
+
+        /// <summary>Serialized once, however many clients it goes to.</summary>
+        void SendBatch(List<ulong> clients, List<byte[]> ops, bool replay)
+        {
+            if (clients.Count == 0) return;
+            var nm = NetworkManager.Singleton;
             int size = 16;
             foreach (var o in ops) size += o.Length + 4;
             using var w = new FastBufferWriter(size, Allocator.Temp, size + 64);
@@ -311,7 +411,7 @@ namespace SuddenMageEncounter
                 w.WriteValueSafe(o.Length);
                 w.WriteBytesSafe(o, o.Length);
             }
-            nm.CustomMessagingManager.SendNamedMessage(MsgOps, client, w, NetworkDelivery.ReliableFragmentedSequenced);
+            nm.CustomMessagingManager.SendNamedMessage(MsgOps, clients, w, NetworkDelivery.ReliableFragmentedSequenced);
         }
 
         /// <summary>Server: record, send to everyone, apply here.</summary>
@@ -319,9 +419,12 @@ namespace SuddenMageEncounter
         {
             _log.Add(op);
             var nm = NetworkManager.Singleton;
-            var one = new List<byte[]> { op };
+            _remotes.Clear();
             foreach (var c in nm.ConnectedClientsIds)
-                if (c != nm.LocalClientId) SendBatch(c, one, false);
+                if (c != nm.LocalClientId) _remotes.Add(c);
+            _single.Clear();
+            _single.Add(op);
+            SendBatch(_remotes, _single, false);
             ApplyBytes(op);
         }
 
@@ -578,13 +681,13 @@ namespace SuddenMageEncounter
 
         // ---------------- arcane judgment ----------------
 
-        public static int ServerJudgment(ulong caster, Vector3 center)
+        public static int ServerJudgment(ulong caster, Vector3 center, Vector3 dir, byte kind)
         {
             var i = Instance;
             if (i == null || !IsServer) return 0;
             int id = i._nextId++;
-            var w = NewOp(Op.Judgment, 40);
-            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now);
+            var w = NewOp(Op.Judgment, 56);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now); w.WriteValueSafe(kind); w.WriteValueSafe(dir);
             i.Broadcast(Finish(ref w));
             return id;
         }
@@ -596,6 +699,200 @@ namespace SuddenMageEncounter
             if (i == null || !IsServer) return;
             var w = NewOp(Op.Fizzle, 24);
             w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Builds (or rebuilds, fresh) the practice chamber in this slot on every peer.</summary>
+        public static void ServerPracticeLoad(int slot)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.PracticeLoad, 4);
+            w.WriteValueSafe((byte)slot);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- Blade ----------------
+
+        /// <summary>A blade cut through these voxels (they come apart, flung along <paramref name="dir"/>).</summary>
+        public static void ServerBladeCut(List<Vector3Int> cells, Vector3 dir)
+        {
+            var i = Instance;
+            if (i == null || !IsServer || cells.Count == 0) return;
+            var w = NewOp(Op.BladeCut, 16 + cells.Count * 6);
+            WriteCells(ref w, cells);
+            w.WriteValueSafe(dir);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Severance's cut leaves the blade at <paramref name="start"/>.</summary>
+        public static int ServerWave(ulong caster, Vector3 origin, Vector3 dir, float tilt, double start)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Wave, 64);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(origin); w.WriteValueSafe(dir); w.WriteValueSafe(tilt); w.WriteValueSafe(start);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        /// <summary>Severance's cut is spent (voxels, a barrier, cut by another blade) before its full 10 m.</summary>
+        public static void ServerWaveEnd(int id)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.WaveEnd, 24);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>One strike of a blade flurry: a white slash frame across <paramref name="point"/>.</summary>
+        public static void ServerSlash(Vector3 point, Vector3 dir, float scale)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Slash, 32);
+            w.WriteValueSafe(point); w.WriteValueSafe(dir); w.WriteValueSafe(scale);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- Weapon ----------------
+
+        /// <summary>Descending Hammer lands: these cells are smashed out (the bowl), and the shockwave rings out <paramref name="radius"/> across the surface.</summary>
+        public static void ServerHammerSlam(List<Vector3Int> cells, Vector3 point, Vector3 normal, float radius)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.HammerSlam, 48 + cells.Count * 6);
+            WriteCells(ref w, cells);
+            w.WriteValueSafe(point); w.WriteValueSafe(normal); w.WriteValueSafe(radius);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Rising Hammer connects: an impact on <paramref name="point"/>, thrown along <paramref name="dir"/>.</summary>
+        public static void ServerHammerHit(Vector3 point, Vector3 dir)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.HammerHit, 32);
+            w.WriteValueSafe(point); w.WriteValueSafe(dir);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Flowing Cut: the speed lines along the way from <paramref name="from"/> to <paramref name="to"/> (feet).</summary>
+        public static void ServerFlowCut(ulong caster, Vector3 from, Vector3 to)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.FlowCut, 40);
+            w.WriteValueSafe(caster); w.WriteValueSafe(from); w.WriteValueSafe(to);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- Attraction / Repulsion / the fused ball ----------------
+
+        public static int ServerForce(ulong caster, bool water)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Force, 32);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(water); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        public static void ServerForceMove(int id, Vector3 pos, Vector3 vel)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.ForceMove, 40);
+            w.WriteValueSafe(id); w.WriteValueSafe(pos); w.WriteValueSafe(vel); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <param name="cut">Cut short (thrown, put out, fused): it dissipates. Otherwise it simply ran its course.</param>
+        public static void ServerForceEnd(int id, bool cut)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.ForceEnd, 24);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now); w.WriteValueSafe(cut);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Repulsion going off (look only; voxels, burns and knockback are separate ops / server rules).</summary>
+        public static void ServerRepelBlast(Vector3 point, float radius)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.RepelBlast, 20);
+            w.WriteValueSafe(point);
+            w.WriteValueSafe(radius);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Tears out (negative push: sucked in) or blasts out (positive) every destructible voxel in a ball.</summary>
+        public static void ServerPullSphere(Vector3Int center, int r4, float push, Vector3 extra)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.PullSphere, 32);
+            WriteCell(ref w, center);
+            w.WriteValueSafe((byte)Mathf.Clamp(r4, 1, 255));
+            w.WriteValueSafe((sbyte)Mathf.Clamp(Mathf.RoundToInt(push), -127, 127));
+            w.WriteValueSafe(extra);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static int ServerFuse(ulong caster)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Fuse, 24);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        public static void ServerFuseLaunch(int id, Vector3 origin, Vector3 dir)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.FuseLaunch, 40);
+            w.WriteValueSafe(id); w.WriteValueSafe(origin); w.WriteValueSafe(dir); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerFuseEnd(int id)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.FuseEnd, 24);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Erases a ball of voxels (as Arcane Judgment does: they turn to void and float off).</summary>
+        public static void ServerErase(Vector3Int center, int r4)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Erase, 16);
+            WriteCell(ref w, center);
+            w.WriteValueSafe((byte)Mathf.Clamp(r4, 1, 255));
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>Removes the practice chamber in this slot on every peer.</summary>
+        public static void ServerPracticeClose(int slot)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.PracticeClose, 4);
+            w.WriteValueSafe((byte)slot);
             i.Broadcast(Finish(ref w));
         }
 
@@ -693,12 +990,12 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        public static void ServerBubble(ulong caster)
+        public static void ServerBubble(ulong caster, double start)
         {
             var i = Instance;
             if (i == null || !IsServer) return;
             var w = NewOp(Op.Bubble, 20);
-            w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            w.WriteValueSafe(caster); w.WriteValueSafe(start);
             i.Broadcast(Finish(ref w));
         }
 
@@ -782,6 +1079,76 @@ namespace SuddenMageEncounter
             if (i == null || !IsServer) return;
             var w = NewOp(Op.PortalLink, 20);
             w.WriteValueSafe(a); w.WriteValueSafe(b); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        // ---------------- The Hierophant / The Lovers / The Chariot ----------------
+
+        public static int ServerHierophant(ulong caster, Vector3 center, float yaw, float pitch, double up)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Hierophant, 48);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(yaw); w.WriteValueSafe(pitch); w.WriteValueSafe(up);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        /// <summary>Something bounced off a Hierophant wall here (id 0: just the mahogany burst).</summary>
+        public static void ServerHierophantReflect(int id, Vector3 point)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.HierophantReflect, 20);
+            w.WriteValueSafe(id); w.WriteValueSafe(point);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static int ServerLovers(ulong caster, ulong target, Vector3 origin, Vector3 dir, double start)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return 0;
+            int id = i._nextId++;
+            var w = NewOp(Op.Lovers, 56);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(target); w.WriteValueSafe(origin); w.WriteValueSafe(dir); w.WriteValueSafe(start);
+            i.Broadcast(Finish(ref w));
+            return id;
+        }
+
+        public static void ServerLoversTether(int id)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.LoversTether, 16);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerLoversEnd(int id, Vector3 point)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.LoversEnd, 28);
+            w.WriteValueSafe(id); w.WriteValueSafe(Now); w.WriteValueSafe(point);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerChariot(ulong caster, Vector3 dir, double start)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.Chariot, 32);
+            w.WriteValueSafe(caster); w.WriteValueSafe(dir); w.WriteValueSafe(start);
+            i.Broadcast(Finish(ref w));
+        }
+
+        public static void ServerChariotEnd(ulong caster, bool crashed, Vector3 point)
+        {
+            var i = Instance;
+            if (i == null || !IsServer) return;
+            var w = NewOp(Op.ChariotEnd, 32);
+            w.WriteValueSafe(caster); w.WriteValueSafe(Now); w.WriteValueSafe(crashed); w.WriteValueSafe(point);
             i.Broadcast(Finish(ref w));
         }
 
@@ -945,6 +1312,8 @@ namespace SuddenMageEncounter
             var removed = new List<VoxelWorld.RemovedCell>();
             var islands = new List<List<VoxelWorld.RemovedCell>>();
 
+            // Rock Swarm and Ice Spike (WorldNet.Ground.cs); everything else here
+            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r))
             switch (op)
             {
                 case Op.RemoveSphere:
@@ -1091,6 +1460,13 @@ namespace SuddenMageEncounter
                     world.Singe(c, r4, all);
                     break;
                 }
+                case Op.RepelBlast:
+                {
+                    r.ReadValueSafe(out Vector3 point);
+                    r.ReadValueSafe(out float radius);
+                    if (!Debris.Suppressed) RepulsionBlast.Create(point, radius);
+                    break;
+                }
                 case Op.FlameBurst:
                 {
                     r.ReadValueSafe(out Vector3 point);
@@ -1165,6 +1541,7 @@ namespace SuddenMageEncounter
                 {
                     var fx = new JudgmentFx();
                     r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.start);
+                    r.ReadValueSafe(out fx.kind); r.ReadValueSafe(out fx.dir);
                     fx.view = JudgmentView.Create(fx);
                     Judgments[fx.id] = fx;
                     break;
@@ -1174,6 +1551,168 @@ namespace SuddenMageEncounter
                     r.ReadValueSafe(out ulong caster);
                     r.ReadValueSafe(out double t);
                     FizzledAt[caster] = t; // the views read it (missile orb, barrier, judgment circle, hellfire line, priestess sun)
+                    break;
+                }
+                case Op.PracticeLoad:
+                {
+                    r.ReadValueSafe(out byte slot);
+                    Practice.LoadLocal(slot);
+                    break;
+                }
+                case Op.PracticeClose:
+                {
+                    r.ReadValueSafe(out byte slot);
+                    Practice.CloseLocal(slot);
+                    break;
+                }
+                case Op.BladeCut:
+                {
+                    var cells = ReadCells(ref r);
+                    r.ReadValueSafe(out Vector3 dir);
+                    world.RemoveCells(cells, removed, true, islands);
+                    if (removed.Count > 0)
+                    {
+                        Vector3 mid = Vector3.zero;
+                        foreach (var rc in removed) mid += world.CellCenter(rc.cell);
+                        mid /= removed.Count;
+                        // the cut hurls what it hits: chunks flung on along the slash, tumbling, scattered out from it
+                        Debris.Spawn(world, removed, mid - dir * 0.8f, 8f, dir * 14f + Vector3.up * 6f, 2, null, 40);
+                        SlashFx.Create(mid, Vector3.Cross(Vector3.up, dir).sqrMagnitude > 1e-4f ? Vector3.Cross(Vector3.up, dir) : Vector3.right, 0.8f);
+                    }
+                    // anything cut loose (the top of a sliced pillar, a wall cut through) is shoved off along the slash too
+                    foreach (var island in islands)
+                    {
+                        Vector3 mid = Vector3.zero;
+                        foreach (var rc in island) mid += world.CellCenter(rc.cell);
+                        mid /= Mathf.Max(1, island.Count);
+                        Debris.Spawn(world, island, mid, 2.5f, dir * 9f + Vector3.up * 3.5f, 4);
+                    }
+                    islands.Clear();
+                    break;
+                }
+                case Op.Wave:
+                {
+                    var fx = new WaveFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.origin); r.ReadValueSafe(out fx.dir);
+                    r.ReadValueSafe(out fx.tilt); r.ReadValueSafe(out fx.start);
+                    if (!Debris.Suppressed) fx.view = SeveranceView.Create(fx);
+                    Waves[fx.id] = fx;
+                    break;
+                }
+                case Op.WaveEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    if (Waves.TryGetValue(id, out var fx) && fx.ended < 0) fx.ended = t;
+                    break;
+                }
+                case Op.Slash:
+                {
+                    r.ReadValueSafe(out Vector3 point);
+                    r.ReadValueSafe(out Vector3 dir);
+                    r.ReadValueSafe(out float scale);
+                    SlashFx.Create(point, dir, scale);
+                    if (!Debris.Suppressed) CameraRig.ShakeFrom(point, 0.12f, 0.08f);
+                    break;
+                }
+                case Op.Force:
+                {
+                    var fx = new ForceFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.water); r.ReadValueSafe(out fx.start);
+                    fx.posTime = fx.start;
+                    if (!Debris.Suppressed) fx.view = ForceView.Create(fx);
+                    Forces[fx.id] = fx;
+                    break;
+                }
+                case Op.ForceMove:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out Vector3 pos);
+                    r.ReadValueSafe(out Vector3 vel);
+                    r.ReadValueSafe(out double t);
+                    if (Forces.TryGetValue(id, out var fx)) { fx.pos = pos; fx.vel = vel; fx.posTime = t; fx.moved = true; }
+                    break;
+                }
+                case Op.ForceEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    r.ReadValueSafe(out bool cut);
+                    if (Forces.TryGetValue(id, out var fx) && fx.ended < 0) { fx.ended = t; fx.cut = cut; ForceEnded?.Invoke(fx.caster); }
+                    break;
+                }
+                case Op.PullSphere:
+                {
+                    var c = ReadCell(ref r);
+                    r.ReadValueSafe(out byte r4);
+                    r.ReadValueSafe(out sbyte push);
+                    r.ReadValueSafe(out Vector3 extra);
+                    world.RemoveSphere(c, r4, removed, islands);
+                    // these come often and in bulk: chunky clumps, and only a handful of them per break
+                    Debris.Spawn(world, removed, world.CellCenter(c), push, extra, 2, null, 24);
+                    break;
+                }
+                case Op.Fuse:
+                {
+                    var fx = new FuseFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start);
+                    var who = FindCombatant(fx.caster);
+                    fx.origin = who != null ? who.transform.position : Vector3.zero;
+                    if (!Debris.Suppressed) fx.view = FuseView.Create(fx);
+                    Fuses[fx.id] = fx;
+                    FuseCharging?.Invoke(fx.id, fx.caster, fx.start);
+                    break;
+                }
+                case Op.FuseLaunch:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out Vector3 origin);
+                    r.ReadValueSafe(out Vector3 dir);
+                    r.ReadValueSafe(out double t);
+                    if (Fuses.TryGetValue(id, out var fx)) { fx.origin = origin; fx.dir = dir; fx.launchTime = t; }
+                    break;
+                }
+                case Op.FuseEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    if (Fuses.TryGetValue(id, out var fx) && fx.ended < 0) fx.ended = t;
+                    break;
+                }
+                case Op.Erase:
+                {
+                    var c = ReadCell(ref r);
+                    r.ReadValueSafe(out byte r4);
+                    world.RemoveSphere(c, r4, removed, islands);
+                    // erased, not broken (as Arcane Judgment): it turns to void and floats off, shrinking
+                    if (removed.Count > 0 && !Debris.Suppressed) VoidRise.Spawn(world, removed);
+                    break;
+                }
+                case Op.HammerSlam:
+                {
+                    var cells = ReadCells(ref r);
+                    r.ReadValueSafe(out Vector3 point);
+                    r.ReadValueSafe(out Vector3 normal);
+                    r.ReadValueSafe(out float radius);
+                    world.RemoveCells(cells, removed, true, islands);
+                    // the bowl's rubble is blown up and out of it
+                    if (removed.Count > 0) Debris.Spawn(world, removed, point - normal * 0.6f, 7f, normal * 6f, 2, null, 70);
+                    if (!Debris.Suppressed) HammerShock.Create(point, normal, radius);
+                    break;
+                }
+                case Op.HammerHit:
+                {
+                    r.ReadValueSafe(out Vector3 point);
+                    r.ReadValueSafe(out Vector3 dir);
+                    if (!Debris.Suppressed) HammerImpact.Create(point, dir);
+                    break;
+                }
+                case Op.FlowCut:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out Vector3 from);
+                    r.ReadValueSafe(out Vector3 to);
+                    FlowStreak.Create(from, to);
                     break;
                 }
                 case Op.JudgmentErase:
@@ -1345,6 +1884,71 @@ namespace SuddenMageEncounter
                     }
                     break;
                 }
+                case Op.Hierophant:
+                {
+                    var fx = new HierophantFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.center);
+                    r.ReadValueSafe(out fx.yaw); r.ReadValueSafe(out fx.pitch); r.ReadValueSafe(out fx.up);
+                    if (Now < fx.up + SpellPlans.HierophantTime) fx.view = HierophantView.Create(fx);
+                    Hierophants[fx.id] = fx;
+                    break;
+                }
+                case Op.HierophantReflect:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out Vector3 point);
+                    if (Debris.Suppressed) break;
+                    if (Hierophants.TryGetValue(id, out var fx) && fx.view != null) fx.view.Bounce(point);
+                    else HierophantView.Spark(point, 1.3f);
+                    break;
+                }
+                case Op.Lovers:
+                {
+                    var fx = new LoversFx();
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.target);
+                    r.ReadValueSafe(out fx.origin); r.ReadValueSafe(out fx.dir); r.ReadValueSafe(out fx.start);
+                    fx.endPoint = fx.origin;
+                    if (!Debris.Suppressed) fx.view = LoversView.Create(fx);
+                    Tethers[fx.id] = fx;
+                    break;
+                }
+                case Op.LoversTether:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    if (Tethers.TryGetValue(id, out var fx)) fx.tether = t;
+                    break;
+                }
+                case Op.LoversEnd:
+                {
+                    r.ReadValueSafe(out int id);
+                    r.ReadValueSafe(out double t);
+                    r.ReadValueSafe(out Vector3 point);
+                    if (!Tethers.TryGetValue(id, out var fx)) break;
+                    fx.ended = t;
+                    fx.endPoint = point;
+                    if (!Debris.Suppressed) LoversEnded?.Invoke(fx.caster);
+                    break;
+                }
+                case Op.Chariot:
+                {
+                    var fx = new ChariotFx();
+                    r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.dir); r.ReadValueSafe(out fx.start);
+                    if (!Debris.Suppressed) fx.view = ChariotView.Create(fx);
+                    Chariots.Add(fx);
+                    break;
+                }
+                case Op.ChariotEnd:
+                {
+                    r.ReadValueSafe(out ulong caster);
+                    r.ReadValueSafe(out double t);
+                    r.ReadValueSafe(out bool crashed);
+                    r.ReadValueSafe(out Vector3 point);
+                    var fx = Chariots.FindLast(c => c.caster == caster && c.ended < 0);
+                    if (fx != null) { fx.ended = t; fx.crashed = crashed; fx.point = point; }
+                    if (!Debris.Suppressed) ChariotEnded?.Invoke(caster, crashed);
+                    break;
+                }
                 case Op.Swift:
                 {
                     var fx = new SwiftFx();
@@ -1373,7 +1977,7 @@ namespace SuddenMageEncounter
                         Vector3 mid = Vector3.zero;
                         foreach (var rc in removed) mid += world.CellCenter(rc.cell);
                         mid /= removed.Count;
-                        Debris.Spawn(world, removed, mid - dir, 3f, dir * 7f + Vector3.up * 2.5f, 2);
+                        Debris.Spawn(world, removed, mid - dir, 3f, dir * 7f + Vector3.up * 2.5f, 2, null, 40);
                     }
                     break;
                 }
@@ -1549,6 +2153,10 @@ namespace SuddenMageEncounter
             foreach (var w in Walls.Values) AnimateWall(w);
             foreach (var r in Rocks.Values) AnimateRock(r, now);
             foreach (var f in Folds.Values) AnimateFold(f, now);
+            foreach (var s in Swarms.Values) AnimateSwarm(s, now);
+            AnimateMore(now);
+            AnimateTarot3(now);
+            AnimateGuns(now);
             StepMissiles(Time.deltaTime);
 
             // finished effects (their views fade themselves out)
@@ -1573,7 +2181,7 @@ namespace SuddenMageEncounter
                     _done.Add(h.id);
             foreach (var id in _done) Hellfires.Remove(id);
             _done.Clear();
-            foreach (var j in Judgments.Values) if (now - j.start > SpellPlans.JudgmentLaserEnd + SpellPlans.JudgmentFade + 0.5) _done.Add(j.id);
+            foreach (var j in Judgments.Values) if (now - j.start > SpellPlans.JudgmentEndOf(j.kind) + SpellPlans.JudgmentFade + 0.5) _done.Add(j.id);
             foreach (var id in _done) Judgments.Remove(id);
             _done.Clear();
             foreach (var f in Fireballs.Values) if (now - f.start > SpellPlans.FireballCharge + 6.0) _done.Add(f.id);
@@ -1595,9 +2203,47 @@ namespace SuddenMageEncounter
             foreach (var p in Portals.Values) if (now > p.End + 1.0) _done.Add(p.id);
             foreach (var id in _done) Portals.Remove(id);
             Swifts.RemoveAll(s => s.ended >= 0 && now - s.ended > 1.0 || now - s.start > SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 2.0);
+            _done.Clear();
+            foreach (var w in Waves.Values) if (now - w.start > SpellPlans.SeveranceRange / SpellPlans.SeveranceSpeed + 1.0) _done.Add(w.id);
+            foreach (var id in _done) Waves.Remove(id);
+            _done.Clear();
+            foreach (var f in Forces.Values)
+                if (f.ended >= 0 && now - f.ended > 1.0 || now - f.start > SpellPlans.OrbRaise + SpellPlans.ForceLife + 3.0) _done.Add(f.id);
+            foreach (var id in _done) Forces.Remove(id);
+            _done.Clear();
+            foreach (var f in Fuses.Values)
+                if (f.ended >= 0 && now - f.ended > 1.0 || now - f.start > SpellPlans.FuseCharge + SpellPlans.FuseRange / SpellPlans.FuseSpeed + 4.0) _done.Add(f.id);
+            foreach (var id in _done) Fuses.Remove(id);
+            _done.Clear();
+            foreach (var h in Hierophants.Values) if (now > h.up + SpellPlans.HierophantTime + 1.0) _done.Add(h.id);
+            foreach (var id in _done) Hierophants.Remove(id);
+            _done.Clear();
+            foreach (var t in Tethers.Values) if (t.ended >= 0 && now - t.ended > 1.0 || now - t.start > 60.0) _done.Add(t.id);
+            foreach (var id in _done) Tethers.Remove(id);
+            Chariots.RemoveAll(c => c.ended >= 0 && now - c.ended > 1.0 || now - c.start > SpellPlans.ChariotMaxTime + 3.0);
         }
 
         readonly List<int> _done = new();
+
+        /// <summary>The nearest Attraction ball (not <paramref name="owner"/>'s) whose reach covers <paramref name="p"/>.</summary>
+        bool AttractingBall(Vector3 p, ulong owner, out Vector3 ball)
+        {
+            ball = default;
+            double now = Now;
+            float best = float.MaxValue;
+            foreach (var f in Forces.Values)
+            {
+                if (!f.water || f.ended >= 0 || !f.moved || f.caster == owner) continue;
+                float life = (float)(now - f.start) - SpellPlans.OrbRaise;
+                if (life < 0f) continue;
+                Vector3 at = f.PositionAt(now);
+                float d = (at - p).magnitude;
+                if (d > SpellPlans.ForceReach(true, life) || d >= best) continue;
+                best = d;
+                ball = at;
+            }
+            return best < float.MaxValue;
+        }
 
         void StepMissiles(float dt)
         {
@@ -1611,7 +2257,10 @@ namespace SuddenMageEncounter
                 {
                     if (!m.alive) continue;
                     m.prev = m.pos;
-                    SpellPlans.StepMissile(ref m.pos, ref m.dir, m.age, m.tracking && targetOk, aim, dt);
+                    // an enemy Attraction ball in reach: it pulls the missile round and in (instead of its target)
+                    bool caught = AttractingBall(m.pos, m.owner, out Vector3 ball);
+                    if (caught) m.dir = SpellPlans.AttractMissile(m.dir, ball - m.pos, dt);
+                    SpellPlans.StepMissile(ref m.pos, ref m.dir, m.age, m.tracking && targetOk && !caught, aim, dt);
                     m.age += dt;
                     if (m.age > SpellPlans.MissileLife && !IsServer) m.alive = false; // the server announces its own fizzles
                 }
@@ -1632,7 +2281,7 @@ namespace SuddenMageEncounter
         void AnimateWall(WallFx w)
         {
             if (w.body == null) return;
-            float t = Mathf.Clamp01((float)(Now - w.start) / SpellPlans.WallRise);
+            float t = Mathf.Clamp01((float)(Now - w.start) / w.time);
             float e = 1f - (1f - t) * (1f - t);
             float down = w.rise * VoxelWorld.Size * (1f - e);
             w.body.SetPose(w.body.HomePivot + Vector3.down * down, Quaternion.identity);
@@ -1700,6 +2349,33 @@ namespace SuddenMageEncounter
             }
         }
 
+        /// <summary>
+        /// A practice chamber was reset or closed: walls still rising, slabs still folding and rocks still flying
+        /// between these x positions are dropped (so they don't set into the fresh ground afterwards).
+        /// </summary>
+        public void ClearEffectsIn(float minX, float maxX)
+        {
+            bool In(VoxelBody b) => b != null && b.transform.position.x >= minX && b.transform.position.x < maxX;
+            _done.Clear();
+            foreach (var w in Walls.Values) if (In(w.body)) { Destroy(w.body.gameObject); _done.Add(w.id); }
+            foreach (var id in _done) Walls.Remove(id);
+            _done.Clear();
+            foreach (var r in Rocks.Values) if (In(r.body)) { Destroy(r.body.gameObject); _done.Add(r.id); }
+            foreach (var id in _done) Rocks.Remove(id);
+            _done.Clear();
+            foreach (var f in Folds.Values)
+                if (In(f.bodies[0]) || In(f.bodies[1]))
+                {
+                    foreach (var b in f.bodies) if (b) Destroy(b.gameObject);
+                    _done.Add(f.id);
+                }
+            foreach (var id in _done) Folds.Remove(id);
+            _done.Clear();
+            ClearMoreIn(minX, maxX);
+            ClearTarot3In(minX, maxX);
+            ClearBombsIn(minX, maxX);
+        }
+
         void ClearEffects()
         {
             foreach (var w in Walls.Values) if (w.body) Destroy(w.body.gameObject);
@@ -1725,6 +2401,18 @@ namespace SuddenMageEncounter
             Warps.Clear();
             Portals.Clear();
             Swifts.Clear();
+            foreach (var w in Waves.Values) if (w.view) Destroy(w.view.gameObject);
+            Waves.Clear();
+            foreach (var f in Forces.Values) if (f.view) Destroy(f.view.gameObject);
+            Forces.Clear();
+            foreach (var f in Fuses.Values) if (f.view) Destroy(f.view.gameObject);
+            Fuses.Clear();
+            foreach (var h in Hierophants.Values) if (h.view) Destroy(h.view.gameObject);
+            foreach (var t in Tethers.Values) if (t.view) Destroy(t.view.gameObject);
+            foreach (var c in Chariots) if (c.view) Destroy(c.view.gameObject);
+            Hierophants.Clear();
+            Tethers.Clear();
+            Chariots.Clear();
             Domains.Clear();
             Fireballs.Clear();
             Hellfires.Clear();
@@ -1732,11 +2420,17 @@ namespace SuddenMageEncounter
             FizzledAt.Clear();
             Walls.Clear();
             Rocks.Clear();
+            foreach (var s in Swarms.Values) foreach (var rk in s.rocks) if (rk.body) Destroy(rk.body.gameObject);
+            Swarms.Clear();
             Folds.Clear();
             Gusts.Clear();
             Tornados.Clear();
             Missiles.Clear();
             Barriers.Clear();
+            ClearMore();
+            ClearTarot3();
+            ClearGuns();
+            ClearBombs();
             SpellServer.Reset();
         }
 

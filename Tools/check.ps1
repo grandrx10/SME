@@ -16,6 +16,7 @@ function Get-Refs($csproj) {
     foreach ($h in $x.SelectNodes("//*[local-name()='HintPath']")) {
         $p = $h.InnerText
         if ($p -match 'ScriptAssemblies\\Assembly-CSharp\.dll$') { continue }
+        if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $Project $p } # newer csproj files use project-relative paths
         $refs += $p
     }
     $defs = ($x.SelectNodes("//*[local-name()='DefineConstants']") | Select-Object -First 1).InnerText
@@ -29,7 +30,8 @@ function Invoke-Compile($name, $files, $refs, $defs) {
     foreach ($f in $files) { $lines += "`"$f`"" }
     Set-Content -Path $rsp -Value $lines -Encoding utf8
     $res = & $dotnet $csc "@$rsp" 2>&1
-    $errs = $res | Where-Object { $_ -match ': error ' }
+    $errs = @($res | Where-Object { $_ -match '(^|: )error ' }) # also errors with no file (a missing reference)
+    if ($LASTEXITCODE -ne 0 -and $errs.Count -eq 0) { $errs = @("csc exited with code $LASTEXITCODE") + @($res | Select-Object -First 5) }
     $warns = $res | Where-Object { $_ -match ': warning ' }
     Write-Host "== $name : $($errs.Count) error(s), $($warns.Count) warning(s)"
     $errs | Select-Object -Unique | ForEach-Object { Write-Host $_.ToString().Replace($Project + '\', '') }

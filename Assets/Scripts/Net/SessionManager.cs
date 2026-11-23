@@ -21,8 +21,6 @@ namespace SuddenMageEncounter
         // Services project, so the two games must never find each other's lobbies.
         public const string LobbyName = "SME DEV test";
         public const int MaxPlayers = 20;
-        /// <summary>Lobbies not heartbeated for this long are treated as dead (host crashed / stopped play mode).</summary>
-        const double StaleSeconds = 35;
 
         public static ISession Session { get; private set; }
         public static bool Busy { get; private set; }
@@ -111,6 +109,46 @@ namespace SuddenMageEncounter
             }
         }
 
+        /// <summary>
+        /// Dev testing (Admin menu): leave whatever server you're on and host a new private one just for you (max 1
+        /// player, never listed, so Play never finds it).
+        /// </summary>
+        public static async void HostSolo()
+        {
+            if (Busy) return;
+            Busy = true;
+            try
+            {
+                if (Session != null)
+                {
+                    Status?.Invoke("Leaving...");
+                    await LeaveInternal("");
+                }
+                Status?.Invoke("Connecting...");
+                await EnsureServices();
+                ResetNetworkManager();
+                Status?.Invoke("Hosting dev server...");
+                var options = new SessionOptions { MaxPlayers = 1, IsPrivate = true, Name = LobbyName + " (solo)" }.WithRelayNetwork();
+                Session = await MultiplayerService.Instance.CreateSessionAsync(options);
+                Session.RemovedFromSession += OnRemoved;
+                Session.Deleted += OnRemoved;
+                Status?.Invoke("Hosting dev server");
+                HookNetwork();
+            }
+            catch (Exception e)
+            {
+                Session = null;
+                ResetNetworkManager();
+                string msg = e.ToString().ToLowerInvariant();
+                if (msg.Contains("project") && msg.Contains("link")) Status?.Invoke("Unity Gaming Services not linked (Project Settings > Services)");
+                else Status?.Invoke("Couldn't host: " + Short(e));
+            }
+            finally
+            {
+                Busy = false;
+            }
+        }
+
         /// <summary>Live DEV test lobbies (including full ones), newest heartbeat first.</summary>
         static async Task<List<ISessionInfo>> FindDevTestLobbies()
         {
@@ -125,13 +163,11 @@ namespace SuddenMageEncounter
                 },
             };
             var res = await MultiplayerService.Instance.QuerySessionsAsync(query);
-            var now = DateTime.UtcNow;
+            // No "stale" check against this PC's clock: a clock that's off (common in VMs, e.g. Windows on a Mac) hid
+            // every live lobby, so that player hosted their own instead. LastUpdated isn't bumped by heartbeats either.
+            // The Lobby service already drops lobbies whose host stopped heartbeating; a dead one just fails to join.
             foreach (var s in res.Sessions)
-            {
-                if (s.Name != LobbyName) continue;
-                if (s.LastUpdated != default && (now - s.LastUpdated.ToUniversalTime()).TotalSeconds > StaleSeconds) continue;
-                result.Add(s);
-            }
+                if (s.Name == LobbyName) result.Add(s);
             // prefer the lobby with the most players (keeps everyone together), then the freshest
             result.Sort((a, b) =>
             {
@@ -139,6 +175,49 @@ namespace SuddenMageEncounter
                 return pa != pb ? pb.CompareTo(pa) : b.LastUpdated.CompareTo(a.LastUpdated);
             });
             return result;
+        }
+
+        /// <summary>The server list: every live DEV test lobby (null if the query failed; Status says why).</summary>
+        public static async Task<List<ISessionInfo>> ListServers()
+        {
+            try
+            {
+                await EnsureServices();
+                return await FindDevTestLobbies();
+            }
+            catch (Exception e)
+            {
+                Status?.Invoke("Couldn't list servers: " + Short(e));
+                return null;
+            }
+        }
+
+        /// <summary>Join one server from the list (never hosts).</summary>
+        public static async void Join(string id)
+        {
+            if (Busy || Session != null) return;
+            Busy = true;
+            try
+            {
+                Status?.Invoke("Joining DEV test...");
+                await EnsureServices();
+                ResetNetworkManager();
+                Session = await MultiplayerService.Instance.JoinSessionByIdAsync(id, new JoinSessionOptions());
+                Session.RemovedFromSession += OnRemoved;
+                Session.Deleted += OnRemoved;
+                Status?.Invoke("Joined DEV test");
+                HookNetwork();
+            }
+            catch (Exception e)
+            {
+                Session = null;
+                ResetNetworkManager();
+                Status?.Invoke(IsFull(e) ? "DEV test is full" : "Couldn't join: " + Short(e));
+            }
+            finally
+            {
+                Busy = false;
+            }
         }
 
         static bool IsFull(Exception e)

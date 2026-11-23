@@ -102,14 +102,16 @@ namespace SuddenMageEncounter
     {
         class Plus { public Transform t; public Vector3 offset; public float age, life; }
         ulong _who;
-        float _age, _owed;
+        float _age, _owed, _time = SpellPlans.OrbHealTime;
         readonly List<Plus> _plus = new();
 
-        public static void Create(ulong who)
+        public static void Create(ulong who, float seconds = SpellPlans.OrbHealTime)
         {
             if (Debris.Suppressed) return;
             var go = new GameObject("Healing") { layer = Layers.Fx };
-            go.AddComponent<HealView>()._who = who;
+            var v = go.AddComponent<HealView>();
+            v._who = who;
+            v._time = seconds;
         }
 
         void LateUpdate()
@@ -117,7 +119,7 @@ namespace SuddenMageEncounter
             float dt = Time.deltaTime;
             _age += dt;
             var c = WorldNet.FindCombatant(_who);
-            bool on = c != null && c.IsAlive && _age < SpellPlans.OrbHealTime;
+            bool on = c != null && c.IsAlive && _age < _time;
             Vector3 body = c == null ? transform.position : c.RagdollFocus != null ? c.RagdollFocus.position : c.transform.position;
             transform.position = body;
             if (on)
@@ -626,8 +628,8 @@ namespace SuddenMageEncounter
                 if (!erase && net != null)
                     foreach (var j in net.Judgments.Values)
                     {
-                        Vector3 o = _pos[i] - j.center;
-                        if (new Vector2(o.x, o.z).magnitude <= SpellPlans.JudgmentRadius) { erase = true; break; }
+                        Vector3 o = _pos[i] - j.CenterAt(WorldNet.Now);
+                        if (new Vector2(o.x, o.z).magnitude <= SpellPlans.JudgmentRadiusOf(j.kind)) { erase = true; break; }
                     }
                 if (!erase) continue;
                 _d[i].erased = time;

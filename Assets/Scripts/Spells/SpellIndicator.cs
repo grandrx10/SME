@@ -98,6 +98,14 @@ namespace SuddenMageEncounter
 
         // ------------------------------------------------------------------ spells
 
+        /// <summary>Any set of boxes (The Hermit's house, The Tower): white if it can be cast, red if not.</summary>
+        public void ShowBoxes(IReadOnlyList<(Vector3 c, Quaternion r, Vector3 s)> boxes, bool ok)
+        {
+            Begin();
+            foreach (var b in boxes) AddBox(b.c, b.r, b.s, ok ? Good : Bad);
+            End();
+        }
+
         public void ShowWall(SpellPlans.WallPlan plan)
         {
             Begin();
@@ -165,13 +173,38 @@ namespace SuddenMageEncounter
             End();
         }
 
-        /// <summary>Arcane Judgment: the circle it will draw (outer and inner ring), on the ground.</summary>
+        /// <summary>Arcane Judgment, Judgement: the circle it will draw (outer and inner ring), on the ground.</summary>
         public void ShowJudgment(Vector3 center, float radius)
         {
             Begin();
             var blue = new Color(0.55f, 0.75f, 1f, 1f);
             AddRing(center + Vector3.up * 0.06f, radius, blue);
             AddRing(center + Vector3.up * 0.06f, radius * 0.66f, new Color(blue.r, blue.g, blue.b, 0.6f));
+            End();
+        }
+
+        /// <summary>Judgement: the circle where it starts, where it ends up, and the lane it slides along (with arrows pointing the way).</summary>
+        public void ShowSlidingJudgment(Vector3 center, Vector3 dir, float radius, float slide)
+        {
+            Begin();
+            var red = new Color(1f, 0.55f, 0.38f, 1f);
+            var faint = new Color(red.r, red.g, red.b, 0.6f);
+            Vector3 up = Vector3.up * 0.06f, end = center + dir * slide, mid = center + dir * (slide * 0.5f);
+            Vector3 right = Vector3.Cross(Vector3.up, dir);
+            AddRing(center + up, radius, red);
+            AddRing(center + up, radius * 0.66f, faint);
+            AddRing(end + up, radius, faint);
+            // its edges on the way, from the first circle to the last
+            var along = Quaternion.LookRotation(dir);
+            for (int s = -1; s <= 1; s += 2) AddBox(mid + up + right * (radius * s), along, new Vector3(0.06f, 0.02f, slide), red, 0.5f);
+            AddBox(mid + up, along, new Vector3(radius * 2f, 0.01f, slide), red, 0.05f);
+            // arrows down the middle
+            for (int k = 0; k < 2; k++)
+            {
+                Vector3 tip = center + dir * (slide * (0.62f + 0.38f * k)) + up;
+                for (int s = -1; s <= 1; s += 2)
+                    AddBox(tip - dir * 0.28f + right * (0.28f * s), along * Quaternion.Euler(0f, -45f * s, 0f), new Vector3(0.08f, 0.02f, 0.8f), red, 0.6f);
+            }
             End();
         }
 
@@ -202,6 +235,32 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Tsunami: the wave where it rises, and the strip of floor it will run along.</summary>
+        /// <summary>Ice Spike: a flat strip on the ground under each spike, following the ground (nothing: nowhere to raise them).</summary>
+        public void ShowIceLine(List<SpellPlans.IceSlot> slots, Vector3 dir)
+        {
+            Begin();
+            dir.y = 0f;
+            dir = dir.sqrMagnitude > 1e-4f ? dir.normalized : Vector3.forward;
+            var rot = Quaternion.LookRotation(dir);
+            float width = 2f * (SpellPlans.IceJitter + SpellPlans.IceMinRadius);
+            foreach (var s in slots)
+                AddBox(s.ground + dir * (SpellPlans.IceLean * 0.5f) + Vector3.up * 0.05f, rot,
+                    new Vector3(width, 0.02f, SpellPlans.IceSpacing * 0.8f), Good, 0.12f);
+            End();
+        }
+
+        /// <summary>Undying Grasp: a flat strip on the ground by each hand, as wide as they reach, following the ground.</summary>
+        public void ShowGraspLine(List<SpellPlans.GraspSlot> slots, Vector3 dir)
+        {
+            Begin();
+            dir.y = 0f;
+            dir = dir.sqrMagnitude > 1e-4f ? dir.normalized : Vector3.forward;
+            var rot = Quaternion.LookRotation(dir);
+            foreach (var s in slots)
+                AddBox(s.middle + Vector3.up * 0.05f, rot, new Vector3(SpellPlans.GraspReach * 2f, 0.02f, SpellPlans.GraspSpacing), Good, 0.12f);
+            End();
+        }
+
         public void ShowTsunami(Vector3 feet, Vector3 dir)
         {
             Begin();
@@ -237,6 +296,22 @@ namespace SuddenMageEncounter
             var rot = SpellPlans.PortalRotation(yaw, pitch);
             AddBox(center - rot * Vector3.forward * (SpellPlans.PortalDepth * 0.5f), rot,
                 new Vector3(SpellPlans.PortalWidth, SpellPlans.PortalHeight, SpellPlans.PortalDepth), c, 0.22f);
+            End();
+        }
+
+        /// <summary>Remote Flame Bomb: the bomb where it will go (red: nowhere there for it).</summary>
+        public void ShowBomb(Vector3 center, Quaternion rot, bool ok)
+        {
+            Begin();
+            AddBox(center, rot, new Vector3(SpellPlans.BombSize, SpellPlans.BombThick, SpellPlans.BombSize), ok ? Good : Bad, 0.3f);
+            End();
+        }
+
+        /// <summary>The Hierophant: the wall's pane where it will stand, as tilted as it will be.</summary>
+        public void ShowPane(Vector3 center, Quaternion rot, Vector3 size)
+        {
+            Begin();
+            AddBox(center, rot, size, Good, 0.22f);
             End();
         }
 

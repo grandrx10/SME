@@ -95,8 +95,7 @@ namespace SuddenMageEncounter
         Renderer _holeR;
         Material _mat;
         RuneSpew _leaving, _arriving;
-        Transform _model;
-        Vector3 _scale0 = Vector3.one, _pos0;
+        ProceduralAnimator _animator;
         readonly List<(GameObject go, int layer)> _hidden = new();
         bool _replayed, _folded, _restored;
         Vector3 _origin;
@@ -128,7 +127,7 @@ namespace SuddenMageEncounter
             if (c != null)
             {
                 v._origin = c.transform.position;
-                if (c.model != null) { v._model = c.model; v._scale0 = c.model.localScale; v._pos0 = c.model.localPosition; }
+                v._animator = c.Animator;
             }
             if (!v._replayed)
             {
@@ -208,12 +207,10 @@ namespace SuddenMageEncounter
         /// <summary>Folds the body flat about its middle (top and bottom come together), keeping its own size and place.</summary>
         void Squash(float s)
         {
-            if (_model == null) return;
+            if (_animator == null) return;
             s = Mathf.Max(0.001f, s);
-            float wide = 1f + 0.25f * (1f - s); // a little wider as it flattens
-            _model.localScale = new Vector3(_scale0.x * wide, _scale0.y * s, _scale0.z * wide);
-            // the model hangs from the body's root (at the hips): scaling about the root's middle, not the model's feet
-            _model.localPosition = new Vector3(_pos0.x, _pos0.y * s, _pos0.z);
+            // a little wider as it flattens (the animator applies it, after it has posed the body)
+            _animator.Fold = new Vector2(1f + 0.25f * (1f - s), s);
         }
 
         /// <summary>The body goes on the layer the see-through camera skips.</summary>
@@ -240,7 +237,7 @@ namespace SuddenMageEncounter
             if (_restored) return;
             _restored = true;
             Unhide();
-            if (_model != null) { _model.localScale = _scale0; _model.localPosition = _pos0; }
+            if (_animator != null) _animator.Fold = Vector2.one;
             if (_leaving != null) _leaving.Stop();
             if (_arriving != null) _arriving.Stop();
         }
@@ -284,6 +281,9 @@ namespace SuddenMageEncounter
         MaterialPropertyBlock _block;
         float _clock;
         bool _replayed;
+        Color _young = Blue, _old = White;
+        double _runFrom, _runUntil;
+        bool _prep = true;
 
         public static SwiftView Create(WorldNet.SwiftFx fx)
         {
@@ -293,6 +293,24 @@ namespace SuddenMageEncounter
             v._replayed = Debris.Suppressed;
             v._block = new MaterialPropertyBlock();
             if (_mat == null) _mat = new Material(Shader.Find("SME/Afterimage") ?? Shader.Find("SME/Glow")) { name = "Afterimage" };
+            v._runFrom = fx.start + SpellPlans.SwiftPrep;
+            v._runUntil = v._runFrom + SpellPlans.SwiftTime;
+            return v;
+        }
+
+        /// <summary>
+        /// The same trail of afterimages behind <paramref name="who"/> from <paramref name="from"/> until <paramref name="until"/>, in
+        /// other colours (Wheel of Fortune's 6: golden). No runes first.
+        /// </summary>
+        public static SwiftView Trail(ulong who, double from, double until, Color young, Color old)
+        {
+            var v = Create(new WorldNet.SwiftFx { caster = who, start = from });
+            v.name = "Afterimages";
+            v._young = young;
+            v._old = old;
+            v._prep = false;
+            v._runFrom = from;
+            v._runUntil = until;
             return v;
         }
 
@@ -302,8 +320,8 @@ namespace SuddenMageEncounter
             float t = (float)(now - _fx.start);
             var c = WorldNet.FindCombatant(_fx.caster);
             bool alive = c != null && c.IsAlive && c.Visible && _fx.ended < 0 && !_replayed;
-            bool prepping = alive && t < SpellPlans.SwiftPrep;
-            bool running = alive && t >= SpellPlans.SwiftPrep && t <= SpellPlans.SwiftPrep + SpellPlans.SwiftTime;
+            bool prepping = alive && _prep && now < _runFrom;
+            bool running = alive && now >= _runFrom && now <= _runUntil;
 
             if (prepping && _runes == null)
                 _runes = RuneSpew.Create(() => c != null ? c.transform.position : transform.position, () => this != null && _fx.ended < 0, SpellPlans.SwiftPrep, Glow.Arcane, 40f);
@@ -422,7 +440,7 @@ namespace SuddenMageEncounter
         void Shade(Ghost g, float strength, float aged)
         {
             _block.Clear();
-            _block.SetColor(ColourId, Color.Lerp(Blue, White, aged));
+            _block.SetColor(ColourId, Color.Lerp(_young, _old, aged));
             _block.SetFloat(FadeId, strength);
             foreach (var r in g.renderers) r.SetPropertyBlock(_block);
         }

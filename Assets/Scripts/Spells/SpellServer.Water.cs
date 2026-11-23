@@ -36,7 +36,7 @@ namespace SuddenMageEncounter
             WavesS.Clear();
         }
 
-        static bool CastWater(PlayerController caster, CardId card, Vector3 target, float yaw, double now)
+        static bool CastWater(PlayerController caster, CardId card, Vector3 target, float yaw, ulong targetId, double now)
         {
             switch (card)
             {
@@ -53,8 +53,10 @@ namespace SuddenMageEncounter
                 {
                     if (InBubble(caster)) return false;
                     Combatant.DamageScale ??= ScaleDamage;
-                    WorldNet.ServerBubble(caster.NetworkObjectId);
-                    BubblesS.Add(new BubbleState { caster = caster, start = now });
+                    // cast from the ground (ragdolled): up on your feet and in the bubble at once, no windup
+                    double start = targetId == SpellPlans.BubbleFromRagdoll ? now - SpellPlans.BubbleWindup : now;
+                    WorldNet.ServerBubble(caster.NetworkObjectId, start);
+                    BubblesS.Add(new BubbleState { caster = caster, start = start });
                     return true;
                 }
                 case CardId.Tsunami:
@@ -102,6 +104,7 @@ namespace SuddenMageEncounter
                 float r = SpellPlans.BubbleRadius + pad;
                 if ((p - BubbleCenterOf(b)).sqrMagnitude < r * r) return true;
             }
+            if (InWaterBall(p, pad)) return true; // an Attraction ball
             foreach (var s in WavesS)
                 if (InWave(s, p, now, pad)) return true;
             return false;
@@ -111,7 +114,7 @@ namespace SuddenMageEncounter
         static bool WaterAlong(Vector3 a, Vector3 b, float pad, out Vector3 at)
         {
             at = b;
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall()) return false;
             int n = Mathf.Max(1, Mathf.CeilToInt((b - a).magnitude / 0.2f));
             for (int k = 0; k <= n; k++)
             {
@@ -124,7 +127,7 @@ namespace SuddenMageEncounter
         /// <summary>Does the risen part of a hellfire wall touch water anywhere?</summary>
         static bool WallInWater(HellfireState h, float lit)
         {
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall()) return false;
             float total = 0f;
             for (int k = 1; k < h.points.Count; k++) total += Vector3.Distance(h.points[k - 1], h.points[k]);
             float limit = total * lit, along = 0f;
@@ -359,14 +362,14 @@ namespace SuddenMageEncounter
             foreach (var j in JudgmentsS)
             {
                 float jt = (float)(now - j.start);
-                if (jt < SpellPlans.JudgmentLaserStart || jt > SpellPlans.JudgmentLaserEnd) continue;
+                if (jt < SpellPlans.JudgmentStartOf(j.kind) || jt > SpellPlans.JudgmentEndOf(j.kind)) continue;
                 for (int lane = 0; lane < SpellPlans.TsunamiLanes; lane++)
                 {
                     if ((s.dead & (1 << lane)) != 0) continue;
                     for (float behind = 0f; behind <= SpellPlans.TsunamiDepth; behind += 1f)
                     {
-                        Vector3 d = s.origin + s.dir * (front - behind) + right * SpellPlans.LaneU(lane) - j.center;
-                        if (new Vector2(d.x, d.z).magnitude > SpellPlans.JudgmentRadius) continue;
+                        Vector3 d = s.origin + s.dir * (front - behind) + right * SpellPlans.LaneU(lane) - j.CenterAt(now);
+                        if (new Vector2(d.x, d.z).magnitude > SpellPlans.JudgmentRadiusOf(j.kind)) continue;
                         s.dead |= 1 << lane;
                         break;
                     }
@@ -397,7 +400,8 @@ namespace SuddenMageEncounter
         {
             if (t < SpellPlans.TsunamiRise * 0.5f) return;
             float front = SpellPlans.TsunamiFront(t);
-            if (s.broken >= 0f && front - s.broken < 0.35f) return;
+            // break in 1 m steps (~8 per second): each step is a remesh, an island check and a debris burst on every peer
+            if (s.broken >= 0f && front - s.broken < 1f && t < SpellPlans.TsunamiLife - 0.05f) return;
             float from = s.broken < 0f ? SpellPlans.TsunamiAhead : s.broken - 0.3f;
             float to = front + SpellPlans.TsunamiLip;
             s.broken = front;

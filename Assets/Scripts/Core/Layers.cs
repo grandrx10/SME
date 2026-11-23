@@ -18,6 +18,9 @@ namespace SuddenMageEncounter
         /// <summary>Render-only layers (nothing collides on them): a warping body, hidden from the see-through camera; portal surfaces, hidden from portal cameras (no feedback).</summary>
         public const int WarpHidden = 29, PortalSurface = 30;
 
+        /// <summary>Light rubble: collides like FX, but not with other rubble or FX (cheap when there's lots of it).</summary>
+        public const int LightRubble = 12;
+
         static int Get(string name, int fallback)
         {
             int l = LayerMask.NameToLayer(name);
@@ -38,6 +41,11 @@ namespace SuddenMageEncounter
             Physics.IgnoreLayerCollision(r, p, true);
             Physics.IgnoreLayerCollision(f, p, true);
             Physics.IgnoreLayerCollision(f, r, true);
+            // light rubble hits what FX hits (the world, moving voxel bodies), except FX and itself
+            int lr = LightRubble;
+            for (int i = 0; i < 32; i++) Physics.IgnoreLayerCollision(lr, i, Physics.GetIgnoreLayerCollision(f, i));
+            Physics.IgnoreLayerCollision(lr, f, true);
+            Physics.IgnoreLayerCollision(lr, lr, true);
         }
 
         public static void SetLayerRecursive(GameObject go, int layer)

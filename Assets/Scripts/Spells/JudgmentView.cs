@@ -6,7 +6,7 @@ namespace SuddenMageEncounter
     /// <summary>
     /// Arcane Judgment: a rune circle written onto the ground over a second (double outer ring, inner ring,
     /// runes facing outward with diamonds between them), a bright flare, then an orbital laser column for two
-    /// seconds that shrinks away. All glow + ink outline, nothing fades.
+    /// seconds that shrinks away. All glow + ink outline, nothing fades. Judgement (Tarot) is the same in mahogany.
     /// </summary>
     public class JudgmentView : MonoBehaviour
     {
@@ -64,9 +64,34 @@ namespace SuddenMageEncounter
             return go.transform;
         }
 
+        /// <summary>A beam tube on its own (radius 1, from its base to 1 along +Y; scale in metres), for other shots: the glow, or the ink rim behind it.</summary>
+        internal static Transform Tube(Transform parent, string name, Color colour, bool ink)
+        {
+            _tube ??= MakeTube(48);
+            return TubePiece(parent, name, colour, ink ? 1f : 2f);
+        }
+
+        /// <summary>Ink drawn inside out (back faces only), for rims round beams.</summary>
+        internal static Material InkMaterial
+        {
+            get
+            {
+                if (_inkMat == null)
+                {
+                    _beamMat = new Material(Glow.Shared) { name = "Beam" };
+                    _inkMat = new Material(Glow.Shared) { name = "Beam Ink" };
+                    if (_inkMat.HasProperty("_Cull")) _inkMat.SetFloat("_Cull", 1f);
+                }
+                return _inkMat;
+            }
+        }
+
         const int RuneCount = 8;
         // dimmer than the usual arcane glow: a 10 m wide surface at full HDR blooms into a halo well outside the beam
-        static readonly Color BeamColour = new(0.2f, 0.55f, 1.9f, 1f);
+        static readonly Color BeamColour = new(0.2f, 0.55f, 1.9f, 1f), BeamCore = new(1.2f, 1.8f, 3f, 1f), Flare = new(2f, 3f, 8f, 1f);
+        static readonly Color TarotBeam = new(1.35f, 0.36f, 0.14f, 1f), TarotCore = new(3f, 1.5f, 0.75f, 1f), TarotFlare = new(7f, 2.6f, 1.1f, 1f);
+        bool Tarot => _fx.kind == SpellPlans.TarotCircle;
+        Color Line => Tarot ? TarotVfx.Mahogany : Glow.Arcane;
         // the beam's edge sits a little inside the damage radius, so whatever looks inside it really is
         const float BeamFit = 1f;
         const float BeamHeight = 70f;
@@ -83,15 +108,15 @@ namespace SuddenMageEncounter
             c.transform.localPosition = Vector3.up * 0.08f;
             v._circleT = c.transform;
             v._circle = new RuneDrawing(c);
-            v._circle.AddRune(CircleStrokes(), SpellPlans.JudgmentRadius * 2f, 0.11f);
+            v._circle.AddRune(CircleStrokes(), SpellPlans.JudgmentRadiusOf(fx.kind) * 2f, 0.11f);
             v._circle.Progress = 0f;
-            v._circle.SetColour(Glow.Arcane);
+            v._circle.SetColour(v.Line);
 
             // the beam is a tube of exactly the damage radius (radius 1, height 1 mesh, scaled in metres)
             _tube ??= MakeTube(48);
-            v._beam = TubePiece(go.transform, "Beam", BeamColour, 2f);
+            v._beam = TubePiece(go.transform, "Beam", v.Tarot ? TarotBeam : BeamColour, 2f);
             v._ink = TubePiece(go.transform, "BeamOutline", Glow.Ink, 1f); // back faces only: an inked rim round the beam
-            v._core = TubePiece(go.transform, "BeamCore", new Color(1.2f, 1.8f, 3f, 1f), 2f);
+            v._core = TubePiece(go.transform, "BeamCore", v.Tarot ? TarotCore : BeamCore, 2f);
             v._beam.localScale = v._ink.localScale = v._core.localScale = Vector3.zero;
             return v;
         }
@@ -149,12 +174,13 @@ namespace SuddenMageEncounter
         void LateUpdate()
         {
             float t = (float)(WorldNet.Now - _fx.start);
-            float end = SpellPlans.JudgmentLaserEnd + SpellPlans.JudgmentFade;
-            if (t > end || WorldNet.Instance == null) { Destroy(gameObject); return; }
-            float R = SpellPlans.JudgmentRadius;
+            float draw = SpellPlans.JudgmentDrawOf(_fx.kind), from = SpellPlans.JudgmentStartOf(_fx.kind), until = SpellPlans.JudgmentEndOf(_fx.kind);
+            if (t > until + SpellPlans.JudgmentFade || WorldNet.Instance == null) { Destroy(gameObject); return; }
+            float R = SpellPlans.JudgmentRadiusOf(_fx.kind);
+            transform.position = _fx.CenterAt(WorldNet.Now); // (Judgement's slides forward)
 
             // the caster was knocked down while drawing it: the half-written circle shrinks away, no beam
-            if (_fizzledAt < 0f && WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + SpellPlans.JudgmentDraw)) _fizzledAt = t;
+            if (_fizzledAt < 0f && WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + draw)) _fizzledAt = t;
             if (_fizzledAt >= 0f)
             {
                 float s = 1f - Mathf.Clamp01((t - _fizzledAt) / 0.25f);
@@ -165,23 +191,23 @@ namespace SuddenMageEncounter
             }
 
             // writing the circle, slowly turning
-            _circle.Progress = t / SpellPlans.JudgmentDraw;
+            _circle.Progress = t / draw;
             _circleT.localRotation = Quaternion.Euler(0f, t * 12f, 0f);
 
             // flare: the circle burns white-hot just before the beam
-            bool flare = t >= SpellPlans.JudgmentDraw && t < SpellPlans.JudgmentLaserStart;
-            _circle.SetColour(flare ? new Color(2f, 3f, 8f, 1f) * (1f + 0.3f * Mathf.Sin(Time.time * 40f)) : Glow.Arcane);
+            bool flare = t >= draw && t < from;
+            _circle.SetColour(flare ? (Tarot ? TarotFlare : Flare) * (1f + 0.3f * Mathf.Sin(Time.time * 40f)) : Line);
             if (flare) _circleT.localScale = Vector3.one * (1f + 0.04f * Mathf.Sin(Time.time * 50f));
 
             // the beam
             float beam = 0f;
-            if (t >= SpellPlans.JudgmentLaserStart)
+            if (t >= from)
             {
-                float on = Mathf.Clamp01((t - SpellPlans.JudgmentLaserStart) / 0.12f);
-                float off = 1f - Mathf.Clamp01((t - SpellPlans.JudgmentLaserEnd) / SpellPlans.JudgmentFade);
+                float on = Mathf.Clamp01((t - from) / 0.12f);
+                float off = 1f - Mathf.Clamp01((t - until) / SpellPlans.JudgmentFade);
                 beam = on * off;
-                if (on < 1f && t - Time.deltaTime < SpellPlans.JudgmentLaserStart + 0.02f && !Debris.Suppressed)
-                    CameraRig.ShakeFrom(_fx.center, 0.5f, 0.35f);
+                if (on < 1f && t - Time.deltaTime < from + 0.02f && !Debris.Suppressed)
+                    CameraRig.ShakeFrom(transform.position, 0.5f, 0.35f);
             }
             float flick = BeamFit * (1f - 0.03f * (0.5f + 0.5f * Mathf.Sin(Time.time * 60f))); // only ever flickers inward
             // radii in metres: the glow exactly fills the damage area, the ink rim a hair outside it
@@ -197,13 +223,13 @@ namespace SuddenMageEncounter
                 _ink.gameObject.SetActive(new Vector2(d.x, d.z).magnitude > rr + 0.3f);
             }
             // the circle shrinks away with the beam
-            if (t > SpellPlans.JudgmentLaserEnd) _circleT.localScale = Vector3.one * Mathf.Max(0.001f, beam);
+            if (t > until) _circleT.localScale = Vector3.one * Mathf.Max(0.001f, beam);
 
             // sparks shooting up the column while it fires
             if (beam > 0.5f && !Debris.Suppressed && Random.value < 0.6f)
             {
                 Vector2 rp = Random.insideUnitCircle * R * 0.9f;
-                var m = Glow.Piece(transform, Glow.CubeMesh, Glow.Arcane, "Mote");
+                var m = Glow.Piece(transform, Glow.CubeMesh, Line, "Mote");
                 m.localPosition = new Vector3(rp.x, 0.2f, rp.y);
                 m.localScale = new Vector3(0.08f, 0.9f, 0.08f);
                 _motes.Add(m);

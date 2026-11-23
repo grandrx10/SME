@@ -31,12 +31,12 @@ namespace SuddenMageEncounter
             var meshGo = new GameObject("Mesh");
             meshGo.transform.SetParent(go.transform, false);
             b.MeshRoot = meshGo.transform;
-            b._mesh = new Mesh { name = "VoxelBody" };
+            b._mesh = new Mesh { name = "VoxelBody", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 }; // (a tower is a lot of voxels)
             VoxelMesher.BuildCells(b._mesh, cells, Vector3Int.zero, world.ColorOf, VoxelWorld.Size, out var min, out var max);
             // vertices are relative to cell (0,0,0); place that corner where it is in the world
             meshGo.transform.localPosition = world.CellMin(Vector3Int.zero) - pivot;
             meshGo.AddComponent<MeshFilter>().sharedMesh = b._mesh;
-            meshGo.AddComponent<MeshRenderer>().sharedMaterial = world.RenderMaterial;
+            meshGo.AddComponent<MeshRenderer>().sharedMaterials = world.RenderMaterials;
             Vector3 lo = world.CellMin(min) - pivot, hi = world.CellMin(max + Vector3Int.one) - pivot;
             b.LocalBounds = new Bounds((lo + hi) * 0.5f, hi - lo);
             if (collide && b._mesh.vertexCount > 0)

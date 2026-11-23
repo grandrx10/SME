@@ -6,7 +6,7 @@ using UnityEngine.InputSystem;
 namespace SuddenMageEncounter
 {
     /// <summary>Rebindable actions. Order = order in Settings > Controls. Saved by name, so reordering is safe.</summary>
-    public enum GameAction { Forward, Back, Left, Right, Jump, Ability1, Ability2, Ability3, Ability4, Ability5, Loadout }
+    public enum GameAction { Forward, Back, Left, Right, Jump, Crouch, Ability1, Ability2, Ability3, Ability4, Ability5, Loadout, PracticeReset, PracticeDummy, PracticeLeave, PracticeRounds, SkipVote, PracticeCorpse }
 
     /// <summary>All user settings, persisted in PlayerPrefs.</summary>
     public static class GameSettings
@@ -69,6 +69,10 @@ namespace SuddenMageEncounter
             return s;
         }
 
+        // Hits
+        /// <summary>Damage numbers: one running total per target (true), or a number for every hit.</summary>
+        public static bool DamageTotals = false;
+
         // Controls
         public static float Sensitivity = 2f;
         public static bool InvertY = false;
@@ -82,12 +86,19 @@ namespace SuddenMageEncounter
             { GameAction.Left, Key.A },
             { GameAction.Right, Key.D },
             { GameAction.Jump, Key.Space },
+            { GameAction.Crouch, Key.LeftCtrl },
             { GameAction.Ability1, KeyBind.Mouse(KeyBind.MouseButton.Left) },
             { GameAction.Ability2, Key.E },
             { GameAction.Ability3, Key.Q },
             { GameAction.Ability4, Key.F },
             { GameAction.Ability5, Key.LeftShift },
             { GameAction.Loadout, Key.B },
+            { GameAction.PracticeReset, Key.J },
+            { GameAction.PracticeDummy, Key.K },
+            { GameAction.PracticeLeave, Key.L },
+            { GameAction.PracticeRounds, Key.H },
+            { GameAction.SkipVote, Key.N },
+            { GameAction.PracticeCorpse, Key.I },
         };
 
         /// <summary>The rebindable key for ability slot 0..4.</summary>
@@ -139,6 +150,7 @@ namespace SuddenMageEncounter
             MusicVolume = Mathf.Clamp(PlayerPrefs.GetFloat("sme_music3", 1f), 0f, MaxMusicVolume);
             Sensitivity = PlayerPrefs.GetFloat("sme_sens", 2f);
             InvertY = PlayerPrefs.GetInt("sme_inverty", 0) == 1;
+            DamageTotals = PlayerPrefs.GetInt("sme_damagetotals", 0) == 1;
             foreach (var kv in DefaultBinds)
             {
                 int k = PlayerPrefs.GetInt("sme_bind_" + kv.Key, kv.Value.Code);
@@ -160,6 +172,7 @@ namespace SuddenMageEncounter
             PlayerPrefs.SetFloat("sme_music3", MusicVolume);
             PlayerPrefs.SetFloat("sme_sens", Sensitivity);
             PlayerPrefs.SetInt("sme_inverty", InvertY ? 1 : 0);
+            PlayerPrefs.SetInt("sme_damagetotals", DamageTotals ? 1 : 0);
             foreach (var kv in Binds) PlayerPrefs.SetInt("sme_bind_" + kv.Key, kv.Value.Code);
             PlayerPrefs.Save();
         }

@@ -11,17 +11,30 @@ namespace SuddenMageEncounter
     /// </summary>
     public class TestDummy : Combatant
     {
-        const float Gravity = 20f, BallRadius = 0.35f, HipHeight = 0.95f;
+        const float Gravity = 20f, BallRadius0 = 0.35f, HipHeight0 = 0.95f;
+        /// <summary>A Summon Horde zombie is three quarters of the size; everything else full size.</summary>
+        float Scale => IsSpawned && Status.Value.Horde ? SpellPlans.HordeScale : 1f;
+        float BallRadius => BallRadius0 * Scale;
+        float HipHeight => HipHeight0 * Scale;
 
         readonly NetworkVariable<Vector3> _netPos = new();
         readonly NetworkVariable<Vector3> _netVel = new();
         readonly NetworkVariable<bool> _netRagdoll = new();
+        readonly NetworkVariable<bool> _netLunge = new();
+        public override bool LungingView => _netLunge.Value && _netRagdoll.Value;
 
         public override Vector3 ViewVelocity => _netVel.Value;
         public override float ViewYaw => transform.eulerAngles.y;
         public override float ViewPitch => 0f;
         public override byte ViewFlags => (byte)((_grounded ? NetState.Grounded : 0) | (_netRagdoll.Value ? NetState.Ragdoll : 0));
-        public override string FeedName => "Test Dummy";
+        public override string FeedName => IsUndead ? "Undead" : "Test Dummy";
+        public override float MaxHealth => !IsUndead ? maxHealth : Status.Value.Horde ? SpellPlans.HordeHealth : SpellPlans.UndeadHealth;
+        public override bool InPracticeChamber => PracticeSlot != 0;
+
+        /// <summary>Server: the practice chamber this dummy belongs to (0 = placed in the scene).</summary>
+        [System.NonSerialized] public int PracticeSlot;
+        /// <summary>Server: summoned with K in practice — gone for good once it dies, instead of standing back up.</summary>
+        [System.NonSerialized] public bool Temporary;
 
         Vector3 _homePos;
         Quaternion _homeRot;
@@ -52,12 +65,16 @@ namespace SuddenMageEncounter
             else
             {
                 Vector3 target = _netPos.Value;
-                transform.position = (transform.position - target).sqrMagnitude > 9f
+                // on the front of a chariot: drawn on the front of the ball as it is on this screen
+                var driver = PinnedTo;
+                if (driver != null) target = SpellPlans.PinPoint(driver.transform.position, driver.ViewYaw);
+                transform.position = driver != null || (transform.position - target).sqrMagnitude > 9f
                     ? target
                     : Vector3.Lerp(transform.position, target, 1f - Mathf.Exp(-20f * Time.deltaTime));
                 _grounded = !_netRagdoll.Value && _netVel.Value.sqrMagnitude < 0.5f;
             }
             UpdateLiveRagdoll(_netRagdoll.Value);
+            UpdateUndeadLook();
         }
 
         // ------------------------------------------------------------------ server
@@ -71,14 +88,24 @@ namespace SuddenMageEncounter
             if (Dead.Value)
             {
                 if (_diedAt < 0f) _diedAt = Time.time;
-                else if (Time.time - _diedAt >= respawnDelay && Arena.Current != null) ServerReset();
+                else if (Time.time - _diedAt >= (_corpse.Value ? CorpseKeep : respawnDelay))
+                {
+                    if (Temporary) NetworkObject.Despawn(true);
+                    else if (Arena.Current != null) ServerReset();
+                }
                 return;
             }
             _diedAt = -1f;
-            // only once there's an arena to stand on
-            if (!IsAlive || Arena.Current == null || !MatchManager.Running) return;
+            if (_dieAt >= 0f && Time.time >= _dieAt) { _dieAt = -1f; ServerKillByHazard(DeathCause.Spell, transform.position); return; }
+            if (_combo.Tick(IsAlive, _ragdoll && !_lunging)) ServerComboBreak(); // (a bite's own lunge doesn't count)
+            // only once there's an arena to stand on (practice chamber dummies run even with no match going)
+            if (!IsAlive || Arena.Current == null || (!MatchManager.Running && !InPracticeChamber)) return;
+            if (MatchManager.BuildingArena && !InPracticeChamber) return; // the arena isn't up yet: wait to be reset into it
+            if (Rising(dt) || TakenAway()) return;
             Vector3 pos = transform.position;
             int mask = Layers.EnvironmentMask;
+            if (Grasped && !_ragdoll && !_carried) _vel = new Vector3(0f, Mathf.Min(0f, _vel.y), 0f); // held by the legs
+            else if (IsUndead && !_ragdoll && !_carried && PinnedTo == null) Think(pos);
 
             // trapped by the Empress and thrown out of her domain: the chains haul it back in (as for players)
             if (SpellServer.TrapCenter(this, out var trapCenter) &&
@@ -89,13 +116,32 @@ namespace SuddenMageEncounter
                 ServerKnock(yank, _carried ? 0.6f : 0f);
             }
 
-            if (_carried)
+            var driver = PinnedTo;
+            if (driver != null)
+            {
+                // stuck on the front of a chariot: carried along on it, limp
+                pos = SpellPlans.PinPoint(driver.transform.position, driver.ViewYaw);
+                _vel = driver.ViewVelocity;
+                _ragdoll = true;
+                _ragdollUntil = Time.time + SpellPlans.ChariotStun;
+            }
+            else if (_carried)
             {
                 double now = WorldNet.Now;
+                // spun along its side, but walls stop it (the server flings it out once it's held back, or after a second)
                 Vector3 p = SpellPlans.TornadoCarry(_carryOrigin, _carryDir, _carryStart, _carryCaptured, now, _carryPhase);
-                _vel = (p - pos) / Mathf.Max(dt, 0.001f);
-                pos = p;
-                if (now > _carryStart + SpellPlans.TornadoLife + 0.6) { _carried = false; _ragdollUntil = Time.time + 0.5f; }
+                Vector3 step = p - pos;
+                float dist = step.magnitude;
+                Vector3 to = dist > 1e-5f && Physics.SphereCast(pos, BallRadius, step / dist, out var block, dist, mask, QueryTriggerInteraction.Ignore)
+                    ? pos + step / dist * Mathf.Max(0f, block.distance - 0.01f) : p;
+                _vel = (to - pos) / Mathf.Max(dt, 0.001f);
+                pos = to;
+                if (now > _carryStart + SpellPlans.TornadoLife + 0.6 || now > _carryCaptured + SpellPlans.TornadoHold + 0.6) { _carried = false; _ragdollUntil = Time.time + 0.5f; }
+            }
+            else if (_ragdoll && _standUpAt >= 0f && Time.time >= _standUpAt)
+            {
+                StandNow(); // (after biting someone)
+                pos = transform.position;
             }
             else if (_ragdoll)
             {
@@ -113,6 +159,8 @@ namespace SuddenMageEncounter
                 }
                 else pos += step;
                 bool onGround = Physics.SphereCast(pos, BallRadius * 0.95f, Vector3.down, out _, 0.08f, mask, QueryTriggerInteraction.Ignore);
+                // a bite's lunge: limp until it comes down on the floor, then straight up
+                if (_lunging && onGround && Time.time >= _lungeLand) { _vel = Vector3.zero; _ragdollUntil = 0f; }
                 if (onGround) { float k = Mathf.Exp(-4f * dt); _vel.x *= k; _vel.z *= k; }
                 if (Time.time > _ragdollUntil && onGround && _vel.sqrMagnitude < 4f)
                 {
@@ -120,6 +168,7 @@ namespace SuddenMageEncounter
                     Vector3 feet = pos + Vector3.down * BallRadius;
                     if (StandBlocked(feet)) SpellServer.ClearStandSpace(feet); // break whatever's on top
                     _ragdoll = false;
+                    _lunging = false;
                     _vel = Vector3.zero;
                     pos = feet + Vector3.up * HipHeight;
                 }
@@ -131,20 +180,21 @@ namespace SuddenMageEncounter
                 if (_vel.y <= 0f && Physics.Raycast(pos, Vector3.down, out var ground, HipHeight + down, mask, QueryTriggerInteraction.Ignore))
                 {
                     pos.y = ground.point.y + HipHeight;
-                    _vel = Vector3.zero;
+                    if (IsUndead) { _vel.y = 0f; Walk(ref pos, dt); } // a zombie shambling along
+                    else _vel = Vector3.zero;
                     _grounded = true;
                 }
                 else
                 {
                     _grounded = false;
                     _vel.y -= Gravity * dt;
-                    pos += _vel * dt;
+                    Fly(ref pos, dt);
                 }
             }
 
             // through a linked portal: out of the other one
             // (the dummy's ball counts as in when it touches the opening, and comes out that far in front of the other one)
-            if (WorldNet.PassPortal(transform.position, pos, BallRadius + 0.05f, 0f, out var portalIn, out var portalOut))
+            if (WorldNet.PassPortal(transform.position, pos, BallRadius + 0.05f, 0f, out var portalIn, out var portalOut) && driver == null)
             {
                 pos = SpellPlans.ThroughPoint(pos, portalIn.center, portalIn.Rotation, portalOut.center, portalOut.Rotation, true);
                 _vel = SpellPlans.ThroughDir(_vel, portalIn.Rotation, portalOut.Rotation);
@@ -156,8 +206,71 @@ namespace SuddenMageEncounter
             if (_netPos.Value != pos) _netPos.Value = pos;
             if (_netVel.Value != _vel) _netVel.Value = _vel;
             if (_netRagdoll.Value != _ragdoll) _netRagdoll.Value = _ragdoll;
+            if (_netLunge.Value != Lunging) _netLunge.Value = Lunging;
 
-            if (pos.y < Arena.Current.KillY || KillVolume.AnyContains(pos)) ServerKillByHazard(DeathCause.Barrier, pos);
+            // (feet + 0.2 as for players, so lava kills a dummy the moment it touches the surface)
+            if (!WorldNet.InsideWorld(pos) && (pos.y < Practice.KillYAt(pos) || KillVolume.AnyContains(pos) || KillVolume.AnyContains(pos + Vector3.down * (HipHeight - 0.2f))))
+                ServerKillByHazard(DeathCause.Barrier, pos);
+        }
+
+        /// <summary>
+        /// Standing, in the air (falling, or thrown on its feet: a broken combo): the whole body is swept along, sliding
+        /// along whatever it meets, so a knock never puts it through a wall.
+        /// </summary>
+        void Fly(ref Vector3 pos, float dt)
+        {
+            Vector3 left = _vel * dt;
+            float r = BallRadius * 0.9f;
+            for (int i = 0; i < 3 && left.sqrMagnitude > 1e-8f; i++)
+            {
+                float dist = left.magnitude;
+                Vector3 dir = left / dist;
+                // (from just over the feet to just under the top of the head)
+                Vector3 low = pos + Vector3.up * (r + 0.08f - HipHeight), high = pos + Vector3.up * Mathf.Max(0f, 0.95f * Scale - r);
+                if (!Physics.CapsuleCast(low, high, r, dir, out var hit, dist + 0.02f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
+                {
+                    pos += left;
+                    return;
+                }
+                float go = Mathf.Max(0f, hit.distance - 0.02f);
+                pos += dir * go;
+                left -= dir * go;
+                float into = -Vector3.Dot(_vel, hit.normal);
+                if (into > 0f) _vel += hit.normal * into;
+                into = -Vector3.Dot(left, hit.normal);
+                if (into > 0f) left += hit.normal * into;
+            }
+        }
+
+        double _takenAt;
+
+        /// <summary>Server: taken by The World: held still while crushed, then at its spot inside until it's ready.</summary>
+        bool TakenAway()
+        {
+            var st = Status.Value;
+            double now = WorldNet.Now;
+            if (!st.Taken(now)) return false;
+            if (st.Vanished(now) && _takenAt != st.WorldFrom)
+            {
+                _takenAt = st.WorldFrom;
+                ServerPlace(st.WorldSpot, st.WorldYaw);
+            }
+            _vel = Vector3.zero;
+            if (_netVel.Value != Vector3.zero) _netVel.Value = Vector3.zero;
+            return true;
+        }
+
+        /// <summary>Server: put somewhere else, standing (hips at <paramref name="hips"/>).</summary>
+        public override void ServerPlace(Vector3 hips, float yaw)
+        {
+            if (!IsServer || !IsAlive) return;
+            _vel = Vector3.zero;
+            _ragdoll = _carried = _lunging = false;
+            _standUpAt = -1f;
+            transform.SetPositionAndRotation(hips, Quaternion.Euler(0f, yaw, 0f));
+            _netPos.Value = hips;
+            _netVel.Value = Vector3.zero;
+            _netRagdoll.Value = false;
         }
 
         static bool StandBlocked(Vector3 feet)
@@ -170,7 +283,7 @@ namespace SuddenMageEncounter
         static readonly Collider[] Overlaps = new Collider[16];
 
         /// <summary>If the ball has sunk into something (fast hit, voxels appearing around it), push it back out.</summary>
-        static Vector3 PushOut(Vector3 pos)
+        Vector3 PushOut(Vector3 pos)
         {
             if (_probe == null)
             {
@@ -202,9 +315,42 @@ namespace SuddenMageEncounter
         double _carryStart, _carryCaptured;
         float _carryPhase;
 
+        // ---------------- combo break (as for players, so it can be tried out on a dummy)
+
+        readonly ComboTracker _combo = new();
+
+        void ServerComboBreak()
+        {
+            if (Pinned) return; // stuck on the front of a chariot: that ends on its own
+            _combo.Break();
+            SpellServer.ReleaseFromCarry(this);
+            // up at once, even in mid-air: it drops straight down from where it is
+            if (_ragdoll || _carried)
+            {
+                Vector3 pos = transform.position;
+                Vector3 feet = pos + Vector3.down * BallRadius;
+                if (StandBlocked(feet)) SpellServer.ClearStandSpace(feet);
+                pos = feet + Vector3.up * HipHeight;
+                transform.position = pos;
+                _netPos.Value = pos;
+            }
+            _carried = false;
+            _ragdoll = false;
+            _ragdollUntil = 0f;
+            _vel = new Vector3(0f, Mathf.Min(0f, _vel.y), 0f);
+            _grounded = false;
+            _lunging = false;
+            ComboBreakRpc(SpellPlans.ComboBreakTime);
+        }
+
+        [Rpc(SendTo.Everyone)]
+        void ComboBreakRpc(float seconds) => ComboBreakView.Create(this, seconds);
+
         public override void ServerCarry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
-            if (!IsServer || !IsAlive) return;
+            if (!IsServer || !IsAlive || _combo.Unstoppable || Status.Value.Taken(WorldNet.Now)) return;
+            if (_combo.NoteKnockdown()) { ServerComboBreak(); return; }
+            SpellServer.FreeGrasp(this);
             _carried = true;
             _ragdoll = true;
             _ragdollUntil = Time.time + 999f;
@@ -213,8 +359,12 @@ namespace SuddenMageEncounter
 
         public override void ServerKnock(Vector3 velocity, float ragdollSeconds)
         {
-            if (!IsServer || !IsAlive) return;
+            if (!IsServer || !IsAlive || Status.Value.Taken(WorldNet.Now)) return;
             if (_carried) { _carried = false; _ragdollUntil = 0f; }
+            if (ragdollSeconds > 0f && !_combo.Unstoppable && _combo.NoteKnockdown()) ServerComboBreak();
+            if (_combo.Unstoppable) ragdollSeconds = 0f; // just broke a combo: still thrown, not knocked down
+            if (ragdollSeconds > 0f) SpellServer.FreeGrasp(this); // knocked out of Undying Grasp
+            else if (Grasped && !_ragdoll) return;                // (nothing less gets it out)
             _vel = velocity;
             _grounded = false;
             if (ragdollSeconds > 0f)
@@ -245,13 +395,17 @@ namespace SuddenMageEncounter
 
         public void ServerReset()
         {
+            Status.Value = default; // no longer Undead (MaxHealth goes back to normal first)
+            _lunging = false;
             ServerRevive();
             TrappedBy.Value = 0;
+            PinnedBy.Value = 0;
             _mana = Mana;
             _manaTime = WorldNet.Now;
             _vel = Vector3.zero;
             _ragdoll = false;
             _carried = false;
+            _combo.Reset();
             Vector3 pos = _homePos;
             if (Physics.Raycast(_homePos + Vector3.up * 0.5f, Vector3.down, out var hit, 500f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
                 pos = hit.point + Vector3.up * HipHeight;
@@ -270,6 +424,215 @@ namespace SuddenMageEncounter
             transform.SetPositionAndRotation(pos, _homeRot);
             SetVisible(true);
         }
+
+        // ------------------------------------------------------------------ the Undead (server)
+
+        bool _lunging;
+        float _lungeLand;
+        float _nextBite, _nextJump;
+        Vector3 _riseFeet;
+
+        /// <summary>Lunging at someone with Infectious Bite (until it's back on its feet).</summary>
+        public bool Lunging => _lunging && _ragdoll;
+
+        /// <summary>
+        /// Server: a Summon Horde zombie (three quarters the size, 15 health) climbing out of the ground at
+        /// <paramref name="feet"/> from <paramref name="riseFrom"/>, on <paramref name="master"/>'s side. Gone for good when it dies.
+        /// </summary>
+        public static TestDummy ServerSpawnZombie(Vector3 feet, float yaw, ulong master, byte practiceSlot, double riseFrom)
+        {
+            var prefab = Practice.DummyPrefab();
+            if (prefab == null) { Debug.LogWarning("[SME] No TestDummy in the network prefab list: Summon Horde has nothing to raise."); return null; }
+            var go = Instantiate(prefab, feet + Vector3.down * 2f, Quaternion.Euler(0f, yaw, 0f));
+            var d = go.GetComponent<TestDummy>();
+            d.PracticeSlot = practiceSlot;
+            d.Temporary = true;
+            go.GetComponent<NetworkObject>().Spawn(true);
+            d.ServerMakeUndead(feet, yaw, master, true, riseFrom);
+            return d;
+        }
+
+        /// <summary>
+        /// Server: up as one of the Undead on <paramref name="master"/>'s side, standing at <paramref name="feet"/> (a horde
+        /// zombie climbs out of the ground there first). It shambles at the nearest enemy and bites.
+        /// </summary>
+        public void ServerMakeUndead(Vector3 feet, float yaw, ulong master, bool horde, double riseFrom)
+        {
+            if (!IsServer || !IsSpawned) return;
+            Status.Value = new BodyStatus { Undead = true, Master = master, Horde = horde, RiseFrom = horde ? riseFrom : 0 };
+            _corpse.Value = false; // (a practice corpse raised: an ordinary body from now on)
+            _dieAt = -1f;
+            ServerRevive();
+            TrappedBy.Value = 0;
+            PinnedBy.Value = 0;
+            _vel = Vector3.zero;
+            _ragdoll = _carried = _lunging = false;
+            _combo.Reset();
+            _riseFeet = feet;
+            _nextBite = Time.time + 1f;
+            float hip = HipHeight0 * (horde ? SpellPlans.HordeScale : 1f);
+            Vector3 pos = horde ? feet + Vector3.down * (1.95f * SpellPlans.HordeScale) : feet + Vector3.up * hip;
+            var rot = Quaternion.Euler(0f, yaw, 0f);
+            transform.SetPositionAndRotation(pos, rot);
+            _netPos.Value = pos;
+            _netVel.Value = Vector3.zero;
+            _netRagdoll.Value = false;
+            UndeadRpc(pos, yaw);
+        }
+
+        [Rpc(SendTo.Everyone)]
+        void UndeadRpc(Vector3 pos, float yaw)
+        {
+            ClearLiveRagdoll();
+            if (LastRagdoll) Destroy(LastRagdoll);
+            transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, yaw, 0f));
+            SetVisible(true);
+            if (!Status.Value.Horde) NecroVfx.RiseBurst(pos);
+        }
+
+        /// <summary>Server: a horde zombie still climbing out of the ground (nothing else happens to it meanwhile).</summary>
+        bool Rising(float dt)
+        {
+            var st = Status.Value;
+            double now = WorldNet.Now;
+            if (!st.Horde || now >= st.RiseFrom + SpellPlans.HordeRise) return false;
+            float u = Mathf.Clamp01((float)(now - st.RiseFrom) / SpellPlans.HordeRise);
+            u = 1f - (1f - u) * (1f - u);
+            // from just under the surface (head and all) up to standing on it
+            Vector3 pos = _riseFeet + Vector3.up * HipHeight + Vector3.down * ((1.95f * Scale + 0.05f) * (1f - u));
+            transform.position = pos;
+            _vel = Vector3.zero;
+            if (_netPos.Value != pos) _netPos.Value = pos;
+            if (_netVel.Value != Vector3.zero) _netVel.Value = Vector3.zero;
+            return true;
+        }
+
+        float _standUpAt = -1f;
+
+        /// <summary>Server: the bite landed: down a moment longer (<see cref="SpellPlans.BiteRecover"/>), then up.</summary>
+        public void ServerStandUp() => _standUpAt = Time.time + SpellPlans.BiteRecover;
+
+        void StandNow()
+        {
+            _standUpAt = -1f;
+            _lunging = false;
+            if (!_ragdoll) return;
+            Vector3 feet = transform.position + Vector3.down * BallRadius;
+            if (StandBlocked(feet)) SpellServer.ClearStandSpace(feet);
+            Vector3 pos = feet + Vector3.up * HipHeight;
+            transform.position = pos;
+            _netPos.Value = pos;
+            _ragdoll = false;
+            _vel = new Vector3(0f, Mathf.Min(0f, _vel.y), 0f);
+            _grounded = false;
+        }
+
+        /// <summary>The nearest enemy it can go for (not on its own side; in its own practice chamber, if it's in one).</summary>
+        Combatant NearestEnemy(Vector3 pos)
+        {
+            Combatant best = null;
+            float bestD = 40f;
+            foreach (var c in Registry)
+            {
+                if (c == null || c == this || !c.IsAlive || !c.Visible || Allies(this, c)) continue;
+                if (c.InPracticeChamber != InPracticeChamber) continue;
+                float d = (c.transform.position - pos).magnitude;
+                if (d < bestD) { bestD = d; best = c; }
+            }
+            return best;
+        }
+
+        /// <summary>Server: shamble at the nearest enemy; close enough, and it's been 3 s: lunge at them, teeth first.</summary>
+        void Think(Vector3 pos)
+        {
+            var target = NearestEnemy(pos);
+            if (target == null) { _vel.x = _vel.z = 0f; return; }
+            Vector3 to = target.transform.position - pos;
+            Vector3 flat = new(to.x, 0f, to.z);
+            float dist = flat.magnitude;
+            if (dist > 0.01f) transform.rotation = Quaternion.LookRotation(flat);
+            Vector3 walk = dist > 1f ? flat / dist * SpellPlans.HordeSpeed : Vector3.zero;
+            _vel.x = walk.x;
+            _vel.z = walk.z;
+            if (Time.time < _nextBite || to.magnitude > SpellPlans.HordeBiteRange || !_grounded) return;
+            _nextBite = Time.time + SpellPlans.HordeBiteEvery;
+            Vector3 aim = (target.transform.position + Vector3.up * 0.2f - pos).normalized;
+            _vel = aim * SpellPlans.BiteSpeed + Vector3.up * SpellPlans.BiteUp;
+            _ragdoll = true;
+            _ragdollUntil = Time.time + SpellPlans.BiteRagdoll;
+            _lunging = true;
+            _lungeLand = Time.time + 0.15f; // (not the floor it just left)
+            _grounded = false;
+            SpellServer.StartBite(this);
+        }
+
+        /// <summary>Server: walking along the ground: over low steps, and a hop when a wall's in the way.</summary>
+        void Walk(ref Vector3 pos, float dt)
+        {
+            Vector3 h = new(_vel.x, 0f, _vel.z);
+            float step = h.magnitude * dt;
+            if (step < 1e-5f) return;
+            Vector3 dir = h / h.magnitude;
+            int mask = Layers.EnvironmentMask;
+            Vector3 knee = pos + Vector3.down * (HipHeight * 0.55f);
+            if (Physics.SphereCast(knee, BallRadius * 0.8f, dir, out _, step + BallRadius, mask, QueryTriggerInteraction.Ignore))
+            {
+                bool high = Physics.SphereCast(pos + Vector3.up * 0.2f, BallRadius * 0.8f, dir, out _, step + BallRadius, mask, QueryTriggerInteraction.Ignore);
+                if (!high) pos.y += 0.3f; // a step: up onto it
+                else if (Time.time >= _nextJump)
+                {
+                    _nextJump = Time.time + 1f;
+                    _vel.y = 7.5f; // a wall: try hopping it
+                    _grounded = false;
+                    return;
+                }
+                else return;
+            }
+            pos += dir * step;
+        }
+
+        bool _lookUndead;
+        MaterialPropertyBlock _mpb;
+
+        /// <summary>Every peer: the Undead are sickly green (a horde zombie also three quarters the size).</summary>
+        void UpdateUndeadLook()
+        {
+            float s = Scale;
+            if (transform.localScale.x != s) transform.localScale = Vector3.one * s;
+            bool undead = IsUndead;
+            if (undead == _lookUndead) return;
+            _lookUndead = undead;
+            _mpb ??= new MaterialPropertyBlock();
+            foreach (var r in model.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!undead) { r.SetPropertyBlock(null); continue; }
+                r.GetPropertyBlock(_mpb);
+                _mpb.SetColor("_BaseColor", SpellPlans.UndeadSkin);
+                _mpb.SetColor("_Color", SpellPlans.UndeadSkin);
+                r.SetPropertyBlock(_mpb);
+            }
+        }
+
+        /// <summary>A dead dummy's body shrinks away after this long (players' bodies stay for the round).</summary>
+        public const float DummyCorpseSeconds = 2.5f;
+        protected override float CorpseSeconds => _corpse.Value ? CorpseKeep : DummyCorpseSeconds;
+
+        // ---------------- a practice corpse (I): a dummy lying dead, kept a while for raising
+
+        /// <summary>How long a practice corpse lies there before it goes.</summary>
+        public const float CorpseKeep = 60f;
+        readonly NetworkVariable<bool> _corpse = new();
+        float _dieAt = -1f;
+
+        /// <summary>Server: this dummy drops dead in a moment (once everyone knows its body is to stay).</summary>
+        public void ServerMakeCorpse()
+        {
+            _corpse.Value = true;
+            _dieAt = Time.time + 0.25f;
+        }
+
+        /// <summary>Server: its skin is being taken: not back at its spot until that's done.</summary>
+        public void ServerHoldCorpse() { if (_diedAt >= 0f) _diedAt = Time.time; }
 
         public override void SetVisible(bool on)
         {

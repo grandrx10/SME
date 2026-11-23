@@ -1,4 +1,5 @@
 using System;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -44,6 +45,44 @@ namespace SuddenMageEncounter
         PortalHold = 34,     // right hand out, palm forward, framing the portal
         PortalCast = 35,     // a sweep of the hand: the portal opens
         SwiftCast = 36,      // crouched, gathering... then the forced run, leaning in
+        SeveranceDash = 37,  // rushing in, the sword held low on the left
+        SeveranceSlash = 38, // the sword swept left to right
+        FlowCharge = 39,     // down on one knee, sword held low on the left, charging
+        FlowStrike = 40,     // after the teleport: right arm straight out to the side, sword pointing on
+        AttractCast = 41,    // left hand raised... then held out, steering the ball of water
+        RepelCast = 42,      // right hand raised... then held out, steering the ball of flame
+        FuseCast = 43,       // both hands round the purple ball as it grows... then thrust out
+        HierophantHold = 44, // both palms up and out, framing where the wall will stand
+        HierophantCast = 45, // ...pushed out: the wall appears
+        LoversBeam = 46,     // right hand thrown out, held out along the beam; left hand on the heart
+        ChariotRun = 47,     // head down, arms flung back, charging
+        HammerDrag = 48,     // Rising Hammer's rush: both hands on the hammer, its head dragged behind on the left
+        HammerRise = 49,     // ...brought up from behind and swung upwards
+        HammerLeap = 50,     // Descending Hammer: down on one knee, then leaping, the hammer held behind the head
+        HammerSlam = 51,     // ...brought down vertically in front on landing
+        SwarmRaise = 52,     // Rock Swarm: a scoop down, then both hands thrown up into the air
+        IceCrouch = 53,      // Ice Spike: crouched, both palms on the ground... then standing up
+        HermitKneel = 54,    // The Hermit: down on one knee, palms on the ground while the house goes up
+        WheelSpin = 55,      // Wheel of Fortune: a flick of the right hand up at the die
+        Clasp = 56,          // Justice: hands clasped together in front of the chest
+        LeftArmUp = 57,      // The Hanged Man: the left arm raised straight up
+        HeadBack = 58,       // Death: the head tipped back... then forward again
+        RightHandUp = 59,    // The Devil: the right hand raised
+        TowerPray = 60,      // The Tower: kneeling, hands together in prayer
+        NecroCrouch = 61,    // Undead Servitude / Summon Horde: crouched, hands out over the ground
+        BiteCrouch = 62,     // Infectious Bite: crouched, ready to spring
+        FlameSpew = 63,      // Flame Thrower: both hands clasped, held straight out in front
+        GrapplePoint = 64,   // Grapple Hook: the left hand held out, pointing
+        BreathLean = 65,     // Icy Breath: leaning forward, breathing out
+        Flex = 66,           // Strength: both arms up, flexing
+        ShotgunAim = 67,     // Rachmaninoff: the shotgun raised to the shoulder... fired
+        RifleKneel = 68,     // Sebastian: down on one knee, aiming down the sights, charging
+        RifleFire = 69,      // ...the kick, then standing up
+        GraspKneel = 70,     // Undying Grasp: down on one knee, hands out over the ground
+        SkinKneel = 71,      // Skinwalker: down on one knee over the corpse, hands out to it
+        BombPlace = 72,      // Remote Flame Bomb: the right hand presses it onto the spot
+        BombToss = 73,       // Flame Bomb Toss: both hands thrown forward
+
     }
 
     /// <summary>Owner-authoritative movement snapshot replicated to everyone.</summary>
@@ -57,8 +96,12 @@ namespace SuddenMageEncounter
         public byte Teleport;   // increments on respawn so remotes snap instead of interpolating
         public byte Pose;       // SpellPose
         public double PoseStart; // server time the pose started
+        /// <summary>Owner's real-time clock when this was written: remotes space the snapshots by when they were taken,
+        /// not by when they happened to arrive (packets bunch up, which made other players stutter). Not part of equality,
+        /// so standing still still sends nothing.</summary>
+        public float Stamp;
 
-        public const byte Grounded = 1, Ragdoll = 2;
+        public const byte Grounded = 1, Ragdoll = 2, Crouch = 4;
 
         public bool Has(byte f) => (Flags & f) != 0;
 
@@ -72,6 +115,7 @@ namespace SuddenMageEncounter
             s.SerializeValue(ref Teleport);
             s.SerializeValue(ref Pose);
             s.SerializeValue(ref PoseStart);
+            s.SerializeValue(ref Stamp);
         }
 
         public bool Equals(NetState o) =>
@@ -86,32 +130,137 @@ namespace SuddenMageEncounter
     public struct ManaState : INetworkSerializable, IEquatable<ManaState>
     {
         public const float Max = 10f, PerSecond = 1f;
+        /// <summary>
+        /// <see cref="Flow"/>: refilling as normal / not refilling at all (The Chariot) / draining (The Lovers' tether) /
+        /// draining at <see cref="SpellPlans.ChannelDrain"/> (Death's aura, the Flame Thrower).
+        /// </summary>
+        public const byte Refill = 0, Held = 1, Draining = 2, DrainingFast = 3;
         public float Value;
         public double Time;
         /// <summary>The Magician: regeneration runs at double speed until this time.</summary>
         public double FastUntil;
+        /// <summary>Which way it's going: <see cref="Refill"/>, <see cref="Held"/>, <see cref="Draining"/> or <see cref="DrainingFast"/>.</summary>
+        public byte Flow;
+        /// <summary>The most mana this player can hold (0 = the usual <see cref="Max"/>; Temperance raises it, the Undead lower it).</summary>
+        public byte Cap;
+
+        public float Limit => Cap > 0 ? Cap : Max;
 
         public float At(double now)
         {
+            float dt = (float)(now - Time), max = Limit;
+            if (Flow == Held) return Mathf.Clamp(Value, 0f, max);
+            if (Flow == Draining) return Mathf.Clamp(Value - dt * SpellPlans.LoversDrain, 0f, max);
+            if (Flow == DrainingFast) return Mathf.Clamp(Value - dt * SpellPlans.ChannelDrain, 0f, max);
             float extra = (float)System.Math.Max(0.0, System.Math.Min(now, FastUntil) - Time);
-            return Mathf.Clamp(Value + ((float)(now - Time) + extra) * PerSecond, 0f, Max);
+            return Mathf.Clamp(Value + (dt + extra) * PerSecond, 0f, max);
         }
 
         public bool Fast(double now) => now < FastUntil;
 
-        /// <summary>A new mana amount from now on (keeps a running Magician boost).</summary>
-        public ManaState With(double now, float value) => new() { Value = value, Time = now, FastUntil = FastUntil };
+        /// <summary>A new mana amount from now on (keeps a running Magician boost, the flow and the cap).</summary>
+        public ManaState With(double now, float value) => new() { Value = value, Time = now, FastUntil = FastUntil, Flow = Flow, Cap = Cap };
+
+        /// <summary>The same mana, going the given way from now on.</summary>
+        public ManaState WithFlow(double now, byte flow) => new() { Value = At(now), Time = now, FastUntil = FastUntil, Flow = flow, Cap = Cap };
 
         public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
         {
             s.SerializeValue(ref Value);
             s.SerializeValue(ref Time);
             s.SerializeValue(ref FastUntil);
+            s.SerializeValue(ref Flow);
+            s.SerializeValue(ref Cap);
         }
 
-        public bool Equals(ManaState o) => Value == o.Value && Time == o.Time && FastUntil == o.FastUntil;
+        public bool Equals(ManaState o) => Value == o.Value && Time == o.Time && FastUntil == o.FastUntil && Flow == o.Flow && Cap == o.Cap;
         public override bool Equals(object obj) => obj is ManaState o && Equals(o);
         public override int GetHashCode() => Value.GetHashCode() ^ Time.GetHashCode();
+    }
+
+    /// <summary>
+    /// Lasting states on a body, written by the server and drawn by everyone: The Hanged Man's float, Wheel of
+    /// Fortune's results, Icy Breath's chill, and being (or turning into) one of the Undead.
+    /// </summary>
+    public struct BodyStatus : INetworkSerializable, IEquatable<BodyStatus>
+    {
+        /// <summary>The Hanged Man: upside down and floating from <see cref="HangFrom"/> until <see cref="HangUntil"/>.</summary>
+        public double HangFrom, HangUntil;
+        /// <summary>Wheel of Fortune 5: metallic grey, nothing moves you, until then.</summary>
+        public double SteelUntil;
+        /// <summary>Wheel of Fortune 6: golden purple, nothing hurts you, until then.</summary>
+        public double GoldUntil;
+        /// <summary>Wheel of Fortune 0: flashing red from <see cref="DoomFrom"/>; blows up at <see cref="DoomAt"/> (0 = not doomed).</summary>
+        public double DoomFrom, DoomAt;
+        /// <summary>Icy Breath: half speed until then.</summary>
+        public double SlowUntil;
+        /// <summary>Undying Grasp: held by the legs and silenced from <see cref="GraspFrom"/> until <see cref="GraspUntil"/>.</summary>
+        public double GraspFrom, GraspUntil;
+        /// <summary>A dead body turning green (bitten to death): it gets up as one of the Undead at InfectFrom + <see cref="SpellPlans.InfectTime"/>.</summary>
+        public double InfectFrom;
+        /// <summary>One of the Undead, on <see cref="Master"/>'s side (the master's object id).</summary>
+        public bool Undead;
+        public ulong Master;
+        /// <summary>A small mindless one (Summon Horde), climbing out of the ground from <see cref="RiseFrom"/>.</summary>
+        public bool Horde;
+        public double RiseFrom;
+        /// <summary>Strength: transformed (bigger, higher jumps, harder hits) from <see cref="StrongFrom"/> until <see cref="StrongUntil"/>.</summary>
+        public double StrongFrom, StrongUntil;
+        /// <summary>The Star: outlined through walls until then.</summary>
+        public double LitUntil;
+        /// <summary>The Moon: filling over the caster from <see cref="MoonFrom"/>, full (and pulsing) at <see cref="MoonAt"/> (0 = none).</summary>
+        public double MoonFrom, MoonAt;
+        /// <summary>The Sun: cast at <see cref="SunCast"/>; colours inverted from <see cref="SunFrom"/> until <see cref="SunUntil"/> (0 = none).</summary>
+        public double SunCast, SunFrom, SunUntil;
+        /// <summary>The World: crushed away from <see cref="WorldFrom"/>, standing at <see cref="WorldSpot"/> inside it from <see cref="WorldUntil"/> (0 = not taken).</summary>
+        public double WorldFrom, WorldUntil;
+        public Vector3 WorldSpot;
+        public float WorldYaw;
+        /// <summary>Who cast it (object id).</summary>
+        public ulong WorldBy;
+
+        public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
+        {
+            s.SerializeValue(ref HangFrom); s.SerializeValue(ref HangUntil);
+            s.SerializeValue(ref SteelUntil); s.SerializeValue(ref GoldUntil);
+            s.SerializeValue(ref DoomFrom); s.SerializeValue(ref DoomAt);
+            s.SerializeValue(ref SlowUntil); s.SerializeValue(ref InfectFrom);
+            s.SerializeValue(ref GraspFrom); s.SerializeValue(ref GraspUntil);
+            s.SerializeValue(ref Undead); s.SerializeValue(ref Master);
+            s.SerializeValue(ref Horde); s.SerializeValue(ref RiseFrom);
+            s.SerializeValue(ref StrongFrom); s.SerializeValue(ref StrongUntil);
+            s.SerializeValue(ref LitUntil); s.SerializeValue(ref MoonFrom); s.SerializeValue(ref MoonAt);
+            s.SerializeValue(ref SunCast); s.SerializeValue(ref SunFrom); s.SerializeValue(ref SunUntil);
+            s.SerializeValue(ref WorldFrom); s.SerializeValue(ref WorldUntil); s.SerializeValue(ref WorldSpot); s.SerializeValue(ref WorldYaw); s.SerializeValue(ref WorldBy);
+        }
+
+        public bool Equals(BodyStatus o) =>
+            HangFrom == o.HangFrom && HangUntil == o.HangUntil && SteelUntil == o.SteelUntil && GoldUntil == o.GoldUntil &&
+            DoomFrom == o.DoomFrom && DoomAt == o.DoomAt && SlowUntil == o.SlowUntil && InfectFrom == o.InfectFrom && GraspFrom == o.GraspFrom && GraspUntil == o.GraspUntil &&
+            Undead == o.Undead && Master == o.Master && Horde == o.Horde && RiseFrom == o.RiseFrom &&
+            StrongFrom == o.StrongFrom && StrongUntil == o.StrongUntil && LitUntil == o.LitUntil &&
+            MoonFrom == o.MoonFrom && MoonAt == o.MoonAt && SunCast == o.SunCast && SunFrom == o.SunFrom && SunUntil == o.SunUntil &&
+            WorldFrom == o.WorldFrom && WorldUntil == o.WorldUntil && WorldSpot == o.WorldSpot && WorldYaw == o.WorldYaw && WorldBy == o.WorldBy;
+        public override bool Equals(object obj) => obj is BodyStatus o && Equals(o);
+        public override int GetHashCode() => HangUntil.GetHashCode() ^ Master.GetHashCode();
+
+        public bool Hanging(double now) => now >= HangFrom && now < HangUntil;
+        public bool Steel(double now) => now < SteelUntil;
+        public bool Gold(double now) => now < GoldUntil;
+        public bool Doomed => DoomAt > 0;
+        public bool Slowed(double now) => now < SlowUntil;
+        /// <summary>Held by Undying Grasp: no moving, no casting.</summary>
+        public bool Grasped(double now) => now < GraspUntil;
+        public bool Strong(double now) => now >= StrongFrom && now < StrongUntil;
+        public bool Lit(double now) => now < LitUntil;
+        /// <summary>The Moon is over them (still filling).</summary>
+        public bool Moon(double now) => MoonAt > 0 && now >= MoonFrom && now < MoonAt;
+        /// <summary>The Sun: their colours are inverted, and looking at them hurts.</summary>
+        public bool Sun(double now) => now >= SunFrom && now < SunUntil;
+        /// <summary>Taken by The World: being crushed, or gone until it's ready (nothing touches them, they do nothing).</summary>
+        public bool Taken(double now) => now >= WorldFrom && now < WorldUntil;
+        /// <summary>Crushed away completely, not yet back.</summary>
+        public bool Vanished(double now) => Taken(now) && now >= WorldFrom + SpellPlans.WorldCrush;
     }
 
     /// <summary>The 5 cards a player brought into the round (what the server lets them cast).</summary>
@@ -144,5 +293,36 @@ namespace SuddenMageEncounter
         public bool Equals(EquippedCards o) => C0 == o.C0 && C1 == o.C1 && C2 == o.C2 && C3 == o.C3 && C4 == o.C4;
         public override bool Equals(object obj) => obj is EquippedCards o && Equals(o);
         public override int GetHashCode() => C0 | (C1 << 8) | (C2 << 16) | (C3 << 24) ^ C4;
+    }
+
+    /// <summary>The skin a player is wearing (Skinwalker): whose colour, face and name, and their moves. Server writes.</summary>
+    public struct SkinState : INetworkSerializable, IEquatable<SkinState>
+    {
+        public const byte Player = 0, Dummy = 1, Undead = 2;
+        public bool On;
+        /// <summary>A player's, a test dummy's, or one of the Undead's (green).</summary>
+        public byte Kind;
+        /// <summary>Palette index (a player's).</summary>
+        public byte Color;
+        /// <summary>Whose face (object id; 0 = none).</summary>
+        public ulong Face;
+        public FixedString32Bytes Name;
+        public EquippedCards Hand;
+
+        public void SetName(string name)
+        {
+            Name = new FixedString32Bytes();
+            Name.CopyFromTruncated(name ?? "");
+        }
+
+        public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
+        {
+            s.SerializeValue(ref On); s.SerializeValue(ref Kind); s.SerializeValue(ref Color); s.SerializeValue(ref Face);
+            s.SerializeValue(ref Name); s.SerializeValue(ref Hand);
+        }
+
+        public bool Equals(SkinState o) => On == o.On && Kind == o.Kind && Color == o.Color && Face == o.Face && Name.Equals(o.Name) && Hand.Equals(o.Hand);
+        public override bool Equals(object obj) => obj is SkinState o && Equals(o);
+        public override int GetHashCode() => Face.GetHashCode() ^ Hand.GetHashCode();
     }
 }
