@@ -122,7 +122,7 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>The circle in unit coordinates (radius 1), in the order the pen writes it.</summary>
-        static List<List<Vector2>> CircleStrokes()
+        internal static List<List<Vector2>> CircleStrokes()
         {
             var s = new List<List<Vector2>>
             {

@@ -23,10 +23,11 @@ namespace SuddenMageEncounter
         TheStar = 53, TheMoon = 54, TheSun = 55, Judgement = 56, TheWorld = 57, Undying = 58,
         Rachmaninoff = 59, Sebastian = 60, UndyingGrasp = 61,
         Skinwalker = 62, RemoteFlameBomb = 63, RemoteDetonation = 64, FlameBombToss = 65,
+        NecromaticBlast = 66, ShatterHex = 67, StasisHex = 68, MindHex = 69,
     }
 
     /// <summary>Saved with cards: append new elements at the end, never reorder.</summary>
-    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot, Water, Weapon, Necromancy }
+    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot, Water, Weapon, Necromancy, Hex }
 
     /// <summary>What a card costs to cast (shown top right: a bubble for mana, a heart for health, a P for a passive card that is never cast).</summary>
     public enum CostType : byte { Mana, Health, Passive }
@@ -155,7 +156,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.TheFool, name = "The Fool", element = Element.Tarot, costType = CostType.Mana, cost = 4,
+                id = CardId.TheFool, name = "The Fool", element = Element.Tarot, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Epic,
                 description = "Generate a free random single-use card from all possible cards.", castOnPress = true,
             },
@@ -453,6 +454,30 @@ namespace SuddenMageEncounter
                 rarity = Rarity.Common,
                 description = "Toss out 4 Flame bombs in front of you. Can be activated with Remote Detonation.", castOnPress = true,
             },
+            new()
+            {
+                id = CardId.NecromaticBlast, name = "Necromatic Blast", element = Element.Necromancy, costType = CostType.Mana, cost = 3,
+                rarity = Rarity.Common,
+                description = "Launch a corrupted chunk that heals you on hit.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.ShatterHex, name = "Shatter Hex", element = Element.Hex, costType = CostType.Mana, cost = 4,
+                rarity = Rarity.Common,
+                description = "Apply Shatter Hex to an enemy. Dealing damage will Shatter them.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.StasisHex, name = "Stasis Hex", element = Element.Hex, costType = CostType.Mana, cost = 3,
+                rarity = Rarity.Common,
+                description = "Apply Stasis Hex to an enemy. Dealing damage will Stasis them.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.MindHex, name = "Mind Hex", element = Element.Hex, costType = CostType.Mana, cost = 8,
+                rarity = Rarity.Rare,
+                description = "Apply Mind Hex to an enemy. Staying nearby grants control of their body.", castOnPress = true,
+            },
         };
 
         /// <summary>The card that comes along with this one (None: nothing does): any card that places flame bombs brings Remote Detonation.</summary>
@@ -573,6 +598,8 @@ namespace SuddenMageEncounter
             CardId.RemoteFlameBomb => SpellPlans.BombPlace,                    // the right hand puts it there
             CardId.RemoteDetonation => SpellPlans.DetonateTime,                // the left hand goes up
             CardId.FlameBombToss => SpellPlans.TossTime,                       // both hands thrown forward
+            CardId.NecromaticBlast => SpellPlans.NecroCharge,                  // the ball gathers, then it's thrown
+            CardId.ShatterHex or CardId.StasisHex or CardId.MindHex => SpellPlans.HexCast, // the left hand points
             _ => 0.3f,
         };
 
@@ -600,6 +627,7 @@ namespace SuddenMageEncounter
             Element.Water => new Color(0.3f, 0.78f, 0.86f), // cyan / aqua
             Element.Weapon => new Color(0.87f, 0.9f, 0.95f), // steel silver-white
             Element.Necromancy => new Color(0.56f, 0.72f, 0.36f), // sickly green
+            Element.Hex => new Color(0.58f, 0.36f, 0.82f), // purple
             _ => new Color(0.82f, 0.68f, 0.5f), // Ground: light brown
         };
 

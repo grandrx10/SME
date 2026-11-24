@@ -122,7 +122,9 @@ namespace SuddenMageEncounter
         /// <summary>The body stays facing one way (Ice Spike's crouch) while the camera still looks around.</summary>
         public bool FaceLocked => Time.time < _faceLockUntil && !Ragdolled;
         /// <summary>The way the body faces: <see cref="Yaw"/> (the camera's), unless it's face-locked.</summary>
-        public float BodyYaw => FaceLocked ? _faceYaw : Yaw;
+        public float BodyYaw => _frozen ? _heldYaw : _puppet ? PuppetYaw() : FaceLocked ? _faceYaw : Yaw;
+        /// <summary>The way the head looks up and down: <see cref="Pitch"/> (the camera's), unless a hex has hold of the body.</summary>
+        public float BodyPitch => _frozen || _puppet ? _heldPitch : Pitch;
         float _faceLockUntil = -1f, _faceYaw;
 
         /// <summary>Keep the body facing the way it faces now for <paramref name="seconds"/> (the camera stays free).</summary>
@@ -135,7 +137,89 @@ namespace SuddenMageEncounter
         public bool Bubbled => Time.time >= _bubbleFrom && Time.time < _bubbleUntil;
         /// <summary>Taken by The World: held exactly where it is (no gravity, no moving; looking round still works).</summary>
         public bool Held;
-        public bool Busy => Held || Dashing || Siphoning || Rooted || _carried || Time.time < _bubbleUntil || Time.time < _swiftUntil || Blinking || Charioting || Pinned || Leaping;
+        public bool Busy => Held || Stasis || Mind || Dashing || Siphoning || Rooted || _carried || Time.time < _bubbleUntil || Time.time < _swiftUntil || Blinking || Charioting || Pinned || Leaping;
+
+        // ---------------- Stasis Hex, Mind Hex ----------------
+
+        bool _frozen, _puppet, _jumpSeen, _jumpWanted;
+        float _heldYaw, _heldPitch, _puppetYaw, _masterYaw;
+        double _thawed, _broken, _liftOf;
+        float _lifted;
+
+        /// <summary>Frozen by Stasis Hex, or held up by Shatter Hex (not any more once something has moved us out of it: the server's word on that is on its way).</summary>
+        public bool Stasis => _pc != null && (_pc.InStasis && _pc.Status.Value.StasisFrom != _thawed || Shattering);
+        bool Shattering => _pc != null && _pc.Shattering && _pc.Status.Value.ShatterFrom != _broken;
+
+        /// <summary>The server has thrown, carried or picked us up: out of Stasis (or Shatter's hold).</summary>
+        void Thaw()
+        {
+            if (_pc == null) return;
+            if (_pc.InStasis) _thawed = _pc.Status.Value.StasisFrom;
+            if (_pc.Shattering) _broken = _pc.Status.Value.ShatterFrom;
+        }
+
+        /// <summary>Held by a hex: nothing moves, but for Shatter's lift, and being pushed out of ground that closes on us.</summary>
+        void FrozenTick()
+        {
+            Velocity = Vector3.zero;
+            _fallSpeed = 0f;
+            if (!Shattering) { Depenetrate(); return; }
+            double from = _pc.Status.Value.ShatterFrom;
+            if (_liftOf != from) { _liftOf = from; _lifted = 0f; }
+            float up = SpellPlans.ShatterRise((float)(WorldNet.Now - from));
+            if (up > _lifted) _cc.Move(Vector3.up * (up - _lifted));
+            _lifted = up;
+            IsGrounded = false;
+        }
+        /// <summary>Under someone's control (Mind Hex): our feet do what theirs do.</summary>
+        public bool Mind => _pc != null && _pc.MindHeld;
+        Combatant Master => _pc != null && _pc.MindHeld ? WorldNet.FindCombatant(_pc.Status.Value.MindBy) : null;
+
+        /// <summary>The body turns as theirs does, from the way it faced when they took hold of it.</summary>
+        float PuppetYaw()
+        {
+            var m = Master;
+            return m != null ? Mathf.Repeat(_puppetYaw + Mathf.DeltaAngle(_masterYaw, m.ViewYaw), 360f) : _puppetYaw;
+        }
+
+        void HexTick()
+        {
+            bool stasis = Stasis, mind = Mind;
+            if (stasis && !_frozen)
+            {
+                _heldYaw = BodyYaw;
+                _heldPitch = BodyPitch;
+                StopEverything();
+                _carried = false;
+                if (_ragdollUntil == float.MaxValue) _ragdollUntil = Time.time + 0.5f;
+            }
+            if (mind && !_puppet)
+            {
+                var m = Master;
+                _puppetYaw = BodyYaw;
+                _heldPitch = BodyPitch;
+                _masterYaw = m != null ? m.ViewYaw : 0f;
+                _jumpSeen = true; // (already in the air when it takes hold: not a jump)
+                StopEverything();
+            }
+            _frozen = stasis;
+            _puppet = mind;
+            if (!mind || Ragdolled) { _jumpWanted = false; _jumpSeen = true; return; }
+            bool jumping = SpellPlans.PuppetJumping(Master);
+            if (jumping && !_jumpSeen) _jumpWanted = true;
+            _jumpSeen = jumping;
+        }
+
+        void StopEverything()
+        {
+            _dashUntil = _siphonUntil = _rootUntil = 0f;
+            _faceLockUntil = -1f;
+            _blinkStart = -1f;
+            _reeling = false;
+            EndLeap();
+            EndBubble();
+            if (Charioting) StopCharging();
+        }
 
         // ---------------- Descending Hammer ----------------
 
@@ -380,6 +464,7 @@ namespace SuddenMageEncounter
         {
             if (_pinnedTo == driver || driver == null) return;
             if (driver == _pinRefused && Time.time < _pinRefusedUntil) return; // just thrown off it: the server's release is on its way
+            Thaw();
             _pinnedTo = driver;
             _dashUntil = _siphonUntil = _rootUntil = 0f;
             StopCharging();
@@ -712,6 +797,7 @@ namespace SuddenMageEncounter
         public void Carry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
             if (Unstoppable || Held) return; // combo broken: can't be knocked down for a while
+            Thaw();
             _carryOrigin = origin;
             _carryDir = dir;
             _carryStart = start;
@@ -748,6 +834,7 @@ namespace SuddenMageEncounter
             if (Hanging || Held) return; // the noose (or The World) holds you where you are
             if (Grasped && (Unstoppable || ragdollSeconds <= 0f) && !Ragdolled) return; // held by the legs: only a knockdown gets you out
             if (Unstoppable) ragdollSeconds = 0f; // combo broken: still thrown, but stays on their feet
+            Thaw(); // hit: out of Stasis
             _carried = false;
             if (_pinnedTo != null)
             {
@@ -881,8 +968,10 @@ namespace SuddenMageEncounter
             float strong = _pc != null && _pc.IsSpawned && _pc.Status.Value.Strong(WorldNet.Now) ? SpellPlans.StrengthJump : 1f;
             gravity = _gravity0 * strong;
             jumpUpSpeed = _jump0 * strong;
+            HexTick();
             Look();
             if (Held) { Velocity = Vector3.zero; _fallSpeed = 0f; IsGrounded = true; return; }
+            if (_frozen) { FrozenTick(); return; } // Stasis Hex: exactly where and as we are
             if (_pinnedTo != null) { PinTick(dt); return; }
             if (Hanging && (Ragdolled || _carried)) StandUpNow(); // caught by the noose: up off the floor (it can be cast while down)
             if (_carried) { CarryTick(dt); return; }
@@ -899,7 +988,7 @@ namespace SuddenMageEncounter
             }
             // crouch only while walking about; dashing, leaping, floating and so on stand you up (when there's room)
             bool walking = !Ragdolled && !Charioting && !Leaping && !Bubbled && !Dashing && !Siphoning;
-            SetCrouch(walking && InputMap.Held(GameAction.Crouch) && !GettingUp);
+            SetCrouch(walking && (_puppet ? SpellPlans.PuppetCrouched(Master) : InputMap.Held(GameAction.Crouch)) && !GettingUp);
             CrouchBlend = Mathf.MoveTowards(CrouchBlend, Crouching ? 1f : 0f, dt * 7f);
             if (Hanging) HangTick(dt);
             else if (Ragdolled) RagdollTick(dt);
@@ -977,6 +1066,7 @@ namespace SuddenMageEncounter
                 {
                     var o = Overlaps[i];
                     if (o == null || o == _cc || Physics.GetIgnoreCollision(_cc, o)) continue; // (passing into a portal)
+                    if (TrainCar.Of(o) != null) continue; // (a train kills; it mustn't shove you up onto its roof first)
                     if (Physics.ComputePenetration(_probe, transform.position, Quaternion.identity, o, o.transform.position, o.transform.rotation,
                             out var dir, out float dist) && dist > push.magnitude)
                         push = dir * (dist + 0.02f);
@@ -1008,14 +1098,19 @@ namespace SuddenMageEncounter
         void MoveTick(float dt)
         {
             bool frozen = GettingUp || Rooted || Kneeling || MatchManager.MovementLockedFor(_pc); // the 3-2-1: look around, but stay put
-            if (InputMap.Down(GameAction.Jump) && !frozen) _jumpPressedTime = Time.time;
-            Vector2 input = frozen ? Vector2.zero : InputMap.Move;
+            // Mind Hex: it's the caster who walks and jumps us about
+            if ((_puppet ? _jumpWanted : InputMap.Down(GameAction.Jump)) && !frozen) _jumpPressedTime = Time.time;
+            _jumpWanted = false;
+            Vector2 input = frozen || _puppet ? Vector2.zero : InputMap.Move;
             Quaternion yaw = Quaternion.Euler(0, Yaw, 0);
             Vector3 wish = yaw * new Vector3(input.x, 0, input.y);
+            if (_puppet && !frozen) wish = SpellPlans.PuppetWish(Master);
             if (wish.sqrMagnitude > 1f) wish.Normalize();
 
             bool wasGrounded = IsGrounded;
             GroundCheck();
+            if (RisingWater.FloatLine(transform.position, out float floatAt)) { SwimTick(dt, wish, floatAt); return; }
+            RideTrain(dt);
             if (IsGrounded)
             {
                 if (!wasGrounded && _fallSpeed > SafeFallSpeed) HardLanding?.Invoke(_fallSpeed);
@@ -1090,6 +1185,47 @@ namespace SuddenMageEncounter
             if (snap && (_cc.collisionFlags & CollisionFlags.Below) == 0 &&
                 SphereDown(out var hit, _cc.stepOffset + 0.1f) && hit.normal.y > 0.6f)
                 _cc.Move(Vector3.down * hit.distance);
+        }
+
+        // ---------------- map hazards: water, trains ----------------
+
+        /// <summary>Afloat in rising water: bobbing at the surface, swimming slowly, able to jump out (but not to dive).</summary>
+        void SwimTick(float dt, Vector3 wish, float line)
+        {
+            IsGrounded = false;
+            _fallSpeed = 0f;
+            Vector3 h = Vector3.MoveTowards(new Vector3(Velocity.x, 0f, Velocity.z), wish * (runSpeed * SpeedScale * RisingWater.SwimSpeed), 25f * dt);
+            float y = transform.position.y;
+            float vy = RisingWater.Buoy(Velocity.y, y, line, dt);
+            if (Time.time - _jumpPressedTime <= jumpBuffer && Time.time - _lastJumpTime > 0.4f && y > line - 0.5f)
+            {
+                vy = jumpUpSpeed;
+                _lastJumpTime = Time.time;
+                _jumpPressedTime = -10f;
+            }
+            Velocity = new Vector3(h.x, vy, h.z);
+            Vector3 before = transform.position;
+            var flags = _cc.Move(Velocity * dt);
+            if ((flags & CollisionFlags.Sides) != 0 && wish.sqrMagnitude > 0.01f) TryClimbLedge(wish, before);
+        }
+
+        Collider _groundCollider;
+        Vector3 _trainVelocity;
+
+        /// <summary>Standing on a train's roof: carried along with it (and off it, at its speed, when you jump).</summary>
+        void RideTrain(float dt)
+        {
+            var car = IsGrounded ? TrainCar.Of(_groundCollider) : null;
+            if (car != null)
+            {
+                _trainVelocity = car.Velocity;
+                _cc.Move(_trainVelocity * dt);
+            }
+            else
+            {
+                if (_trainVelocity != Vector3.zero && !IsGrounded) Velocity += _trainVelocity;
+                _trainVelocity = Vector3.zero;
+            }
         }
 
         // ---------------- ice ----------------
@@ -1257,15 +1393,18 @@ namespace SuddenMageEncounter
             {
                 IsGrounded = true;
                 _groundNormal = hit.normal;
+                _groundCollider = hit.collider;
             }
             else if (hit.collider != null && OnStepEdge(hit))
             {
                 IsGrounded = true;
                 _groundNormal = Vector3.up;
+                _groundCollider = hit.collider;
             }
             else
             {
                 IsGrounded = _cc.isGrounded && Velocity.y <= 0f;
+                if (hit.collider != null || !IsGrounded) _groundCollider = hit.collider;
                 _groundNormal = Vector3.up;
             }
         }
@@ -1296,11 +1435,23 @@ namespace SuddenMageEncounter
 
         void RagdollTick(float dt)
         {
-            Velocity.y -= gravity * dt;
+            bool afloat = RisingWater.FloatLine(transform.position, out float line);
+            if (afloat)
+            {
+                Velocity.y = RisingWater.Buoy(Velocity.y, transform.position.y, line, dt);
+                _fallSpeed = 0f;
+            }
+            else Velocity.y -= gravity * dt;
+            // thrown up off lava: back on your feet in the air, so there's a chance to get clear of it
+            if (Time.time >= _ragdollUntil && _standAt < 0f && !_standOnLanding && LavaFlood.Below(transform.position) && EndRagdoll(false))
+            {
+                _getUpUntil = 0f;
+                return;
+            }
             if (Reeling) ReelPull(dt); // a grapple hook already stuck keeps reeling you in, limp or not
             if (_standAt >= 0f && Time.time >= _standAt) { _standAt = -1f; StandUpNow(); return; }
             var flags = _cc.Move(Velocity * dt);
-            bool onGround = (flags & CollisionFlags.Below) != 0;
+            bool onGround = afloat || (flags & CollisionFlags.Below) != 0;
             IsGrounded = onGround;
             if (_standOnLanding && onGround && Time.time >= _landArmed) { _standOnLanding = false; StandUpNow(); return; }
             if (onGround)

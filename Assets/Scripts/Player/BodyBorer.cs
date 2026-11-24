@@ -62,6 +62,10 @@ namespace SuddenMageEncounter
             foreach (var mr in body.GetComponentsInChildren<MeshRenderer>(true))
                 if (mr.name == FaceDecal.ObjectName && Dist(mr.bounds.center) < 0f) mr.enabled = false;
 
+            // and so do the cosmetics it went through
+            foreach (var mr in body.GetComponentsInChildren<MeshRenderer>(true))
+                if (CosmeticLook.IsPart(mr) && Dist(mr.bounds.center) < 0f) mr.gameObject.SetActive(false);
+
             // bones in the tunnel: ghosts; whatever hung off one falls free
             var bodies = body.GetComponentsInChildren<Rigidbody>(true);
             var ghost = new HashSet<Rigidbody>();
@@ -87,7 +91,7 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Where every vertex of the renderer is right now, in the world (null if it can't tell).</summary>
-        static Vector3[] WorldVerts(SkinnedMeshRenderer smr)
+        internal static Vector3[] WorldVerts(SkinnedMeshRenderer smr)
         {
             var baked = new Mesh();
             smr.BakeMesh(baked, true);

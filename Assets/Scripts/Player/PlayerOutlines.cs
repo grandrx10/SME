@@ -92,8 +92,8 @@ namespace SuddenMageEncounter
             {
                 if (c == null) continue;
                 Material m = null;
-                // free-for-all: everyone else is an enemy, except a necromancer and the Undead on their side
-                if (me != null && c != me && c.IsAlive) m = Combatant.Allies(me, c) ? _team : _enemy;
+                // everyone else is an enemy, except teammates, and a necromancer and the Undead on their side
+                if (me != null && c != me && c.IsAlive) m = Combatant.Allies(me, c) || Combatant.Teammates(me, c) ? _team : _enemy;
                 var glow = StatusGlow(c);
                 if (glow != null || c.IsSpawned && c.Status.Value.Doomed) m = glow ?? m;
                 Material over = null, round = null;

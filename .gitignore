@@ -43,3 +43,7 @@ crashlytics-build.properties
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Player build in the project root
+/Sudden Mage Encounter.exe
+/Sudden Mage Encounter_Data/

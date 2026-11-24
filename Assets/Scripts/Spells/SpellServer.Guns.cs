@@ -13,7 +13,7 @@ namespace SuddenMageEncounter
     ///    everyone in it. Goes through everything that breaks; stopped by indestructible ground, portals, barriers and
     ///    bubbles; sent back by The Hierophant's wall.
     ///  - Undying Grasp: 0.5 s on one knee (knocked down meanwhile: nothing), then hands shoot up out of the ground along
-    ///    15 m. Whoever they reach as they come up is held in place and silenced for 2 s, or until ragdolled.
+    ///    15 m. Whoever they reach as they come up is held in place and silenced for 2.5 s, or until ragdolled.
     /// </summary>
     public static partial class SpellServer
     {
@@ -281,7 +281,7 @@ namespace SuddenMageEncounter
                 var me = r.caster;
                 if (me == null || !me.IsSpawned) { RiflesS.Remove(r); continue; }
                 bool lost = !me.IsAlive || me.Pinned || me.Status.Value.Taken(now);
-                if (r.released < 0) lost |= me.Trapped || me.Grasped; // silenced while charging
+                if (r.released < 0) lost |= me.Trapped || me.Grasped || me.Hexed; // silenced while charging
                 if (lost) { LoseRifle(me); continue; }
                 // the owner never said (lag): it goes where they're facing
                 if (r.released >= 0 && now > r.released + SpellPlans.SebWindup + 0.3) ShootRifle(r, me.ViewYaw);

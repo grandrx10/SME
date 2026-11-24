@@ -43,6 +43,9 @@ namespace SuddenMageEncounter
         public const float SkipFraction = 0.6f;
         /// <summary>Players a round needs before it starts.</summary>
         public const int MinPlayers = 2;
+        /// <summary>Players a Team Deathmatch needs, and how often a round with enough of them is one (if the map has team spawns).</summary>
+        public const int TeamMinPlayers = 4;
+        public const float TeamChance = 0.3f;
 
         [Tooltip("Arena prefab copied into each player's practice chamber (add Dummy Spots to it to place its dummies). " +
                  "Empty = the first arena in the list above.")]
@@ -61,14 +64,31 @@ namespace SuddenMageEncounter
             }
         }
 
+        /// <summary>The maps a practice chamber can be (the practice arena first, then the others in the rotation).</summary>
+        public static List<GameObject> PracticeMaps
+        {
+            get
+            {
+                var list = new List<GameObject>();
+                var first = PracticePrefab;
+                if (first == null) return list;
+                list.Add(first);
+                foreach (var a in Instance.arenas) if (a != null && !list.Contains(a)) list.Add(a);
+                return list;
+            }
+        }
+
         public struct State
         {
             public int round;
             public short arena;
             public MatchPhase phase;
             public double phaseStart;
+            public double fightStart, fightEnd; // when FIGHT was (or will be), and when it was won (0 = not yet): the map hazards' clock
             public string winner;   // "" = nobody
             public sbyte winnerColor;
+            public byte teams;      // how many teams (0 = free-for-all)
+            public byte winnerTeam; // Team Deathmatch: the team that won (0 = none)
             public byte skipVotes, skipVoters; // the break between rounds: votes to skip it, and how many people can vote
         }
 
@@ -97,6 +117,8 @@ namespace SuddenMageEncounter
         bool _registered, _helloSent;
         State _server;
         readonly HashSet<ulong> _participants = new();
+        /// <summary>Server: whose win pays whom in a Team Deathmatch (client id to team): everyone who started on a team, dead or alive.</summary>
+        readonly Dictionary<ulong, byte> _shares = new();
         readonly HashSet<ulong> _skipVotes = new(), _voters = new();
         int _lastArena = -2;
 
@@ -153,6 +175,7 @@ namespace SuddenMageEncounter
             _helloSent = false;
             _server = default;
             _participants.Clear();
+            _shares.Clear();
             _skipVotes.Clear();
             LocalSkipVote = false;
             Practice.ResetAll();
@@ -212,8 +235,12 @@ namespace SuddenMageEncounter
                 r.ReadValueSafe(out s.arena);
                 r.ReadValueSafe(out byte phase); s.phase = (MatchPhase)phase;
                 r.ReadValueSafe(out s.phaseStart);
+                r.ReadValueSafe(out s.fightStart);
+                r.ReadValueSafe(out s.fightEnd);
                 r.ReadValueSafe(out s.winner);
                 r.ReadValueSafe(out s.winnerColor);
+                r.ReadValueSafe(out s.teams);
+                r.ReadValueSafe(out s.winnerTeam);
                 r.ReadValueSafe(out s.skipVotes);
                 r.ReadValueSafe(out s.skipVoters);
                 Apply(s);
@@ -308,8 +335,12 @@ namespace SuddenMageEncounter
             w.WriteValueSafe(s.arena);
             w.WriteValueSafe((byte)s.phase);
             w.WriteValueSafe(s.phaseStart);
+            w.WriteValueSafe(s.fightStart);
+            w.WriteValueSafe(s.fightEnd);
             w.WriteValueSafe(s.winner ?? "");
             w.WriteValueSafe(s.winnerColor);
+            w.WriteValueSafe(s.teams);
+            w.WriteValueSafe(s.winnerTeam);
             w.WriteValueSafe(s.skipVotes);
             w.WriteValueSafe(s.skipVoters);
             nm.CustomMessagingManager.SendNamedMessage(MsgState, client, w, NetworkDelivery.ReliableSequenced);
@@ -360,6 +391,7 @@ namespace SuddenMageEncounter
         {
             foreach (var p in PlayerController.All)
                 if (InMatch(p) && p.IsAlive) p.ServerMakeSpectator();
+            ClearTeams();
             bool changed = _server.phase != MatchPhase.None;
             _server.phase = MatchPhase.None;
             if (_arenaInstance == null)
@@ -393,6 +425,7 @@ namespace SuddenMageEncounter
                     // the winner's had their moment: everyone back to watching for the break before the next round
                     foreach (var p in PlayerController.All)
                         if (InMatch(p) && p.IsAlive) p.ServerMakeSpectator();
+                    ClearTeams(); // back in their own colours
                     if (ReadyForRound(out _) < MinPlayers) { ServerWait(); return; }
                     _server.phase = MatchPhase.Intermission;
                     _server.phaseStart = now;
@@ -427,18 +460,20 @@ namespace SuddenMageEncounter
             // countdown / playing: who's left? (someone who went off to practise has given up their place)
             var nm = NetworkManager.Singleton;
             _participants.RemoveWhere(id => !nm.ConnectedClients.ContainsKey(id));
-            // sides still standing: a necromancer and the Undead they raised are one side (it's theirs if it wins)
+            // sides still standing: a necromancer and the Undead they raised are one side (it's theirs if it wins);
+            // in a Team Deathmatch, each team is
             var sides = new HashSet<ulong>();
             PlayerController last = null;
             foreach (var p in PlayerController.All)
             {
                 // (dead with Undying still to come: they're getting up in a moment, so they still count)
                 if (!InMatch(p) || !_participants.Contains(p.OwnerClientId) || !p.IsAlive && !SpellServer.UndyingPending(p)) continue;
-                sides.Add(p.Team);
+                sides.Add(_server.teams > 0 ? p.MatchTeam : p.Team);
                 last = p;
             }
             if (sides.Count <= 1)
             {
+                if (_server.teams > 0) { EndTeamRound(last); return; }
                 PlayerController winner = null;
                 if (last != null) winner = last.IsUndead ? WorldNet.FindCaster(last.Team) ?? last : last;
                 EndRound(winner);
@@ -471,8 +506,10 @@ namespace SuddenMageEncounter
             _server.arena = (short)arena;
             _server.phase = MatchPhase.Building;
             _server.phaseStart = ServerNow;
+            _server.fightStart = _server.fightEnd = 0;
             _server.winner = "";
             _server.winnerColor = -1;
+            ClearTeams();
 
             // who plays: everyone in the match, and practisers who want in
             ReadyForRound(out bool pullPractisers);
@@ -497,6 +534,8 @@ namespace SuddenMageEncounter
             Physics.SyncTransforms();
             _server.phase = MatchPhase.Countdown;
             _server.phaseStart = ServerNow;
+            _server.fightStart = _server.phaseStart + CountdownSeconds;
+            _server.fightEnd = 0;
 
             var players = new List<PlayerController>();
             foreach (var p in PlayerController.All)
@@ -508,7 +547,8 @@ namespace SuddenMageEncounter
                 ServerWait();
                 return;
             }
-            var spots = SpawnPoint.Assign(players.Count);
+            bool teams = players.Count >= TeamMinPlayers && Random.value < TeamChance && SpawnPoint.HasTeams(players.Count % 2 == 1);
+            var spots = teams ? MakeTeams(players) : SpawnPoint.Assign(players.Count);
             double manaFrom = _server.phaseStart + CountdownSeconds;
             for (int i = 0; i < players.Count; i++)
             {
@@ -524,10 +564,86 @@ namespace SuddenMageEncounter
             Broadcast();
         }
 
+        // ------------------------------------------------------------------ Team Deathmatch (server)
+
+        /// <summary>
+        /// Splits the players (shuffled) into two even teams, and the odd one out (if any) into a third of their own, each
+        /// in their team's colour. Returns where each starts, in the list's new order.
+        /// </summary>
+        List<SpawnPoint.Spot> MakeTeams(List<PlayerController> players)
+        {
+            for (int i = players.Count - 1; i > 0; i--)
+            {
+                int k = Random.Range(0, i + 1);
+                (players[i], players[k]) = (players[k], players[i]);
+            }
+            int half = players.Count / 2;
+            bool solo = players.Count % 2 == 1;
+            _server.teams = (byte)(solo ? 3 : 2);
+            var colors = PlayerPalette.Contrasting(_server.teams);
+            var spots = SpawnPoint.Assign(half, SpawnPoint.For.TeamA);
+            spots.AddRange(SpawnPoint.Assign(half, SpawnPoint.For.TeamB));
+            if (solo) spots.AddRange(SpawnPoint.Assign(1, SpawnPoint.For.Solo));
+            for (int i = 0; i < players.Count; i++)
+            {
+                int t = Mathf.Min(i / half, 2);
+                players[i].Side.Value = new TeamState { Team = (byte)(t + 1), Color = colors[t] };
+                _shares[players[i].OwnerClientId] = (byte)(t + 1);
+            }
+            return spots;
+        }
+
+        /// <summary>No teams any more: everyone back in their own colour.</summary>
+        void ClearTeams()
+        {
+            _server.teams = _server.winnerTeam = 0;
+            _shares.Clear();
+            foreach (var p in PlayerController.All)
+                if (p != null && p.IsSpawned && p.Side.Value.Team != 0) p.Side.Value = default;
+        }
+
+        /// <summary>Server: this player won't share in their team's win (raised as one of the Undead, or walked out alive to practise).</summary>
+        public static void ServerLoseShare(PlayerController pc)
+        {
+            if (Instance != null && pc != null) Instance._shares.Remove(pc.OwnerClientId);
+        }
+
+        /// <summary>One team left (or none): its win, shared by everyone who started on it, dead or alive (not the Undead).</summary>
+        void EndTeamRound(PlayerController last)
+        {
+            _server.phase = MatchPhase.RoundOver;
+            _server.phaseStart = ServerNow;
+            _server.fightEnd = _server.phaseStart;
+            _server.winner = "";
+            _server.winnerColor = -1;
+            _server.winnerTeam = last != null ? last.MatchTeam : (byte)0;
+            if (_server.winnerTeam != 0)
+            {
+                var names = new List<string>();
+                foreach (var kv in _shares)
+                {
+                    var p = kv.Value == _server.winnerTeam ? PlayerController.ServerFind(kv.Key) : null;
+                    if (p == null) continue;
+                    p.Wins.Value++;
+                    p.ServerGrantGold(Rewards.TeamWin);
+                    names.Add(p.DisplayName);
+                }
+                _server.winner = names.Count > 0 ? string.Join("   ", names) : last.DisplayName;
+                _server.winnerColor = (sbyte)last.Side.Value.Color;
+            }
+            foreach (var id in _participants)
+            {
+                var p = PlayerController.ServerFind(id);
+                if (p != null) p.ServerRoundPlayed();
+            }
+            Broadcast();
+        }
+
         void EndRound(PlayerController winner)
         {
             _server.phase = MatchPhase.RoundOver;
             _server.phaseStart = ServerNow;
+            _server.fightEnd = _server.phaseStart;
             _server.winner = winner != null ? winner.DisplayName : "";
             _server.winnerColor = (sbyte)(winner != null && winner.ColorIndex.Value != 255 ? winner.ColorIndex.Value : -1);
             if (winner != null)
@@ -557,7 +673,8 @@ namespace SuddenMageEncounter
                 pc.ServerMakeSpectator(); // waiting (a round starts on the next tick if there are enough now), or watching it build
                 return;
             }
-            if (i._server.phase == MatchPhase.Countdown && ServerNow - i._server.phaseStart < CountdownSeconds - 0.5)
+            // (not into a Team Deathmatch, where the teams are even: they watch)
+            if (i._server.teams == 0 && i._server.phase == MatchPhase.Countdown && ServerNow - i._server.phaseStart < CountdownSeconds - 0.5)
             {
                 if (VoxelWorld.Current != null) VoxelWorld.Current.FinishBuild();
                 var spot = SpawnPoint.Assign(1);

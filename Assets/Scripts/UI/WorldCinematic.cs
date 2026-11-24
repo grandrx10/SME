@@ -52,14 +52,14 @@ namespace SuddenMageEncounter
             go.transform.position = StagePos;
             var c = go.AddComponent<WorldCinematic>();
             c._stage = go.transform;
-            if (!c.Stage(src, caster.ShownFace)) { Destroy(go); return null; }
+            if (!c.Stage(src, caster.ShownFace, caster.ShownOutfit)) { Destroy(go); return null; }
             c.Show(layer);
             return c;
         }
 
         // ------------------------------------------------------------------ the stage
 
-        bool Stage(Transform src, string face)
+        bool Stage(Transform src, string face, string outfit)
         {
             _pivot = new GameObject("Pivot").transform;
             _pivot.SetParent(_stage, false);
@@ -94,6 +94,7 @@ namespace SuddenMageEncounter
             }
 
             var bones = Rig.MapBones(inst.transform);
+            CosmeticLook.Wear(bones, OutfitPiece.Decode(outfit), false);
             bones.TryGetValue("Bone.003", out _chest);
             bones.TryGetValue("Bone.001", out _head);
             if (_chest == null || _head == null) return false;

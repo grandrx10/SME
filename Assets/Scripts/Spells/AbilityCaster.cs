@@ -187,10 +187,10 @@ namespace SuddenMageEncounter
             for (int s = 0; s < Loadout.Slots; s++)
                 if (_foolRolling[s] && _pc.IsFoolCard(s)) { _foolRolling[s] = false; _cooldownUntil[s] = 0f; }
 
-            bool able = _pc.IsAlive && !_pc.Motor.Ragdolled && !_pc.Motor.GettingUp && !_pc.Motor.Busy && !_pc.Trapped && !_pc.Grasped && MatchManager.CastingAllowedFor(_pc); // the Empress silences
+            bool able = _pc.IsAlive && !_pc.Motor.Ragdolled && !_pc.Motor.GettingUp && !_pc.Motor.Busy && !_pc.Trapped && !_pc.Grasped && !_pc.Hexed && MatchManager.CastingAllowedFor(_pc); // the Empress silences
             if (!able && _holding >= 0) { if (_rifleFireAt < 0f) LoseRifle(); _holding = -1; SetPose(SpellPose.None); }
             // knocked down mid-cast: the spell stops (the server cancels its side too)
-            bool knocked = !_pc.IsAlive || _pc.Motor.Ragdolled || _pc.Motor.Carried;
+            bool knocked = !_pc.IsAlive || _pc.Motor.Ragdolled || _pc.Motor.Carried || _pc.Hexed; // (or a hex took hold: the same)
             if (knocked && (Casting || _rockId != 0 || _fireId != 0 || _hellId != 0 || _escapeAt >= 0f || _shotAt >= 0f || _graspAt >= 0f || _tossAt >= 0f || _rifleSlot >= 0)) CancelAll();
 
             // the corpse got up (or went) before its skin was taken: nothing left to kneel over
@@ -198,7 +198,7 @@ namespace SuddenMageEncounter
 
             // knocked down (or spun by a tornado): only Bubble Away and The Hanged Man can be cast (each stands you up)
             bool down = _pc.Motor.Ragdolled || _pc.Motor.Carried || _pc.Motor.GettingUp;
-            bool ableDown = !able && down && _pc.IsAlive && !_pc.Motor.Pinned && !_pc.Trapped && !_pc.Grasped && MatchManager.CastingAllowedFor(_pc);
+            bool ableDown = !able && down && _pc.IsAlive && !_pc.Motor.Pinned && !_pc.Trapped && !_pc.Grasped && !_pc.Hexed && MatchManager.CastingAllowedFor(_pc);
 
             if (able && !InputMap.Blocked)
             {
@@ -280,6 +280,8 @@ namespace SuddenMageEncounter
                 SpellPose.GraspKneel => SpellPlans.GraspCast + 0.35f,
                 SpellPose.SkinKneel => SpellPlans.SkinTime + 0.3f,
                 SpellPose.BombPlace or SpellPose.BombToss or SpellPose.LeftArmUp => 0.6f,
+                SpellPose.NecroRaise => SpellPlans.NecroCharge + 0.42f,
+                SpellPose.HexPoint => SpellPlans.HexCast + 0.4f,
                 SpellPose.GrapplePoint => OwnHook() != null ? float.MaxValue : 0.6f, // held while the hook is out
                 _ => float.MaxValue,
             };
@@ -421,14 +423,25 @@ namespace SuddenMageEncounter
                     if (!GroundTarget(out target) || !SpellPlans.PlanFold(world, target, yaw).valid) { Denied?.Invoke(slot); return false; }
                     SetPose(SpellPose.CastFold);
                     break;
+                case CardId.ShatterHex:
+                case CardId.StasisHex:
+                case CardId.MindHex:
+                {
+                    var t = FindHexTarget(SpellPlans.HexKind(info.id));
+                    if (t == null) { NoTarget?.Invoke(); return false; } // no cost, no cooldown
+                    targetId = t.NetworkObjectId;
+                    SetPose(SpellPose.HexPoint);
+                    break;
+                }
                 case CardId.RockBarrage:
+                case CardId.NecromaticBlast:
                 {
                     // aim point nudged just inside whatever the crosshair is on
                     Vector3 p = AimPoint(false, out bool hit);
                     target = hit ? p + CameraRig.AimRay.direction * 0.15f : p;
                     if (!SpellPlans.PlanRock(world, _pc.transform.position, _pc.FeetPosition, Quaternion.Euler(0, yaw, 0) * Vector3.forward, target, out _))
                     { Denied?.Invoke(slot); return false; }
-                    SetPose(SpellPose.Gather);
+                    SetPose(info.id == CardId.NecromaticBlast ? SpellPose.NecroRaise : SpellPose.Gather); // (the throw is timed when the server's ball appears)
                     break;
                 }
                 case CardId.Shove:
@@ -962,6 +975,23 @@ namespace SuddenMageEncounter
             if (Pose == SpellPose.GrapplePoint) SetPose(SpellPose.None);
         }
 
+        /// <summary>A hex: the enemy (not one of your Undead) nearest the centre dot, close enough and in sight (Mind Hex: not one already Mind Hexed).</summary>
+        Combatant FindHexTarget(byte kind)
+        {
+            var ray = CameraRig.AimRay;
+            Combatant best = null;
+            float bestAngle = SpellPlans.HexAngle;
+            foreach (var c in Combatant.Registry)
+            {
+                if (c == null || c == _pc || !c.IsAlive || !c.Visible || Combatant.Allies(_pc, c) || c.Status.Value.Taken(WorldNet.Now)) continue;
+                if (kind == SpellPlans.MindHex && SpellServer.MindHexed(c)) continue;
+                if ((c.transform.position - _pc.transform.position).magnitude > SpellPlans.HexRange) continue;
+                float angle = Vector3.Angle(ray.direction, c.transform.position + Vector3.up * 0.3f - ray.origin);
+                if (angle < bestAngle && SpellPlans.HexSight(_pc.transform.position, c)) { bestAngle = angle; best = c; }
+            }
+            return best;
+        }
+
         /// <summary>The World: the enemy (not one of your Undead) nearest the centre dot, close enough.</summary>
         Combatant FindWorldTarget()
         {
@@ -1101,7 +1131,8 @@ namespace SuddenMageEncounter
         {
             if (_pc == null || caster != _pc.NetworkObjectId) return;
             _fireId = id;
-            _fireLaunchAt = start + SpellPlans.FireballCharge;
+            bool necro = WorldNet.Instance != null && WorldNet.Instance.Fireballs.TryGetValue(id, out var fx) && fx.necro; // Necromatic Blast
+            _fireLaunchAt = start + (necro ? SpellPlans.NecroCharge : SpellPlans.FireballCharge);
         }
 
         void OnHellfireStarted(int id, ulong caster)

@@ -168,7 +168,18 @@ namespace SuddenMageEncounter.EditorTools
         // ------------------------------------------------------------------ placing things
 
         [MenuItem(Menu + "Add Spawn Point", priority = 20)]
-        public static void AddSpawnPoint()
+        public static void AddSpawnPoint() => AddSpawn(SpawnPoint.For.FreeForAll);
+
+        [MenuItem(Menu + "Add Team Spawn/Team A", priority = 20)]
+        public static void AddSpawnTeamA() => AddSpawn(SpawnPoint.For.TeamA);
+
+        [MenuItem(Menu + "Add Team Spawn/Team B", priority = 20)]
+        public static void AddSpawnTeamB() => AddSpawn(SpawnPoint.For.TeamB);
+
+        [MenuItem(Menu + "Add Team Spawn/Solo", priority = 20)]
+        public static void AddSpawnSolo() => AddSpawn(SpawnPoint.For.Solo);
+
+        static void AddSpawn(SpawnPoint.For team)
         {
             Vector3 pos = Vector3.zero;
             float yaw = 0;
@@ -192,10 +203,10 @@ namespace SuddenMageEncounter.EditorTools
                 var arenas = Object.FindObjectsByType<Arena>(FindObjectsSortMode.None);
                 if (arenas.Length == 1) parent = arenas[0].transform;
             }
-            var go = new GameObject("SpawnPoint");
+            var go = new GameObject(team == SpawnPoint.For.FreeForAll ? "SpawnPoint" : "SpawnPoint " + team);
             if (parent != null) go.transform.SetParent(parent, true);
             go.transform.SetPositionAndRotation(pos, Quaternion.Euler(0, yaw, 0));
-            go.AddComponent<SpawnPoint>();
+            go.AddComponent<SpawnPoint>().team = team;
             Undo.RegisterCreatedObjectUndo(go, "Add Spawn Point");
             Selection.activeGameObject = go;
         }

@@ -16,6 +16,7 @@ Copy the structure of the closest existing card. Files under `Assets/Scripts/`.
 | held channel | Flame Thrower (`SpellServer.Breath.cs`) |
 | stuck objects triggered later | Flame bombs (`SpellServer.Bombs.cs`) |
 | lasting state on a body | `BodyStatus` (chill, grasp, Strength) |
+| cast on one enemy, a bar that fills up on them | the Hexes (`SpellServer.Hex.cs`, `HexMarks`) |
 | passive | Temperance, Undying |
 | held weapon model | `GunVfx.cs` (follows pitch), `HammerVfx.cs` (fixed gesture) |
 
@@ -31,7 +32,7 @@ New code goes in partial files of its own (`SpellPlans.X.cs`, `SpellServer.X.cs`
 6. **`Spells/AbilityCaster.cs`**: `TryCast` case (local checks, `SetPose`, `Motor.Root/FaceLock/...`); the `gestures end on their own` switch; if held: the pose in `Press` and a case in `ShowIndicator` (shapes in `SpellIndicator.cs`). Owner-timed second step: a `_xAt` timer ticked in `Update`, reset in `CancelAll`, added to the `knocked && (Casting || …)` line.
 7. **`Player/PlayerController.cs`**: owner → server RPCs (`RequestX` + `[Rpc(SendTo.Server)]`).
 8. **`Spells/SpellServer.cs`**: the `Cast` switch, `Reset`, `Tick`; `OnInterrupted` (hit/ragdolled) or `Fizzle` (knocked out of the cast). Practice reset: `ServerClearPractice` in `SpellServer.Arcana.cs`. Blocks other cards while running: `BusyChanneling`.
-9. **`Spells/WorldNet.X.cs`**: an op enum continuing the numbers (grep `enum .*Op : byte`; used up to 123), `ServerX(...)` writers, `ApplyX`. Hook `ApplyX`, `AnimateX`, `ClearX` (and `ClearXIn(minX, maxX)`) into `WorldNet.cs` beside the existing ones.
+9. **`Spells/WorldNet.X.cs`**: an op enum continuing the numbers (grep `enum .*Op : byte`; used up to 132), `ServerX(...)` writers, `ApplyX`. Hook `ApplyX`, `AnimateX`, `ClearX` (and `ClearXIn(minX, maxX)`) into `WorldNet.cs` beside the existing ones.
 10. **Looks**: skip them when `Debris.Suppressed` (a late joiner replaying the log). A per-body view: `AddComponent` in `Combatant.Awake` (everyone) or `PlayerController.Awake` (players).
 11. `Tools/check.ps1`; then add only what isn't obvious from the code to `Docs/cards.md`.
 
@@ -40,6 +41,7 @@ New code goes in partial files of its own (`SpellPlans.X.cs`, `SpellServer.X.cs`
 - Hurt/throw through `Hit(victim, attacker, damage, point, knock, ragdoll)`. Skip `Folded(c)`, `Shielded(c)` (barrier, bubble, untouchable), `Combatant.Allies(a, b)`; movement also skips `Unmovable(c)`, `Hanging(c)`. Taking someone's control without damage: `c.ServerCredit(caster)`.
 - Projectiles, every frame: `BarrierBlocks`, `BubbleBlocking` + `HurtBubble`, `SweepBall`, then end. Add a `ReflectX` beside `ReflectStars` (The Hierophant) and add it to `HitBombs`.
 - Flame explosions call `FlameSetsOff`; water must count in `InWater`; fire near ice: `MeltIceNear`.
+- Frozen or controlled by a hex: `Combatant.Hexed` (no casting), checked wherever `Trapped` / `Grasped` are. Anything that moves a body without `ServerKnock` asks `StasisHolds(c)` first.
 - What a player can cast is `PlayerController.Hand`, never `Equipped`. A card rolled by The Fool arrives with `free`.
 - Owner-timed actions: validate NaN, distance and time (about 0.15 s early is fine), and give the server a fallback (about 0.3 s late, along `ViewDir`).
 - `ServerKnock` with a ragdoll counts for combo breaks (so does `ServerRecoil`, a caster thrown by their own spell).

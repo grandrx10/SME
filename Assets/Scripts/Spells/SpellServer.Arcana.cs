@@ -21,7 +21,7 @@ namespace SuddenMageEncounter
     ///    out of mana, or presses it again.
     ///  - The Devil: 25 health for 3 mana (the right hand up 0.2 s, bleeding).
     ///  - The Tower: kneeling in prayer 0.7 s (nothing moves you; hurt meanwhile: no tower), then a 5 x 5 x 15 m castle tower rises out
-    ///    of the ground over 2 s, turns to face the spot under your cursor and topples that way, smashing everything in its way and hitting anyone
+    ///    of the ground over 2 s, turns to face the spot under your cursor and topples that way, deleting every voxel in its way and hitting anyone
     ///    it falls on for 60. It can't be broken until it lands, then it cracks into pieces.
     /// </summary>
     public static partial class SpellServer
@@ -189,6 +189,7 @@ namespace SuddenMageEncounter
             ClearTarot3(pc, In);
             ClearGuns(pc, In);
             ClearBombs(pc, In);
+            ClearHex(pc, In);
             TowersS.RemoveAll(t => t.caster == pc || In(t.foot) || t.start < 0 && In(VoxelWorld.Current != null ? VoxelWorld.Current.CellCenter(t.baseCell) : Vector3.zero));
             DiceS.RemoveAll(d => d.caster == pc);
             var net = WorldNet.Instance;
@@ -389,7 +390,10 @@ namespace SuddenMageEncounter
             {
                 if (!j.tethered || j.caster != victim || j.target == null || !j.target.IsAlive) continue;
                 _mirroring = true;
-                try { j.target.ServerApplyDamage(dmg, attacker, j.target.transform.position, Vector3.up, -1, 0f, DeathCause.Spell); }
+                // tethered to a teammate: half (a hit by a teammate of theirs is halved as it lands)
+                float share = dmg;
+                if (Combatant.Teammates(j.caster, j.target) && !Combatant.Teammates(PlayerController.ServerFind(attacker), j.target)) share *= SpellPlans.TeamDamage;
+                try { j.target.ServerApplyDamage(share, attacker, j.target.transform.position, Vector3.up, -1, 0f, DeathCause.Spell); }
                 finally { _mirroring = false; }
             }
         }
@@ -716,7 +720,7 @@ namespace SuddenMageEncounter
             }
         }
 
-        /// <summary>Everything the tower's leading face swept through between two fall angles is smashed out of its way.</summary>
+        /// <summary>Everything the tower's leading face swept through between two fall angles is deleted.</summary>
         static void CarveTower(TowerState t, float from, float to, VoxelWorld w)
         {
             if (w == null) return;
@@ -748,7 +752,7 @@ namespace SuddenMageEncounter
                     }
                 }
             }
-            if (_carve.Count > 0) WorldNet.ServerTowerCarve(new List<Vector3Int>(_carve), t.dir);
+            if (_carve.Count > 0) WorldNet.ServerTowerCarve(new List<Vector3Int>(_carve));
         }
     }
 }

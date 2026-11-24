@@ -30,6 +30,15 @@ namespace SuddenMageEncounter
         public override string FeedName => IsUndead ? "Undead" : "Test Dummy";
         public override float MaxHealth => !IsUndead ? maxHealth : Status.Value.Horde ? SpellPlans.HordeHealth : SpellPlans.UndeadHealth;
         public override bool InPracticeChamber => PracticeSlot != 0;
+        /// <summary>One of the Undead: its master's team.</summary>
+        public override byte MatchTeam
+        {
+            get
+            {
+                var master = IsUndead ? WorldNet.FindCaster(Status.Value.Master) : null;
+                return master != null ? master.MatchTeam : (byte)0;
+            }
+        }
 
         /// <summary>Server: the practice chamber this dummy belongs to (0 = placed in the scene).</summary>
         [System.NonSerialized] public int PracticeSlot;
@@ -97,14 +106,17 @@ namespace SuddenMageEncounter
             }
             _diedAt = -1f;
             if (_dieAt >= 0f && Time.time >= _dieAt) { _dieAt = -1f; ServerKillByHazard(DeathCause.Spell, transform.position); return; }
-            if (_combo.Tick(IsAlive, _ragdoll && !_lunging)) ServerComboBreak(); // (a bite's own lunge doesn't count)
+            if (_combo.Tick(IsAlive, _ragdoll && !_lunging && !HeldStill)) ServerComboBreak(); // (a bite's own lunge doesn't count)
             // only once there's an arena to stand on (practice chamber dummies run even with no match going)
             if (!IsAlive || Arena.Current == null || (!MatchManager.Running && !InPracticeChamber)) return;
             if (MatchManager.BuildingArena && !InPracticeChamber) return; // the arena isn't up yet: wait to be reset into it
-            if (Rising(dt) || TakenAway()) return;
+            if (Rising(dt) || TakenAway() || Frozen()) return;
             Vector3 pos = transform.position;
             int mask = Layers.EnvironmentMask;
+            var master = SpellServer.MindMaster(this);
+            if (master == null) _puppet = false;
             if (Grasped && !_ragdoll && !_carried) _vel = new Vector3(0f, Mathf.Min(0f, _vel.y), 0f); // held by the legs
+            else if (master != null && !_ragdoll && !_carried && PinnedTo == null) Puppet(master);
             else if (IsUndead && !_ragdoll && !_carried && PinnedTo == null) Think(pos);
 
             // trapped by the Empress and thrown out of her domain: the chains haul it back in (as for players)
@@ -147,7 +159,9 @@ namespace SuddenMageEncounter
             {
                 // a ball around the hips: flies, bounces, rolls to a stop
                 pos = PushOut(pos);
-                _vel.y -= Gravity * dt;
+                bool afloat = RisingWater.FloatLine(pos, out float line);
+                if (afloat) _vel.y = RisingWater.Buoy(_vel.y, pos.y, line, dt);
+                else _vel.y -= Gravity * dt;
                 Vector3 step = _vel * dt;
                 float dist = step.magnitude;
                 if (dist > 1e-5f && Physics.SphereCast(pos, BallRadius, step / dist, out var hit, dist, mask, QueryTriggerInteraction.Ignore))
@@ -158,7 +172,7 @@ namespace SuddenMageEncounter
                     if (hit.normal.y > 0.6f) { _vel.x *= 0.85f; _vel.z *= 0.85f; }
                 }
                 else pos += step;
-                bool onGround = Physics.SphereCast(pos, BallRadius * 0.95f, Vector3.down, out _, 0.08f, mask, QueryTriggerInteraction.Ignore);
+                bool onGround = afloat || Physics.SphereCast(pos, BallRadius * 0.95f, Vector3.down, out _, 0.08f, mask, QueryTriggerInteraction.Ignore);
                 // a bite's lunge: limp until it comes down on the floor, then straight up
                 if (_lunging && onGround && Time.time >= _lungeLand) { _vel = Vector3.zero; _ragdollUntil = 0f; }
                 if (onGround) { float k = Mathf.Exp(-4f * dt); _vel.x *= k; _vel.z *= k; }
@@ -173,6 +187,14 @@ namespace SuddenMageEncounter
                     pos = feet + Vector3.up * HipHeight;
                 }
             }
+            else if (RisingWater.FloatLine(pos, out float line2))
+            {
+                // afloat
+                _grounded = false;
+                if (!IsUndead && master == null) _vel.x = _vel.z = 0f;
+                _vel.y = RisingWater.Buoy(_vel.y, pos.y, line2, dt);
+                Fly(ref pos, dt);
+            }
             else
             {
                 // standing: feet on the ground, or falling straight down
@@ -180,7 +202,7 @@ namespace SuddenMageEncounter
                 if (_vel.y <= 0f && Physics.Raycast(pos, Vector3.down, out var ground, HipHeight + down, mask, QueryTriggerInteraction.Ignore))
                 {
                     pos.y = ground.point.y + HipHeight;
-                    if (IsUndead) { _vel.y = 0f; Walk(ref pos, dt); } // a zombie shambling along
+                    if (IsUndead || master != null) { _vel.y = 0f; Walk(ref pos, dt); } // a zombie shambling along (or Mind Hexed)
                     else _vel = Vector3.zero;
                     _grounded = true;
                 }
@@ -211,6 +233,8 @@ namespace SuddenMageEncounter
             // (feet + 0.2 as for players, so lava kills a dummy the moment it touches the surface)
             if (!WorldNet.InsideWorld(pos) && (pos.y < Practice.KillYAt(pos) || KillVolume.AnyContains(pos) || KillVolume.AnyContains(pos + Vector3.down * (HipHeight - 0.2f))))
                 ServerKillByHazard(DeathCause.Barrier, pos);
+            else if (!WorldNet.InsideWorld(pos) && TrainTrack.Hits(pos, out var train))
+                ServerKillByHazard(DeathCause.Barrier, pos, train.normalized * SpellPlans.TrainThrow + Vector3.up * SpellPlans.TrainLift);
         }
 
         /// <summary>
@@ -240,6 +264,57 @@ namespace SuddenMageEncounter
                 into = -Vector3.Dot(left, hit.normal);
                 if (into > 0f) left += hit.normal * into;
             }
+        }
+
+        double _liftOf;
+        float _lifted;
+
+        /// <summary>Server: frozen by Stasis Hex, exactly where and as it is; or by Shatter Hex, lifted off the ground first.</summary>
+        bool Frozen()
+        {
+            if (!HeldStill) return false;
+            _carried = false;
+            if (_ragdollUntil > Time.time + 10f) _ragdollUntil = Time.time + 0.5f; // (it was being carried)
+            _vel = Vector3.zero;
+            if (_netVel.Value != Vector3.zero) _netVel.Value = Vector3.zero;
+            if (Shattering)
+            {
+                double from = Status.Value.ShatterFrom;
+                if (_liftOf != from) { _liftOf = from; _lifted = 0f; }
+                float up = SpellPlans.ShatterRise((float)(WorldNet.Now - from)), step = up - _lifted;
+                _lifted = up;
+                // (a ceiling stops it)
+                if (step > 0f && !Physics.SphereCast(transform.position, BallRadius, Vector3.up, out _, step + 0.95f * Scale - BallRadius, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
+                    transform.position += Vector3.up * step;
+                _grounded = false;
+            }
+            Vector3 pos = transform.position;
+            if (_netPos.Value != pos) _netPos.Value = pos;
+            if (_netRagdoll.Value != _ragdoll) _netRagdoll.Value = _ragdoll;
+            return true;
+        }
+
+        bool _puppet, _jumpSeen;
+        float _puppetYaw, _masterYaw;
+
+        /// <summary>Server: Mind Hexed: walks, turns and jumps as <paramref name="master"/> does.</summary>
+        void Puppet(Combatant master)
+        {
+            if (!_puppet)
+            {
+                _puppet = true;
+                _puppetYaw = transform.eulerAngles.y;
+                _masterYaw = master.ViewYaw;
+                _jumpSeen = true;
+            }
+            float yaw = _puppetYaw + Mathf.DeltaAngle(_masterYaw, master.ViewYaw);
+            transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            Vector3 walk = SpellPlans.PuppetWish(master) * SpellPlans.PuppetSpeed;
+            _vel.x = walk.x;
+            _vel.z = walk.z;
+            bool jumping = SpellPlans.PuppetJumping(master);
+            if (jumping && !_jumpSeen && _grounded) _vel.y = SpellPlans.PuppetJump;
+            _jumpSeen = jumping;
         }
 
         double _takenAt;
@@ -348,7 +423,7 @@ namespace SuddenMageEncounter
 
         public override void ServerCarry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
-            if (!IsServer || !IsAlive || _combo.Unstoppable || Status.Value.Taken(WorldNet.Now)) return;
+            if (!IsServer || !IsAlive || _combo.Unstoppable || Status.Value.Taken(WorldNet.Now) || SpellServer.StasisHolds(this)) return;
             if (_combo.NoteKnockdown()) { ServerComboBreak(); return; }
             SpellServer.FreeGrasp(this);
             _carried = true;
@@ -359,7 +434,7 @@ namespace SuddenMageEncounter
 
         public override void ServerKnock(Vector3 velocity, float ragdollSeconds)
         {
-            if (!IsServer || !IsAlive || Status.Value.Taken(WorldNet.Now)) return;
+            if (!IsServer || !IsAlive || Status.Value.Taken(WorldNet.Now) || SpellServer.StasisHolds(this)) return;
             if (_carried) { _carried = false; _ragdollUntil = 0f; }
             if (ragdollSeconds > 0f && !_combo.Unstoppable && _combo.NoteKnockdown()) ServerComboBreak();
             if (_combo.Unstoppable) ragdollSeconds = 0f; // just broke a combo: still thrown, not knocked down
@@ -534,7 +609,7 @@ namespace SuddenMageEncounter
             float bestD = 40f;
             foreach (var c in Registry)
             {
-                if (c == null || c == this || !c.IsAlive || !c.Visible || Allies(this, c)) continue;
+                if (c == null || c == this || !c.IsAlive || !c.Visible || Allies(this, c) || Teammates(this, c)) continue;
                 if (c.InPracticeChamber != InPracticeChamber) continue;
                 float d = (c.transform.position - pos).magnitude;
                 if (d < bestD) { bestD = d; best = c; }

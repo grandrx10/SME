@@ -23,7 +23,14 @@ namespace SuddenMageEncounter
         public readonly NetworkVariable<FixedString32Bytes> PlayerName = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
         /// <summary>Palette index assigned by the host (unique per lobby). 255 = not assigned yet.</summary>
         public readonly NetworkVariable<byte> ColorIndex = new(255);
+        /// <summary>Team Deathmatch: the team they're on and its colour (default = not in one).</summary>
+        public readonly NetworkVariable<TeamState> Side = new();
+        public override byte MatchTeam => IsSpawned ? Side.Value.Team : (byte)0;
+        /// <summary>The palette index they're coloured: their team's in a Team Deathmatch, else their own (255 = none yet).</summary>
+        public byte BodyColor => MatchTeam != 0 ? Side.Value.Color : ColorIndex.Value;
         public readonly NetworkVariable<FixedString4096Bytes> Face = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+        /// <summary>The cosmetics worn (<see cref="OutfitPiece"/>).</summary>
+        public readonly NetworkVariable<FixedString512Bytes> Outfit = new(default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
         public readonly NetworkVariable<int> Wins = new();
         public readonly NetworkVariable<int> Kills = new();
         public readonly NetworkVariable<ManaState> Mana = new();
@@ -67,13 +74,13 @@ namespace SuddenMageEncounter
         public bool IsFoolCard(int slot) => IsSpawned && Hand[slot] == CardId.TheFool && FoolCards.Value[slot] != CardId.None;
 
         public override string FeedName => DisplayName;
-        public override int FeedColor => ColorIndex.Value == 255 ? -1 : ColorIndex.Value;
+        public override int FeedColor => BodyColor == 255 ? -1 : BodyColor;
         /// <summary>The colour the body is (a skinwalker's: the one of the skin they took).</summary>
         public Color PlayerColor
         {
             get
             {
-                int index = ColorIndex.Value;
+                int index = BodyColor;
                 if (IsSpawned && Skin.Value.On)
                 {
                     if (Skin.Value.Kind == SkinState.Undead) return SpellPlans.UndeadSkin;
@@ -109,7 +116,18 @@ namespace SuddenMageEncounter
                 return from != null ? from.Face.Value.ToString() : "";
             }
         }
-        public string ColorHex => ColorIndex.Value == 255 ? "FFFFFF" : PlayerPalette.HexString(ColorIndex.Value);
+
+        /// <summary>The cosmetics on the body (a skinwalker's: those of the body whose skin they took).</summary>
+        public string ShownOutfit
+        {
+            get
+            {
+                if (!IsSpawned || !Skin.Value.On) return Outfit.Value.ToString();
+                var from = Skin.Value.Face == 0 ? null : WorldNet.FindCaster(Skin.Value.Face);
+                return from != null ? from.Outfit.Value.ToString() : "";
+            }
+        }
+        public string ColorHex => BodyColor == 255 ? "FFFFFF" : PlayerPalette.HexString(BodyColor);
 
         public static PlayerController FindByClient(ulong clientId)
         {
@@ -186,6 +204,7 @@ namespace SuddenMageEncounter
             All.Add(this);
             gameObject.layer = Layers.Player;
             ColorIndex.OnValueChanged += OnColorChanged;
+            Side.OnValueChanged += OnSideChanged;
             Status.OnValueChanged += OnStatusChanged;
             Equipped.OnValueChanged += OnEquippedChanged;
             Skin.OnValueChanged += OnSkinChanged;
@@ -194,6 +213,8 @@ namespace SuddenMageEncounter
             _faceRenderer = FaceDecal.Attach(model, transform, _facePainter.Texture);
             Face.OnValueChanged += OnFaceChanged;
             ApplyFace();
+            Outfit.OnValueChanged += OnOutfitChanged;
+            ApplyOutfit();
 
             if (IsOwner)
             {
@@ -216,9 +237,11 @@ namespace SuddenMageEncounter
                 Health.OnValueChanged += OnOwnHealthChanged;
                 PushName();
                 PushFace();
+                PushOutfit();
                 PushLoadout();
                 GameSettings.NameChanged += PushName;
                 FaceArt.Changed += PushFace;
+                Wardrobe.Changed += PushOutfit;
                 Loadouts.Changed += OnLoadoutsChanged;
                 RequestColorRpc(-1);
                 SpawnPoint.Pick(out var pos, out var yaw);
@@ -247,9 +270,12 @@ namespace SuddenMageEncounter
             _state.OnValueChanged -= OnStateChanged;
             GameSettings.NameChanged -= PushName;
             FaceArt.Changed -= PushFace;
+            Wardrobe.Changed -= PushOutfit;
+            Outfit.OnValueChanged -= OnOutfitChanged;
             Loadouts.Changed -= OnLoadoutsChanged;
             Face.OnValueChanged -= OnFaceChanged;
             ColorIndex.OnValueChanged -= OnColorChanged;
+            Side.OnValueChanged -= OnSideChanged;
             Status.OnValueChanged -= OnStatusChanged;
             Equipped.OnValueChanged -= OnEquippedChanged;
             Skin.OnValueChanged -= OnSkinChanged;
@@ -281,7 +307,7 @@ namespace SuddenMageEncounter
             {
                 if (!Dead.Value)
                 {
-                    if (Trapped) ChainTick(); // silenced by the Empress: free to move, but her chains keep you inside
+                    if (Trapped && !HeldStill) ChainTick(); // silenced by the Empress: free to move, but her chains keep you inside
                     // stuck on the front of someone's chariot: carried along in front of them
                     var driver = PinnedTo;
                     if (driver != null) Motor.PinTo(driver);
@@ -294,7 +320,7 @@ namespace SuddenMageEncounter
                 }
                 _viewVelocity = Motor.Velocity;
                 _viewYaw = Motor.BodyYaw; // (the way the body faces, as others see it, not the camera)
-                _viewPitch = Motor.Pitch;
+                _viewPitch = Motor.BodyPitch;
                 _viewFlags = BuildFlags();
                 _viewPose = Caster.Pose;
                 _viewPoseStart = Caster.PoseStart;
@@ -355,7 +381,7 @@ namespace SuddenMageEncounter
                 Position = transform.position,
                 Velocity = Motor.Velocity,
                 Yaw = Motor.BodyYaw, // (face-locked: others see the body hold still while our camera turns)
-                Pitch = Motor.Pitch,
+                Pitch = Motor.BodyPitch,
                 Flags = BuildFlags(),
                 Teleport = _teleportCounter,
                 Pose = (byte)Caster.Pose,
@@ -478,7 +504,7 @@ namespace SuddenMageEncounter
         void CastRpc(byte slot, byte cardByte, Vector3 target, float yaw, ulong targetId)
         {
             if (IsSpawned && Status.Value.Taken(WorldNet.Now)) return; // gone into The World: nothing until it's ready
-            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowedFor(this) || Trapped || Grasped || Pinned || SpellServer.InBubble(this)) return;
+            if (!IsAlive || slot >= Loadout.Slots || !MatchManager.CastingAllowedFor(this) || Trapped || Grasped || Hexed || Pinned || SpellServer.InBubble(this)) return;
             var card = (CardId)cardByte;
             bool free = IsFoolCard(slot) && FoolCards.Value[slot] == card;
             if (IsUndead ? CardInSlot(slot) != card : !free && Hand[slot] != card) return;
@@ -655,7 +681,7 @@ namespace SuddenMageEncounter
         void NoteKnockdown() { if (_combo.NoteKnockdown()) ServerComboBreak(); }
 
         /// <summary>Server, every frame: lying ragdolled too long within the window breaks the combo.</summary>
-        void TickComboBreak() { if (_combo.Tick(IsAlive, IsRagdolled && !LungingView)) ServerComboBreak(); } // (a bite's own lunge doesn't count)
+        void TickComboBreak() { if (_combo.Tick(IsAlive, IsRagdolled && !LungingView && !HeldStill)) ServerComboBreak(); } // (a bite's own lunge doesn't count)
 
         /// <summary>Server: thrown by the kick of our own shotgun. Interrupts nothing, but counts for combo breaks like any knockdown.</summary>
         public void ServerRecoil(Vector3 velocity, float ragdollSeconds)
@@ -690,6 +716,7 @@ namespace SuddenMageEncounter
             if (SpellServer.Unmovable(this)) return; // turned to steel by the Wheel, praying for The Tower, charging with The Chariot: nothing moves you
             if (SpellServer.Hanging(this)) return; // hanging from The Hanged Man's noose: nothing moves you
             if (ragdollSeconds > 0f && SpellServer.Shielded(this)) return; // inside your own barrier: nothing moves you
+            if (SpellServer.StasisHolds(this)) return; // frozen by this very attack (a later one thaws them, and throws them)
             // combo break: knocked down too much lately, they get up and can't be knocked down for a while (still thrown)
             if (ragdollSeconds > 0f && !ServerUnstoppable) NoteKnockdown();
             if (ServerUnstoppable) ragdollSeconds = 0f;
@@ -703,6 +730,7 @@ namespace SuddenMageEncounter
         public override void ServerCarry(Vector3 origin, Vector3 dir, double start, double captured, float phase)
         {
             if (SpellServer.Invulnerable(this) || ServerUnstoppable || SpellServer.Unmovable(this) || SpellServer.Hanging(this)) return;
+            if (SpellServer.StasisHolds(this)) return;
             NoteKnockdown();
             if (ServerUnstoppable) return; // (that broke the combo)
             _serverRagdollUntil = Mathf.Max(_serverRagdollUntil, Time.time + SpellPlans.TornadoLife + 1f);
@@ -1089,6 +1117,17 @@ namespace SuddenMageEncounter
                 _barrierReported = true;
                 BarrierRpc();
             }
+            else if (TrainTrack.Hits(transform.position, out var train))
+            {
+                _barrierReported = true;
+                TrainRpc(train.normalized);
+            }
+        }
+
+        [Rpc(SendTo.Server)]
+        void TrainRpc(Vector3 dir)
+        {
+            if (IsAlive) ServerKillByHazard(DeathCause.Barrier, transform.position, Vector3.ClampMagnitude(dir, 1f) * SpellPlans.TrainThrow + Vector3.up * SpellPlans.TrainLift);
         }
 
         [Rpc(SendTo.Server)]
@@ -1103,7 +1142,11 @@ namespace SuddenMageEncounter
         public void ServerBeginRound(Vector3 pos, float yaw, double manaFrom) => ServerSpawnAt(pos, yaw, 0f, manaFrom);
 
         /// <summary>Server: (re)spawn in a practice chamber — alive, full health and full mana.</summary>
-        public void ServerPracticeSpawn(Vector3 pos, float yaw) => ServerSpawnAt(pos, yaw, ManaState.Max, WorldNet.Now);
+        public void ServerPracticeSpawn(Vector3 pos, float yaw)
+        {
+            if (IsServer) Side.Value = default; // off the team while practising
+            ServerSpawnAt(pos, yaw, ManaState.Max, WorldNet.Now);
+        }
 
         void ServerSpawnAt(Vector3 pos, float yaw, float mana, double manaFrom)
         {
@@ -1130,6 +1173,13 @@ namespace SuddenMageEncounter
         {
             if (!IsServer || !IsSpawned || !Dead.Value) return;
             Status.Value = new BodyStatus { Undead = true, Master = master };
+            if (master != NetworkObjectId && !InPractice)
+            {
+                // on the master's team now (Team Deathmatch), though its win won't pay them
+                var m = WorldNet.FindCaster(master);
+                if (m != null) Side.Value = m.Side.Value;
+                MatchManager.ServerLoseShare(this);
+            }
             ServerRevive();
             Mana.Value = new ManaState { Value = 0f, Time = WorldNet.Now, Cap = SpellPlans.UndeadMana };
             FoolCards.Value = default;
@@ -1195,6 +1245,7 @@ namespace SuddenMageEncounter
         {
             ApplyColor();
             ApplyFace();
+            ApplyOutfit();
         }
 
         /// <summary>Server: Skinwalker: in this skin from now on, with its moves, full health and 10 mana.</summary>
@@ -1282,7 +1333,7 @@ namespace SuddenMageEncounter
 
         // ---------------- practice ----------------
 
-        public enum PracticeAction : byte { Enter, Reset, Summon, Leave, Corpse }
+        public enum PracticeAction : byte { Enter, Reset, Summon, Leave, Corpse, NextMap, Hazards }
 
         /// <summary>Owner: ask the server to enter / reset / leave your practice chamber, or drop a dummy at <paramref name="point"/>.</summary>
         public void RequestPractice(PracticeAction action, Vector3 point = default) => PracticeRpc((byte)action, point);
@@ -1297,6 +1348,8 @@ namespace SuddenMageEncounter
                 case PracticeAction.Summon: Practice.ServerSummon(this, point); break;
                 case PracticeAction.Corpse: Practice.ServerSummon(this, point, true); break;
                 case PracticeAction.Leave: Practice.ServerLeave(this); break;
+                case PracticeAction.NextMap: Practice.ServerNextMap(this); break;
+                case PracticeAction.Hazards: Practice.ServerHazards(this); break;
             }
         }
 
@@ -1373,12 +1426,12 @@ namespace SuddenMageEncounter
             Mana.Value = new ManaState { Value = Mana.Value.At(WorldNet.Now), Time = WorldNet.Now, Cap = Mana.Value.Cap }; // the Magician's boost ends
             var st = Status.Value; // floating, steel, gold, chilled, doomed: all over (being Undead stays until raised again)
             st.HangUntil = st.SteelUntil = st.GoldUntil = st.SlowUntil = st.DoomAt = st.StrongUntil = st.GraspUntil = 0;
-            st.LitUntil = st.MoonAt = st.SunUntil = st.WorldUntil = 0;
+            st.LitUntil = st.MoonAt = st.SunUntil = st.WorldUntil = st.StasisUntil = st.ShatterUntil = st.MindUntil = 0;
             Status.Value = st;
             if (!InPractice) ServerGrantGold(Rewards.Death); // dying in a round still pays a little
             if (attackerClientId == OwnerClientId || attackerClientId == NoAttacker || InPractice) return;
             var killer = ServerFind(attackerClientId);
-            if (killer != null)
+            if (killer != null && !Teammates(killer, this)) // (nothing for killing a teammate)
             {
                 killer.Kills.Value++;
                 killer.ServerGrantGold(Rewards.Kill);
@@ -1448,6 +1501,26 @@ namespace SuddenMageEncounter
             ApplyFace();
         }
 
+        void PushOutfit()
+        {
+            if (!IsOwner || !IsSpawned) return;
+            var fs = new FixedString512Bytes();
+            fs.CopyFromTruncated(Wardrobe.Encoded());
+            if (!Outfit.Value.Equals(fs)) Outfit.Value = fs;
+        }
+
+        string _wornOutfit = "";
+
+        void OnOutfitChanged(FixedString512Bytes prev, FixedString512Bytes next) => ApplyOutfit();
+
+        void ApplyOutfit()
+        {
+            string shown = ShownOutfit;
+            if (shown == _wornOutfit) return;
+            _wornOutfit = shown;
+            Wear(OutfitPiece.Decode(shown));
+        }
+
         void OnFaceChanged(FixedString4096Bytes prev, FixedString4096Bytes next) => ApplyFace();
 
         void ApplyFace()
@@ -1484,6 +1557,7 @@ namespace SuddenMageEncounter
         }
 
         void OnColorChanged(byte prev, byte next) => ApplyColor();
+        void OnSideChanged(TeamState prev, TeamState next) => ApplyColor();
 
         static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int ColorId = Shader.PropertyToID("_Color");
@@ -1496,7 +1570,7 @@ namespace SuddenMageEncounter
             Color c = IsSpawned && IsUndead ? SpellPlans.UndeadSkin : PlayerColor; // the Undead: sickly green all over
             foreach (var r in model.GetComponentsInChildren<Renderer>(true))
             {
-                if (r.name == FaceDecal.ObjectName) continue; // the face keeps its own colours
+                if (r.name == FaceDecal.ObjectName || CosmeticLook.Is(r)) continue; // the face and cosmetics keep their own colours
                 r.GetPropertyBlock(_mpb);
                 _mpb.SetColor(BaseColorId, c);
                 _mpb.SetColor(ColorId, c);

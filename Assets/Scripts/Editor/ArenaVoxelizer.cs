@@ -6,7 +6,7 @@ namespace SuddenMageEncounter.EditorTools
     /// <summary>
     /// Turns the meshes of an arena (ProBuilder shapes or any MeshRenderer) into 0.25 m voxels.
     /// For every column of cells it casts a vertical ray through the triangles and fills between entry and exit
-    /// hits (so closed shapes come out solid); a lone surface (a plane) becomes a one-voxel-thick sheet.
+    /// hits (so closed shapes come out solid, and ones with a flat side missing); a lone surface (a plane) becomes a one-voxel-thick sheet.
     /// Colour comes from the material (base colour × average texture colour) and vertex colours, if any.
     /// </summary>
     public static class ArenaVoxelizer
@@ -15,12 +15,14 @@ namespace SuddenMageEncounter.EditorTools
         {
             public Vector3 a, b, c;
             public ushort material;
+            public int hole; // > 0: part of a cap closing that hole (see OpenMeshCaps)
         }
 
         struct Hit
         {
             public float y;
             public ushort material;
+            public int hole;
         }
 
         public static VoxelArenaData Voxelize(Arena arena, out string report)
@@ -64,12 +66,25 @@ namespace SuddenMageEncounter.EditorTools
                 if (list.Count == 0) continue;
                 meshes++;
                 tris += list.Count;
+                CloseHoles(list, m.determinant < 0f);
                 FillMesh(data, list, origin, S);
             }
 
             report = $"{meshes} mesh(es), {tris} triangles → {data.CellCount:N0} voxels, {data.palette.Count - 1} colour(s), {data.chunks.Count} chunk(s)";
             return data;
         }
+
+        /// <summary>Adds the missing flat sides (the bottom of ProBuilder stairs), so the shape fills as a solid.</summary>
+        static void CloseHoles(List<Tri> tris, bool mirrored)
+        {
+            var corners = new List<Vector3>(tris.Count * 3);
+            foreach (var t in tris) { corners.Add(t.a); corners.Add(t.b); corners.Add(t.c); }
+            foreach (var c in OpenMeshCaps.Find(corners, mirrored))
+                tris.Add(new Tri { a = c.a, b = c.b, c = c.c, material = tris[c.tri].material, hole = c.hole });
+        }
+
+        // rays go through the cell centres, nudged off exact edges so shared edges don't count twice
+        const float NudgeX = 1.37e-4f, NudgeZ = 2.91e-4f;
 
         static void FillMesh(VoxelArenaData data, List<Tri> tris, Vector3 origin, float S)
         {
@@ -80,8 +95,8 @@ namespace SuddenMageEncounter.EditorTools
                 var t = tris[i];
                 float minX = Mathf.Min(t.a.x, Mathf.Min(t.b.x, t.c.x)), maxX = Mathf.Max(t.a.x, Mathf.Max(t.b.x, t.c.x));
                 float minZ = Mathf.Min(t.a.z, Mathf.Min(t.b.z, t.c.z)), maxZ = Mathf.Max(t.a.z, Mathf.Max(t.b.z, t.c.z));
-                int x0 = Mathf.CeilToInt((minX - origin.x) / S - 0.5f), x1 = Mathf.FloorToInt((maxX - origin.x) / S - 0.5f);
-                int z0 = Mathf.CeilToInt((minZ - origin.z) / S - 0.5f), z1 = Mathf.FloorToInt((maxZ - origin.z) / S - 0.5f);
+                int x0 = Mathf.FloorToInt((minX - NudgeX - origin.x) / S - 0.5f), x1 = Mathf.CeilToInt((maxX - NudgeX - origin.x) / S - 0.5f);
+                int z0 = Mathf.FloorToInt((minZ - NudgeZ - origin.z) / S - 0.5f), z1 = Mathf.CeilToInt((maxZ - NudgeZ - origin.z) / S - 0.5f);
                 for (int x = x0; x <= x1; x++)
                 for (int z = z0; z <= z1; z++)
                 {
@@ -95,13 +110,16 @@ namespace SuddenMageEncounter.EditorTools
             foreach (var kv in bins)
             {
                 int cx = (int)(kv.Key >> 32), cz = (int)(kv.Key & 0xffffffff);
-                // nudge off exact edges so shared edges don't count twice
-                float px = origin.x + (cx + 0.5f) * S + 1.37e-4f, pz = origin.z + (cz + 0.5f) * S + 2.91e-4f;
+                float px = origin.x + (cx + 0.5f) * S + NudgeX, pz = origin.z + (cz + 0.5f) * S + NudgeZ;
                 hits.Clear();
                 foreach (int i in kv.Value)
                 {
                     var t = tris[i];
-                    if (VerticalHit(t, px, pz, out float y)) hits.Add(new Hit { y = y, material = t.material });
+                    if (!VerticalHit(t, px, pz, out float y)) continue;
+                    // triangles of one cap may overlap: two of them cancel out
+                    int other = t.hole > 0 ? hits.FindIndex(h => h.hole == t.hole) : -1;
+                    if (other >= 0) hits.RemoveAt(other);
+                    else hits.Add(new Hit { y = y, material = t.material, hole = t.hole });
                 }
                 if (hits.Count == 0) continue;
                 hits.Sort((a, b) => b.y.CompareTo(a.y)); // top first

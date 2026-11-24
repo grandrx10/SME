@@ -105,7 +105,7 @@ namespace SuddenMageEncounter
         {
             Body = 85, Wheel = 86, DieThrow = 87, DieEnd = 88, Justice = 89, JusticeEnd = 90, DeathAura = 91, DeathAuraEnd = 92,
             Tower = 93, TowerTurn = 94, TowerCarve = 95, TowerBreak = 96, Breath = 97, BreathEnd = 98,
-            CellsSinge = 99, CellsBurn = 100, IceCoat = 101, Hook = 102, HookAttach = 103, HookEnd = 104, NecroFx = 105,
+            CellsSinge = 99, CellsBurn = 100, IceCoat = 101, Hook = 102, HookAttach = 103, HookEnd = 104, NecroFx = 105, IceThaw = 130,
         }
 
         static FastBufferWriter NewOp(MoreOp op, int size) => NewOp((Op)(byte)op, size);
@@ -223,14 +223,13 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        /// <summary>The falling tower smashes through these cells (flung on along <paramref name="dir"/>).</summary>
-        public static void ServerTowerCarve(List<Vector3Int> cells, Vector3 dir)
+        /// <summary>The falling tower deletes these cells.</summary>
+        public static void ServerTowerCarve(List<Vector3Int> cells)
         {
             var i = Instance;
             if (i == null || !IsServer || cells.Count == 0) return;
             var w = NewOp(MoreOp.TowerCarve, 24 + cells.Count * 6);
             WriteCells(ref w, cells);
-            w.WriteValueSafe(dir);
             i.Broadcast(Finish(ref w));
         }
 
@@ -291,6 +290,17 @@ namespace SuddenMageEncounter
             if (i == null || !IsServer || cells.Count == 0) return;
             var w = NewOp(MoreOp.IceCoat, 8 + cells.Count * 6);
             WriteCells(ref w, cells);
+            i.Broadcast(Finish(ref w));
+        }
+
+        /// <summary>The frost melts off these cells: whichever are still ice go back to what they were.</summary>
+        public static void ServerIceThaw(List<Vector3Int> cells, List<ushort> was)
+        {
+            var i = Instance;
+            if (i == null || !IsServer || cells.Count == 0) return;
+            var w = NewOp(MoreOp.IceThaw, 16 + cells.Count * 8);
+            WriteCells(ref w, cells);
+            WriteValues(ref w, was);
             i.Broadcast(Finish(ref w));
         }
 
@@ -453,16 +463,9 @@ namespace SuddenMageEncounter
                 }
                 case MoreOp.TowerCarve:
                 {
-                    var cells = ReadCells(ref r);
-                    r.ReadValueSafe(out Vector3 dir);
-                    world.RemoveCells(cells, removed, true, islands);
-                    if (removed.Count > 0)
-                    {
-                        Vector3 mid = Vector3.zero;
-                        foreach (var rc in removed) mid += world.CellCenter(rc.cell);
-                        mid /= removed.Count;
-                        Debris.Spawn(world, removed, mid + Vector3.up, 5f, dir * 8f + Vector3.down * 4f, 2, null, 60);
-                    }
+                    // what it falls through is simply gone: no debris (and no scraps cut loose); only big pieces left hanging fall
+                    world.RemoveCells(ReadCells(ref r), null, true, islands);
+                    islands.RemoveAll(i => i.Count < SpellPlans.TowerScrap);
                     return true;
                 }
                 case MoreOp.TowerBreak:
@@ -533,6 +536,13 @@ namespace SuddenMageEncounter
                         // the same shade on every peer: from the cell's position
                         world.Set(c, world.IceValue((byte)(((c.x * 73856093) ^ (c.y * 19349663) ^ (c.z * 83492791)) & 1)));
                     }
+                    return true;
+                }
+                case MoreOp.IceThaw:
+                {
+                    var cells = ReadCells(ref r);
+                    var was = ReadValues(ref r);
+                    for (int k = 0; k < cells.Count && k < was.Count; k++) world.Thaw(cells[k], was[k]);
                     return true;
                 }
                 case MoreOp.Hook:

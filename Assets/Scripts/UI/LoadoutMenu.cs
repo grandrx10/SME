@@ -41,7 +41,10 @@ namespace SuddenMageEncounter
         readonly GameObject _music;
         readonly Vector2 _windowWithMusic;
         RectTransform _page;
-        bool _faceOpen;
+        bool _faceOpen, _dressOpen;
+        int _dressItems; // how many cosmetics the dress-up page shows
+        /// <summary>The face or dress-up page is open instead of the loadouts.</summary>
+        bool SubPage => _faceOpen || _dressOpen;
         float _deckScroll = 1f;
 
         public LoadoutMenu(Transform canvas, Action onVisibilityChanged, Action openShop)
@@ -65,10 +68,12 @@ namespace SuddenMageEncounter
             UIFactory.Place(_window, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), _windowWithMusic, WindowSize);
             _music = MusicPanel.Create(_root, new Vector2(total / 2 - MusicSize.x / 2, 0), MusicSize).gameObject;
             _root.gameObject.SetActive(false);
-            Loadouts.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
+            Loadouts.Changed += () => { if (IsOpen && !SubPage && !DragCard.Dragging) Rebuild(); };
+            // a crate opened over the dress-up page
+            Wardrobe.Changed += () => { if (IsOpen && _dressOpen && Wardrobe.Items.Count != _dressItems) OpenDress(); };
             // new cards from a pack, gold earned or spent
-            Collection.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
-            Wallet.Changed += () => { if (IsOpen && !_faceOpen && !DragCard.Dragging) Rebuild(); };
+            Collection.Changed += () => { if (IsOpen && !SubPage && !DragCard.Dragging) Rebuild(); };
+            Wallet.Changed += () => { if (IsOpen && !SubPage && !DragCard.Dragging) Rebuild(); };
         }
 
         readonly Action _openShop;
@@ -82,7 +87,7 @@ namespace SuddenMageEncounter
         public void Open()
         {
             IsOpen = true;
-            _faceOpen = false;
+            _faceOpen = _dressOpen = false;
             Collection.LoadoutHint = false; // made it here after the first pack
             Rebuild();
             _root.gameObject.SetActive(true);
@@ -93,10 +98,11 @@ namespace SuddenMageEncounter
         {
             if (!IsOpen) return;
             IsOpen = false;
-            _faceOpen = false;
+            _faceOpen = _dressOpen = false;
             SecretReveal.Stop();
             DragCard.Cancel();
             FacePreview.SetRendering(false);
+            CosmeticStage.SetRendering(false);
             _root.gameObject.SetActive(false);
             _onVisibilityChanged?.Invoke();
         }
@@ -107,12 +113,19 @@ namespace SuddenMageEncounter
         {
             _root.gameObject.SetActive(IsOpen && shown);
             FacePreview.SetRendering(IsOpen && shown && _faceOpen);
+            CosmeticStage.SetRendering(IsOpen && shown && _dressOpen);
         }
 
         public void Back()
         {
             if (SecretReveal.Playing) { SecretReveal.Dismiss(); return; }
-            if (_faceOpen) { _faceOpen = false; FacePreview.SetRendering(false); Rebuild(); }
+            if (SubPage)
+            {
+                _faceOpen = _dressOpen = false;
+                FacePreview.SetRendering(false);
+                CosmeticStage.SetRendering(false);
+                Rebuild();
+            }
             else Close();
         }
 
@@ -132,7 +145,7 @@ namespace SuddenMageEncounter
 
         void Rebuild()
         {
-            if (_faceOpen) return;
+            if (SubPage) return;
             var page = NewPage();
             int li = Loadouts.SelectedIndex;
             var loadout = Loadouts.Get(li);
@@ -158,6 +171,14 @@ namespace SuddenMageEncounter
             thumb.texture = FacePreview.Painter.Texture;
             thumb.raycastTarget = false;
             UIFactory.Stretch(thumb.rectTransform, 4, 4, 4, 4);
+
+            // cosmetics: a hat
+            var dress = RoundButton(page, "", OpenDress, new Color(0.17f, 0.19f, 0.24f, 1f));
+            UIFactory.Place((RectTransform)dress.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad - 2 * (BarH + 12), -Pad), new Vector2(BarH, BarH));
+            var hat = UIFactory.Rect("Hat", dress.transform).gameObject.AddComponent<RawImage>();
+            hat.texture = CosmeticIcons.Get(CosmeticId.WizardHat, 16);
+            hat.raycastTarget = false;
+            UIFactory.Stretch(hat.rectTransform, 3, 3, 3, 3);
 
             // shop: a pack and your gold
             var shop = RoundButton(page, "", () => _openShop?.Invoke(), new Color(0.17f, 0.19f, 0.24f, 1f));
@@ -185,7 +206,7 @@ namespace SuddenMageEncounter
                     pc.RequestPractice(pc.InPractice ? PlayerController.PracticeAction.Leave : PlayerController.PracticeAction.Enter);
                     Close();
                 }, inside ? UIFactory.Accent : new Color(0.17f, 0.19f, 0.24f, 1f));
-                UIFactory.Place((RectTransform)practice.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad - 2 * (BarH + 12), -Pad), new Vector2(BarH, BarH));
+                UIFactory.Place((RectTransform)practice.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad - 3 * (BarH + 12), -Pad), new Vector2(BarH, BarH));
                 var target = UIFactory.Rect("Target", practice.transform).gameObject.AddComponent<RawImage>();
                 target.texture = ShopArt.Target;
                 target.raycastTarget = false;
@@ -436,6 +457,19 @@ namespace SuddenMageEncounter
             UIFactory.Place((RectTransform)close.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad, -Pad), new Vector2(BarH, BarH));
             FaceEditor.Build(page, WindowSize);
             FacePreview.SetRendering(true);
+        }
+
+        // ------------------------------------------------------------------ cosmetics
+
+        void OpenDress()
+        {
+            _dressOpen = true;
+            _dressItems = Wardrobe.Items.Count;
+            var page = NewPage();
+            CosmeticStage.SetRendering(true);
+            CosmeticsPage.Build(page, WindowSize, () => _openShop?.Invoke());
+            var close = RoundButton(page, "✕", Back, new Color(0.17f, 0.19f, 0.24f, 1f));
+            UIFactory.Place((RectTransform)close.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-Pad, -Pad), new Vector2(BarH, BarH));
         }
     }
 

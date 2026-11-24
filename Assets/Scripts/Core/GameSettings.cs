@@ -6,7 +6,7 @@ using UnityEngine.InputSystem;
 namespace SuddenMageEncounter
 {
     /// <summary>Rebindable actions. Order = order in Settings > Controls. Saved by name, so reordering is safe.</summary>
-    public enum GameAction { Forward, Back, Left, Right, Jump, Crouch, Ability1, Ability2, Ability3, Ability4, Ability5, Loadout, PracticeReset, PracticeDummy, PracticeLeave, PracticeRounds, SkipVote, PracticeCorpse }
+    public enum GameAction { Forward, Back, Left, Right, Jump, Crouch, Ability1, Ability2, Ability3, Ability4, Ability5, Loadout, PracticeReset, PracticeDummy, PracticeLeave, PracticeRounds, SkipVote, PracticeCorpse, PracticeMap, PracticeHazard }
 
     /// <summary>All user settings, persisted in PlayerPrefs.</summary>
     public static class GameSettings
@@ -99,6 +99,8 @@ namespace SuddenMageEncounter
             { GameAction.PracticeRounds, Key.H },
             { GameAction.SkipVote, Key.N },
             { GameAction.PracticeCorpse, Key.I },
+            { GameAction.PracticeMap, Key.O },
+            { GameAction.PracticeHazard, Key.P },
         };
 
         /// <summary>The rebindable key for ability slot 0..4.</summary>

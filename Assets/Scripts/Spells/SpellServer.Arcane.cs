@@ -220,7 +220,7 @@ namespace SuddenMageEncounter
 
         static bool FireballThroughPortal(FireballState f, WorldNet.FireballFx fx, Vector3 pos)
         {
-            if (!WorldNet.PassPortal(f.lastPos, pos, SpellPlans.FireballRadius + 0.02f, SpellPlans.FireballRadius * 0.5f, out var a, out var b)) return false;
+            if (!WorldNet.PassPortal(f.lastPos, pos, f.Radius + 0.02f, f.Radius * 0.5f, out var a, out var b)) return false;
             Vector3 np = SpellPlans.ThroughPoint(pos, a.center, a.Rotation, b.center, b.Rotation, true);
             WorldNet.ServerFireballLaunch(f.id, np, SpellPlans.ThroughDir(fx.velocity, a.Rotation, b.Rotation), fx.owner);
             f.lastPos = np;

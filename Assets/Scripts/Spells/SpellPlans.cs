@@ -394,7 +394,7 @@ namespace SuddenMageEncounter
         // flight: scatter straight out (each its own way) -> snap round onto the target -> track it, dodgeably
         public const float MissileScatterTime = 0.15f, MissileScatterSpeed = 10f;
         public const float MissileLockTime = 0.12f, MissileLockTurn = 1200f;
-        public const float MissileTrackTurn = 150f;
+        public const float MissileTrackTurn = 90f;
         public const float MissileScatterJitter = 30f, MissileScatterLift = 25f;
         public const float MissileDamage = 5f, MissileRadius = 0.18f;
         public const int MissileCount = 4;

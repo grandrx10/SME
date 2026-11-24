@@ -12,7 +12,14 @@ Grep for the card here before changing it. `X` in "`.X.cs`" = the partial of `Sp
 - **Undead** are on their master's side (`Combatant.Team`, `Combatant.Allies`: no damage or knockback between allies, one side for winning the round). Summon Horde zombies and raised dummies are `TestDummy`s with a simple server AI.
 - **Undying** (passive): a dead player with it pending still counts as standing (`SpellServer.UndyingPending`).
 - **Undying Grasp**: `.Guns.cs`, `GraspVfx.cs`. Held-in-place silence is `Combatant.Grasped`. The arms are cut out of the character's own mesh (`GraspArmModel`).
+- **Necromatic Blast**: `LandNecro` in `.Hex.cs`, `NecroBallVfx.cs`. Its ball is a fireball with `necro` set (`FireballState` / `FireballFx`), so everything that handles fireballs in flight handles it; anything about fire must skip `necro`. Green ground: `VoxelWorld.Blight` (palette entries, like soot).
 - **Skinwalker**: `PlayerController.Skin` (`SkinState`) is the skin worn: colour, face, name tag and moves. What a player can cast is `PlayerController.Hand`, never `Equipped`. The corpse is used up (`Combatant.ConsumeCorpse`). Off at the next round, or when the loadout changes in practice. Kill feed and scoreboard keep the real name.
+
+## Hex (purple; `.Hex.cs`, `HexVfx.cs`)
+- Marks (the bars): `Combatant.Hexes` (`HexMarks`, up to 4 on a body, same kind twice is fine except Mind). Filled in `HexDamaged` (Shatter, Stasis) and `TickMarks` (Mind).
+- **Shatter**: first `BodyStatus.ShatterUntil` (lifted, held in the air, nothing moves them: `GlassCase` in `ShatterVfx.cs`), then it goes off (`Shatter`, `GlassBurst`). A kill: `BodyShatter` (pieces aren't skinned; the biggest is named "Bone").
+- **Stasis**: `BodyStatus.StasisUntil`. The rest of the attack that set it off (0.25 s) neither moves nor thaws them; burning never thaws. Anything that moves a body without a knock (a chariot's pin, the Empress's chains) calls `FreeToMove` first. The pose holds because `ProceduralAnimator` stops and `LiveRagdoll` goes kinematic.
+- **Mind**: `BodyStatus.MindUntil/MindBy`. The victim's own machine (or the server, for a dummy) copies the caster's replicated velocity (world direction, whichever way either faces), turning, crouch and jumps (`SpellPlans.PuppetWish`).
 
 ## Flame
 - **Flame bombs** (Remote Flame Bomb, Remote Detonation, Flame Bomb Toss): `.Bombs.cs`, `BombVfx.cs`. Stuck to the world, or to a body part (`SpellPlans.BombBone` finds it on the body, its ragdoll or its corpse). New lasting flames go in `BombInFlames`, new projectiles go in `HitBombs`, new flame explosions call `FlameSetsOff`, new water counts in `InWater`.
@@ -29,6 +36,11 @@ Grep for the card here before changing it. `X` in "`.X.cs`" = the partial of `Sp
 - **XVII–XXI** (Star, Moon, Sun, Judgement, World): `.Tarot3.cs`, `TarotVfx3.cs`. Judgement is Arcane Judgment with `kind` = `TarotCircle`; it slides (`JudgmentCenterAt`) and erases per column. The Star's through-walls outline (`SME/LitMask` + `SME/LitOutline`) and The Sun's inverted body (`SME/Invert`) are extra body materials set by `PlayerOutlines`. The Sun's damage follows what each player's own screen shows (`SunGazeWatch`).
 - **The World**: sphere in `Voxels/VoxelWorld.Sphere.cs`: one op changes all its cells, meshes catch up later (`StepLate` / `FinishLate`), hidden by `WorldView`'s ball. Its shell is its own indestructible palette entries until someone in it dies. Taken bodies: `BodyStatus.Taken` / `Vanished` (`PlayerMotor.Held`). What the two see: `UI/WorldScreen.cs`, `UI/WorldCinematic.cs` (a stage on layer 31 far below the map).
 - **Temperance**: the first passive (`CostType.Passive`, shown as "P"). Costs go through `Cards.CostWith` / `PlayerController.CostOf`; the mana cap is `ManaState.Cap`.
+
+## Map hazards (`Hazards/`, `SpellServer.Hazards.cs`)
+- Everything but meteors is a pure function of the round's clock (`MapClock`: `State.fightStart/fightEnd`), so there are no ops. Trains: timetable seeded from round + start time + track index, the same on every peer. `MapClock` takes the arena: a practice chamber's hazards are off (liquids at their starting level) until its player presses P (`Arena.practiceHazards`, `HazardOp.Practice`), then start at once, skipping their waits.
+- **Meteors** are fireballs with `meteor` set (as Necromatic Blast's are with `necro`): use `f.Radius`, not `FireballRadius`, for anything that meets a fireball in flight.
+- Liquids (`Liquid`): `RisingWater` counts in `InWater`; floating is `PlayerMotor.SwimTick` / `RisingWater.FloatLine`.
 
 ## Collection rules
 - **Secret rarity**: never in packs or The Fool's rolls, not counted until owned. The World appears blacked out in the deck once you own every other Tarot card (`Collection.SecretReady`, `UI/SecretReveal.cs`). ALL CARDS in the admin panel leaves it to be found.

@@ -88,6 +88,12 @@ namespace SuddenMageEncounter
             public int id; public ulong caster; public double start;
             public bool launched; public Vector3 origin, velocity; public double launchTime; public FireballView view;
             public ulong owner; public bool done;
+            /// <summary>Necromatic Blast's ball: flies as a fireball does, but isn't fire.</summary>
+            public bool necro;
+            /// <summary>A map hazard's meteor: a big fireball, falling.</summary>
+            public bool meteor;
+            /// <summary>How much bigger than a Ball of Flame it's drawn.</summary>
+            public float Scale => meteor ? SpellPlans.MeteorScale : 1f;
         }
         public class HellfireFx
         {
@@ -121,6 +127,7 @@ namespace SuddenMageEncounter
         {
             if (f.launched) return f.origin + f.velocity * Mathf.Max(0f, (float)(now - f.launchTime));
             var c = FindCombatant(f.caster);
+            if (f.necro && c != null) return c.transform.position + Vector3.up * SpellPlans.NecroAbove;
             return SpellVisuals.RightHand(c) + Vector3.up * 0.75f;
         }
 
@@ -702,13 +709,14 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        /// <summary>Builds (or rebuilds, fresh) the practice chamber in this slot on every peer.</summary>
-        public static void ServerPracticeLoad(int slot)
+        /// <summary>Builds (or rebuilds, fresh) the practice chamber in this slot on every peer, as this map (see <see cref="MatchManager.PracticeMaps"/>).</summary>
+        public static void ServerPracticeLoad(int slot, int map)
         {
             var i = Instance;
             if (i == null || !IsServer) return;
             var w = NewOp(Op.PracticeLoad, 4);
             w.WriteValueSafe((byte)slot);
+            w.WriteValueSafe((byte)map);
             i.Broadcast(Finish(ref w));
         }
 
@@ -1313,7 +1321,7 @@ namespace SuddenMageEncounter
             var islands = new List<List<VoxelWorld.RemovedCell>>();
 
             // Rock Swarm and Ice Spike (WorldNet.Ground.cs); everything else here
-            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r))
+            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r) && !ApplyHex(op, ref r, world, removed, islands) && !ApplyHazards(op, ref r))
             switch (op)
             {
                 case Op.RemoveSphere:
@@ -1511,7 +1519,7 @@ namespace SuddenMageEncounter
                         fx.origin = point;
                         Fireballs.Remove(id);
                     }
-                    if (vaporized) SpellFx.Sparkle(point, SpellVisuals.ArcaneBlue, 1.2f);
+                    if (vaporized && (fx == null || !fx.necro)) SpellFx.Sparkle(point, SpellVisuals.ArcaneBlue, 1.2f);
                     break;
                 }
                 case Op.Hellfire:
@@ -1556,7 +1564,8 @@ namespace SuddenMageEncounter
                 case Op.PracticeLoad:
                 {
                     r.ReadValueSafe(out byte slot);
-                    Practice.LoadLocal(slot);
+                    r.ReadValueSafe(out byte map);
+                    Practice.LoadLocal(slot, map);
                     break;
                 }
                 case Op.PracticeClose:
@@ -2157,6 +2166,7 @@ namespace SuddenMageEncounter
             AnimateMore(now);
             AnimateTarot3(now);
             AnimateGuns(now);
+            AnimateHex(now);
             StepMissiles(Time.deltaTime);
 
             // finished effects (their views fade themselves out)
@@ -2431,6 +2441,7 @@ namespace SuddenMageEncounter
             ClearTarot3();
             ClearGuns();
             ClearBombs();
+            ClearHex();
             SpellServer.Reset();
         }
 

@@ -9,10 +9,12 @@ namespace SuddenMageEncounter
     {
         public const int Kill = 20;      // knocking out another player
         public const int RoundWin = 50;  // last one standing
+        public const int TeamWin = 30;   // each player on a Team Deathmatch's winning team, dead or alive (not those raised as Undead)
         public const int Death = 10;     // dying in a round
         public const int FirstRound = 100; // once ever, at the end of your first round (with a nudge to the shop)
         public const int Admin = 100;    // the admin panel's gold button (for testing)
         public const int PackCost = 100;
+        public const int CrateCost = 100;
         public const int PackSize = 3;
     }
 

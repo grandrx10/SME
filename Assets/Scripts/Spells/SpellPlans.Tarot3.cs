@@ -50,7 +50,7 @@ namespace SuddenMageEncounter
 
         // ---------------------------------------------------------------- Judgement (Tarot) / Arcane Judgment
         public const byte ArcaneCircle = 0, TarotCircle = 1;
-        public const float TarotJudgmentRadius = 3.375f;
+        public const float TarotJudgmentRadius = 2.53f;
         public const float TarotJudgmentDraw = 1f;           // the circle's written over a second, then burns bright for JudgmentGlow
         public const float TarotJudgmentLayerEvery = 0.8f, TarotJudgmentDps = 25f; // (a layer off each column for every 0.8 s the beam's been on it)
         public const float TarotJudgmentSlide = 6f;          // once written it slides this far forward, till the beam ends

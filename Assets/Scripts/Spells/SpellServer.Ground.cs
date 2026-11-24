@@ -295,7 +295,7 @@ namespace SuddenMageEncounter
                     Shots.Add(new Shot { kind = ShotKind.Rock, id = r.id, owner = r.caster != null ? r.caster.NetworkObjectId : ulong.MaxValue, radius = r.radius });
             foreach (var f in FireballsS)
                 if (f.launched && net.Fireballs.TryGetValue(f.id, out var fx))
-                    Shots.Add(new Shot { kind = ShotKind.Fireball, id = f.id, owner = fx.owner, radius = SpellPlans.FireballRadius });
+                    Shots.Add(new Shot { kind = ShotKind.Fireball, id = f.id, owner = fx.owner, radius = f.Radius });
             foreach (var v in Volleys)
             {
                 if (!net.Missiles.TryGetValue(v.id, out var mfx) || !mfx.launched) continue;
@@ -613,7 +613,7 @@ namespace SuddenMageEncounter
             if (net != null)
             {
                 foreach (var f in FireballsS)
-                    if (net.Fireballs.TryGetValue(f.id, out var fx)) FirePoints.Add(WorldNet.FireballPosition(fx, now));
+                    if (!f.necro && net.Fireballs.TryGetValue(f.id, out var fx)) FirePoints.Add(WorldNet.FireballPosition(fx, now));
                 foreach (int id in FlamingRocks)
                     if (net.Rocks.TryGetValue(id, out var rx)) FirePoints.Add(WorldNet.RockPosition(rx, now));
             }

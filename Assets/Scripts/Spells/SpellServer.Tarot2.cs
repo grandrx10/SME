@@ -131,7 +131,7 @@ namespace SuddenMageEncounter
                 {
                     if (!f.launched || !net.Fireballs.TryGetValue(f.id, out var fx) || fx.owner == me) continue;
                     Vector3 pos = WorldNet.FireballPosition(fx, now);
-                    if (!SpellPlans.HierophantTouch(f.lastPos, pos, SpellPlans.FireballRadius, h.center, h.rot, out var at, out var n)) continue;
+                    if (!SpellPlans.HierophantTouch(f.lastPos, pos, f.Radius, h.center, h.rot, out var at, out var n)) continue;
                     if (Vector3.Dot(fx.velocity, n) >= 0f) continue;
                     Vector3 np = at + n * 0.05f;
                     WorldNet.ServerFireballLaunch(f.id, np, SpellPlans.Reflect(fx.velocity, n), me);
@@ -325,6 +325,7 @@ namespace SuddenMageEncounter
         {
             // they're stopped in whatever they were doing (before being pinned, which a knock would undo)
             if (o is PlayerController pc) OnInterrupted(pc, true);
+            FreeToMove(o); // out of Stasis
             o.ServerCredit(c.caster); // carried off a cliff or into lava: their kill
             o.PinnedBy.Value = c.caster.NetworkObjectId;
             c.victim = o;

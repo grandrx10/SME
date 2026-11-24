@@ -13,7 +13,18 @@ namespace SuddenMageEncounter
         public Combatant target;
         Rigidbody _pelvis, _head;
         Rigidbody[] _bodies;
-        bool _aimed;
+        bool _aimed, _frozen;
+
+        Vector3 _heldAt;
+
+        /// <summary>Stasis (or Shatter) Hex: the body hangs there just as it is, until it's let go.</summary>
+        public void Freeze(bool on)
+        {
+            if (on && !_frozen && target != null) _heldAt = target.transform.position;
+            if (_frozen == on || _bodies == null) return;
+            _frozen = on;
+            foreach (var rb in _bodies) if (rb != null) rb.isKinematic = on;
+        }
 
         void Start()
         {
@@ -35,6 +46,15 @@ namespace SuddenMageEncounter
         void FixedUpdate()
         {
             if (target == null || _pelvis == null) return;
+            Freeze(target.HeldStill);
+            if (_frozen)
+            {
+                // moved as it is (lifted up to shatter)
+                Vector3 moved = target.transform.position - _heldAt;
+                _heldAt = target.transform.position;
+                if (moved.sqrMagnitude > 1e-8f) foreach (var rb in _bodies) if (rb != null) rb.position += moved;
+                return;
+            }
             Vector3 error = target.transform.position - _pelvis.position;
             if (error.sqrMagnitude > 25f)
             {

@@ -353,7 +353,7 @@ namespace SuddenMageEncounter
             var source = model.GetComponentsInChildren<Transform>(true);
             _sourceRenderers.Clear();
             model.GetComponentsInChildren(true, _sourceRenderers);
-            _sourceRenderers.RemoveAll(r => !(r is SkinnedMeshRenderer || r is MeshRenderer) || r.name == FaceDecal.ObjectName);
+            _sourceRenderers.RemoveAll(r => !(r is SkinnedMeshRenderer || r is MeshRenderer) || r.name == FaceDecal.ObjectName || CosmeticLook.IsHull(r));
 
             Ghost g = null;
             while (_pool.Count > 0 && g == null)

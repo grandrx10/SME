@@ -25,7 +25,9 @@ Code: `Assets/Scripts` (namespace `SuddenMageEncounter`). Card specs are PDFs in
 | `Spells/WorldNet*.cs` | the ordered op stream every peer applies; voxel edits as integer cells |
 | `Spells/SpellPlans*.cs` | sizes, timings and shapes, shared by looks and rules |
 | `Spells/*Vfx.cs`, `*View.cs` | looks (client-side only) |
+| `Cosmetics/` | crates' cosmetics: list, rolls, wardrobe, how they're worn (prefabs in `Resources/Cosmetics`; `CosmeticLook` names mark their renderers) |
 | `Player/` | `PlayerController` (RPCs, mana), `PlayerMotor` (movement), `Combatant` (health, ragdoll), `ProceduralAnimator` (gestures), `NetState` (poses, `BodyStatus`), `TestDummy` |
+| `Hazards/` | map hazards (components inside arena prefabs) |
 | `Voxels/`, `Core/`, `UI/`, `Editor/` | world, match flow and practice, menus and HUD, arena baking |
 
 Server-authoritative: the server decides, peers apply the same ops in order; debris and effects are local.
@@ -45,7 +47,7 @@ Server-authoritative: the server decides, peers apply the same ops in order; deb
 - **Dark ink outline on every shape**: solids get the inverted hull (`Glow.Piece` adds it), strips and lines a wider ink copy under them (`Glow.Underlay`, `ToonLine`). Colour `Glow.Ink`.
 - **Shrink, don't fade.** Punchy bursts, camera shake (`CameraRig.ShakeFrom`). Only held weapons fade (dithered, `SME/ToonFade`).
 - Wind: inked swooshes (`ToonWind.cs`), never dusty smoke. Fire: outlined flame tongues (`FireVfx.cs`). Arcane: deep blue, runes.
-- **Colours**: Flame red, Arcane blue, Lightning yellow, Wind grey, Ground light brown, Tarot mahogany (Emperor gold), Water aqua (healing green), Weapon steel white (slashes hot white), Necromancy sickly green.
+- **Colours**: Flame red, Arcane blue, Lightning yellow, Wind grey, Ground light brown, Tarot mahogany (Emperor gold), Water aqua (healing green), Weapon steel white (slashes hot white), Necromancy sickly green, Hex purple (Shatter white, Stasis turquoise, Mind purple).
 
 ## Tools
 

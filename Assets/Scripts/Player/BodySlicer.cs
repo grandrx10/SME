@@ -125,6 +125,11 @@ namespace SuddenMageEncounter
                 if (mr.name == FaceDecal.ObjectName && Vector3.Dot(mr.bounds.center - point, normal) * (upperSide ? 1f : -1f) < 0f)
                     mr.enabled = false;
 
+            // each cosmetic goes whole with the half it's on
+            foreach (var mr in go.GetComponentsInChildren<MeshRenderer>(true))
+                if (CosmeticLook.IsPart(mr) && (Vector3.Dot(mr.bounds.center - point, normal) >= 0f) != upperSide)
+                    mr.gameObject.SetActive(false);
+
             // ---- mesh: keep this side, cap the cut ----
             var renderers = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             Vector3 capNormal = upperSide ? -normal : normal; // the cap faces out of the half, into the cut

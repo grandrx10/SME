@@ -10,7 +10,7 @@ namespace SuddenMageEncounter
     ///    down, or out of mana. No knockback.
     ///  - Icy Breath: 0.3 s leaning in, then 3 s of frost breathed along the aim (moving is fine): surfaces it touches turn
     ///    to ice (walking on ice knocks you down), anyone in it is slowed to half speed and frosted over (until 2 s after the last of it), and it puts fire out as water does.
-    ///    Knocked down: it stops.
+    ///    Knocked down: it stops. The ice on the ground melts off after 20 s.
     ///  - Grapple Hook: thrown from the left hand. Into ground: a few voxels break where it bites, and the caster is reeled in until they reach it (pressing it
     ///    again lets go, free). Into an enemy: 15, and they're pulled to the caster over 1 s, ragdolled. Anything that isn't
     ///    voxels (an ignored surface): it glances off. Knocked down before it lands: it's gone; after: it still reels in.
@@ -34,12 +34,17 @@ namespace SuddenMageEncounter
         static readonly List<HookState> HooksS = new();
         /// <summary>Cells the Flame Thrower has blackened, and when (they burn away half a second later).</summary>
         static readonly Dictionary<Vector3Int, double> Singed = new();
+        /// <summary>Cells Icy Breath has frosted over: what they were, and when they were last breathed on.</summary>
+        static readonly Dictionary<Vector3Int, (ushort was, double at)> Coated = new();
+        static double _nextThaw;
 
         static void ResetBreath()
         {
             BreathsS.Clear();
             HooksS.Clear();
             Singed.Clear();
+            Coated.Clear();
+            _nextThaw = 0;
         }
 
         static bool CastBreath(PlayerController caster, CardId card, Vector3 target, double now)
@@ -115,6 +120,27 @@ namespace SuddenMageEncounter
                 else IceTick(b, origin, dir, now);
             }
             TickHooks(now);
+            TickThaw(now);
+        }
+
+        static readonly List<ushort> _thawTo = new();
+
+        /// <summary>Frost on the ground melts off 20 s after it was last breathed on: the ground is as it was.</summary>
+        static void TickThaw(double now)
+        {
+            if (Coated.Count == 0 || now < _nextThaw) return;
+            _nextThaw = now + 0.25;
+            _ice.Clear(); _thawTo.Clear();
+            foreach (var kv in Coated)
+            {
+                if (now < kv.Value.at + SpellPlans.IceCoatTime) continue;
+                _ice.Add(kv.Key);
+                _thawTo.Add(kv.Value.was);
+                if (_ice.Count >= 500) break; // (the rest next time)
+            }
+            if (_ice.Count == 0) return;
+            foreach (var p in _ice) Coated.Remove(p);
+            WorldNet.ServerIceThaw(_ice, _thawTo);
         }
 
         static readonly List<Vector3Int> _singe = new(), _burn = new(), _ice = new();
@@ -216,7 +242,13 @@ namespace SuddenMageEncounter
                         var p = new Vector3Int(c0.x + dx, c0.y + dy, c0.z + dz);
                         if (!_seen.Add(p)) continue;
                         ushort v = w.Get(p);
-                        if (v == 0 || w.IsIndestructible(v) || w.IsIce(v)) continue;
+                        if (v == 0 || w.IsIndestructible(v)) continue;
+                        if (w.IsIce(v))
+                        {
+                            if (Coated.TryGetValue(p, out var old)) Coated[p] = (old.was, now); // frosted over afresh
+                            continue;
+                        }
+                        Coated[p] = (v, now);
                         _ice.Add(p);
                     }
                 }
@@ -247,9 +279,9 @@ namespace SuddenMageEncounter
                 for (int i = FireballsS.Count - 1; i >= 0; i--)
                 {
                     var f = FireballsS[i];
-                    if (!net.Fireballs.TryGetValue(f.id, out var fx)) continue;
+                    if (f.necro || !net.Fireballs.TryGetValue(f.id, out var fx)) continue;
                     Vector3 p = WorldNet.FireballPosition(fx, now);
-                    if (!SpellPlans.InCone(origin, dir, SpellPlans.IceBreathReach, SpellPlans.IceBreathAngle, p, SpellPlans.FireballRadius)) continue;
+                    if (!SpellPlans.InCone(origin, dir, SpellPlans.IceBreathReach, SpellPlans.IceBreathAngle, p, f.Radius)) continue;
                     WorldNet.ServerFireballEnd(f.id, p, false);
                     WorldNet.ServerQuench(p, 1f);
                     FireballsS.RemoveAt(i);

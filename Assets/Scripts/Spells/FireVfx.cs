@@ -159,7 +159,7 @@ namespace SuddenMageEncounter
             go.transform.position = WorldNet.FireballPosition(fx, WorldNet.Now);
             v._core = Glow.Piece(go.transform, Glow.SphereMesh, FireVfx.Yellow, "Core");
             v._flames = FireVfx.Aura(go.transform, Vector3.zero, 0.4f, 9);
-            if (!Debris.Suppressed)
+            if (!Debris.Suppressed && !fx.meteor)
                 v._charge = ArcaneCharge.Create(() => WorldNet.FireballPosition(fx, WorldNet.Now),
                     () => { var c = WorldNet.FindCombatant(fx.caster); return c != null && c.IsAlive; },
                     SpellPlans.FireballCharge, FireVfx.Orange, false);
@@ -187,9 +187,9 @@ namespace SuddenMageEncounter
                 return;
             }
             if (_charge != null) { _charge.Release(); _charge = null; }
-            if (_trail == null) _trail = Glow.Trail(transform, FireVfx.Orange, 0.25f, 0.55f);
-            transform.localScale = Vector3.one;
-            _core.localScale = Vector3.one * 0.6f * (1f + 0.08f * Mathf.Sin(Time.time * 30f));
+            if (_trail == null) _trail = Glow.Trail(transform, FireVfx.Orange, 0.25f, 0.55f * _fx.Scale);
+            transform.localScale = Vector3.one * _fx.Scale;
+            _core.localScale = Vector3.one * SpellPlans.FireballCore * (1f + 0.08f * Mathf.Sin(Time.time * 30f));
             // the flames stream back off it as it flies
             transform.rotation = Quaternion.FromToRotation(Vector3.up, -_fx.velocity.normalized * 0.8f + Vector3.up * 0.2f);
         }

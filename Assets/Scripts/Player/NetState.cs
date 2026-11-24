@@ -82,7 +82,8 @@ namespace SuddenMageEncounter
         SkinKneel = 71,      // Skinwalker: down on one knee over the corpse, hands out to it
         BombPlace = 72,      // Remote Flame Bomb: the right hand presses it onto the spot
         BombToss = 73,       // Flame Bomb Toss: both hands thrown forward
-
+        NecroRaise = 74,     // Necromatic Blast: hauled up out of the ground over the head... then hurled forward
+        HexPoint = 75,       // a Hex: the left hand pointing... then flicked at them
     }
 
     /// <summary>Owner-authoritative movement snapshot replicated to everyone.</summary>
@@ -218,6 +219,13 @@ namespace SuddenMageEncounter
         public float WorldYaw;
         /// <summary>Who cast it (object id).</summary>
         public ulong WorldBy;
+        /// <summary>Stasis Hex: frozen where they are, as they are, from <see cref="StasisFrom"/> until then (0 = not).</summary>
+        public double StasisFrom, StasisUntil;
+        /// <summary>Shatter Hex: lifted and held in the air, cased in glass, from <see cref="ShatterFrom"/> until it goes off (0 = not).</summary>
+        public double ShatterFrom, ShatterUntil;
+        /// <summary>Mind Hex: moving as <see cref="MindBy"/> (object id) moves, silenced, from <see cref="MindFrom"/> until then (0 = not).</summary>
+        public double MindFrom, MindUntil;
+        public ulong MindBy;
 
         public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
         {
@@ -232,6 +240,9 @@ namespace SuddenMageEncounter
             s.SerializeValue(ref LitUntil); s.SerializeValue(ref MoonFrom); s.SerializeValue(ref MoonAt);
             s.SerializeValue(ref SunCast); s.SerializeValue(ref SunFrom); s.SerializeValue(ref SunUntil);
             s.SerializeValue(ref WorldFrom); s.SerializeValue(ref WorldUntil); s.SerializeValue(ref WorldSpot); s.SerializeValue(ref WorldYaw); s.SerializeValue(ref WorldBy);
+            s.SerializeValue(ref StasisFrom); s.SerializeValue(ref StasisUntil);
+            s.SerializeValue(ref ShatterFrom); s.SerializeValue(ref ShatterUntil);
+            s.SerializeValue(ref MindFrom); s.SerializeValue(ref MindUntil); s.SerializeValue(ref MindBy);
         }
 
         public bool Equals(BodyStatus o) =>
@@ -240,7 +251,8 @@ namespace SuddenMageEncounter
             Undead == o.Undead && Master == o.Master && Horde == o.Horde && RiseFrom == o.RiseFrom &&
             StrongFrom == o.StrongFrom && StrongUntil == o.StrongUntil && LitUntil == o.LitUntil &&
             MoonFrom == o.MoonFrom && MoonAt == o.MoonAt && SunCast == o.SunCast && SunFrom == o.SunFrom && SunUntil == o.SunUntil &&
-            WorldFrom == o.WorldFrom && WorldUntil == o.WorldUntil && WorldSpot == o.WorldSpot && WorldYaw == o.WorldYaw && WorldBy == o.WorldBy;
+            WorldFrom == o.WorldFrom && WorldUntil == o.WorldUntil && WorldSpot == o.WorldSpot && WorldYaw == o.WorldYaw && WorldBy == o.WorldBy &&
+            StasisFrom == o.StasisFrom && StasisUntil == o.StasisUntil && ShatterFrom == o.ShatterFrom && ShatterUntil == o.ShatterUntil && MindFrom == o.MindFrom && MindUntil == o.MindUntil && MindBy == o.MindBy;
         public override bool Equals(object obj) => obj is BodyStatus o && Equals(o);
         public override int GetHashCode() => HangUntil.GetHashCode() ^ Master.GetHashCode();
 
@@ -251,6 +263,12 @@ namespace SuddenMageEncounter
         public bool Slowed(double now) => now < SlowUntil;
         /// <summary>Held by Undying Grasp: no moving, no casting.</summary>
         public bool Grasped(double now) => now < GraspUntil;
+        /// <summary>Frozen by Stasis Hex.</summary>
+        public bool Stasis(double now) => now < StasisUntil;
+        /// <summary>About to shatter: held in the air.</summary>
+        public bool Shattering(double now) => now < ShatterUntil;
+        /// <summary>Under someone's control (Mind Hex).</summary>
+        public bool Mind(double now) => now < MindUntil;
         public bool Strong(double now) => now >= StrongFrom && now < StrongUntil;
         public bool Lit(double now) => now < LitUntil;
         /// <summary>The Moon is over them (still filling).</summary>
@@ -293,6 +311,24 @@ namespace SuddenMageEncounter
         public bool Equals(EquippedCards o) => C0 == o.C0 && C1 == o.C1 && C2 == o.C2 && C3 == o.C3 && C4 == o.C4;
         public override bool Equals(object obj) => obj is EquippedCards o && Equals(o);
         public override int GetHashCode() => C0 | (C1 << 8) | (C2 << 16) | (C3 << 24) ^ C4;
+    }
+
+    /// <summary>A player's team in a Team Deathmatch, and its colour. Server writes.</summary>
+    public struct TeamState : INetworkSerializable, IEquatable<TeamState>
+    {
+        /// <summary>1, 2, or 3 (the odd one out, alone); 0 = not in a Team Deathmatch.</summary>
+        public byte Team;
+        /// <summary>Palette index.</summary>
+        public byte Color;
+
+        public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
+        {
+            s.SerializeValue(ref Team); s.SerializeValue(ref Color);
+        }
+
+        public bool Equals(TeamState o) => Team == o.Team && Color == o.Color;
+        public override bool Equals(object obj) => obj is TeamState o && Equals(o);
+        public override int GetHashCode() => Team | (Color << 8);
     }
 
     /// <summary>The skin a player is wearing (Skinwalker): whose colour, face and name, and their moves. Server writes.</summary>

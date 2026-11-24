@@ -82,6 +82,8 @@ namespace SuddenMageEncounter
             ResetTarot3();
             ResetGuns();
             ResetBombs();
+            ResetHex();
+            ResetHazards();
         }
 
         // ------------------------------------------------------------------ barriers
@@ -489,7 +491,18 @@ namespace SuddenMageEncounter
 
         // ================================================================== Flame cards, Judgment, Platform
 
-        class FireballState { public int id; public PlayerController caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust; }
+        class FireballState
+        {
+            public int id; public PlayerController caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust;
+            /// <summary>Necromatic Blast's ball: flies (and is turned, caught, blocked, sent through portals) as a fireball, but isn't fire.</summary>
+            public bool necro;
+            /// <summary>A map hazard's meteor: a big fireball nobody threw (SpellServer.Hazards).</summary>
+            public bool meteor;
+            public float Radius => meteor ? SpellPlans.MeteorRadius : SpellPlans.FireballRadius;
+            public float Charge => necro ? SpellPlans.NecroCharge : SpellPlans.FireballCharge;
+            public float Speed => necro ? SpellPlans.NecroSpeed : meteor ? SpellPlans.MeteorSpeed : SpellPlans.FireballSpeed;
+            public float Range => necro ? Cards.MaxRange : meteor ? 120f : SpellPlans.FireballRange;
+        }
         class HellfireState
         {
             public int id; public PlayerController caster; public double start;
@@ -562,7 +575,7 @@ namespace SuddenMageEncounter
         {
             var f = FireballsS.Find(x => x.id == id);
             if (f == null || f.launched || f.caster != caster) return;
-            if (WorldNet.Now < f.start + SpellPlans.FireballCharge - 0.1) return;
+            if (WorldNet.Now < f.start + f.Charge - 0.1) return;
             DoLaunchFireball(f, dir);
         }
 
@@ -572,7 +585,7 @@ namespace SuddenMageEncounter
             if (net == null || !net.Fireballs.TryGetValue(f.id, out var fx)) return;
             if (dir.sqrMagnitude < 1e-4f) dir = Vector3.forward;
             Vector3 origin = WorldNet.FireballPosition(fx, WorldNet.Now);
-            WorldNet.ServerFireballLaunch(f.id, origin, dir.normalized * SpellPlans.FireballSpeed, f.caster.NetworkObjectId);
+            WorldNet.ServerFireballLaunch(f.id, origin, dir.normalized * f.Speed, f.caster.NetworkObjectId);
             f.launched = true;
             f.lastPos = origin;
         }
@@ -592,7 +605,7 @@ namespace SuddenMageEncounter
                         continue;
                     }
                     // the owner never threw it: it goes where they're facing
-                    if (now > f.start + SpellPlans.FireballCharge + 0.4)
+                    if (now > f.start + f.Charge + 0.4)
                         DoLaunchFireball(f, Quaternion.Euler(f.caster.ViewPitch, f.caster.ViewYaw, 0) * Vector3.forward);
                     continue;
                 }
@@ -600,14 +613,32 @@ namespace SuddenMageEncounter
                 // through a linked portal: it carries on out of the other one
                 if (FireballThroughPortal(f, fx, pos)) continue;
                 // water puts it out (the water isn't harmed)
-                if (WaterAlong(f.lastPos, pos, SpellPlans.FireballRadius, out var wet))
+                if (f.necro)
+                {
+                    // (not fire: only a bubble stops it)
+                    var bubble = BubbleBlocking(fx.owner, pos, SpellPlans.FireballRadius);
+                    if (bubble != null)
+                    {
+                        HurtBubble(bubble, SpellPlans.NecroDamage, pos);
+                        WorldNet.ServerFireballEnd(f.id, pos, false);
+                        FireballsS.RemoveAt(i);
+                        continue;
+                    }
+                }
+                else if (WaterAlong(f.lastPos, pos, f.Radius, out var wet))
                 {
                     WorldNet.ServerFireballEnd(f.id, wet, false);
                     WorldNet.ServerQuench(wet, 1f);
                     FireballsS.RemoveAt(i);
                     continue;
                 }
-                if (BarrierBlocks(fx.owner, pos, SpellPlans.FireballRadius))
+                if (f.meteor && LavaFlood.InAny(pos, f.Radius))
+                {
+                    ExplodeFireball(f, fx, pos, null);
+                    FireballsS.RemoveAt(i);
+                    continue;
+                }
+                if (BarrierBlocks(fx.owner, pos, f.Radius))
                 {
                     WorldNet.ServerFireballEnd(f.id, pos, true);
                     FireballsS.RemoveAt(i);
@@ -615,15 +646,16 @@ namespace SuddenMageEncounter
                 }
                 Vector3 step = pos - f.lastPos;
                 float dist = step.magnitude;
-                if (dist > 1e-4f && SweepBall(fx.owner, f.lastPos, step / dist, dist, SpellPlans.FireballRadius, out var hit, out var victim))
+                if (dist > 1e-4f && SweepBall(fx.owner, f.lastPos, step / dist, dist, f.Radius, out var hit, out var victim))
                 {
                     ExplodeFireball(f, fx, hit.point - (step / dist) * 0.05f, victim);
                     FireballsS.RemoveAt(i);
                     continue;
                 }
                 f.lastPos = pos;
-                if ((pos - fx.origin).magnitude > SpellPlans.FireballRange || now - fx.launchTime > 3.0)
+                if ((pos - fx.origin).magnitude > f.Range || now - fx.launchTime > (f.meteor ? 5.0 : 3.0))
                 {
+                    if (f.necro) { WorldNet.ServerFireballEnd(f.id, pos, false); FireballsS.RemoveAt(i); continue; } // it just comes apart
                     ExplodeFireball(f, fx, pos, null); // out of range: goes off in the air
                     FireballsS.RemoveAt(i);
                 }
@@ -632,6 +664,8 @@ namespace SuddenMageEncounter
 
         static void ExplodeFireball(FireballState f, WorldNet.FireballFx fx, Vector3 point, Combatant direct)
         {
+            if (f.necro) { LandNecro(f, fx, point, direct); return; }
+            if (f.meteor) { LandMeteor(f, fx, point); return; }
             var owner = WorldNet.FindCaster(fx.owner);
             if (direct != null && direct.IsAlive)
                 direct.ServerApplyDamage(SpellPlans.FireballHitDamage, owner != null ? owner.OwnerClientId : Combatant.NoAttacker, point, fx.velocity.normalized, -1, 17f, DeathCause.Spell); // killed by it: thrown like the blast would have
@@ -893,11 +927,11 @@ namespace SuddenMageEncounter
             var net = WorldNet.Instance;
             if (net == null) return;
             Quaternion inv = Quaternion.Inverse(Quaternion.LookRotation(g.dir));
-            Vector3 h = SpellPlans.GustHalfSize + Vector3.one * (SpellPlans.FireballRadius + 0.2f);
             double dt = Mathf.Max(Time.deltaTime, 1f / 60f);
             foreach (var f in FireballsS)
             {
                 if (!f.launched || f.lastGust == g.id || !net.Fireballs.TryGetValue(f.id, out var fx)) continue;
+                Vector3 h = SpellPlans.GustHalfSize + Vector3.one * (f.Radius + 0.2f);
                 for (int k = 0; k <= 6; k++)
                 {
                     double t = now - dt * (k / 6.0);
@@ -908,7 +942,7 @@ namespace SuddenMageEncounter
                     Vector3 here = WorldNet.FireballPosition(fx, now);
                     f.lastGust = g.id;
                     f.lastPos = here;
-                    WorldNet.ServerFireballLaunch(f.id, here, g.dir * SpellPlans.FireballSpeed, g.caster.NetworkObjectId);
+                    WorldNet.ServerFireballLaunch(f.id, here, g.dir * f.Speed, g.caster.NetworkObjectId);
                     break;
                 }
             }
@@ -970,6 +1004,7 @@ namespace SuddenMageEncounter
             FizzleTarot3(pc, now);
             FizzleBombs(pc);
             shown |= FizzleNecro(pc, now);
+            shown |= FizzleHex(pc);
             PendingWaves.RemoveAll(p => p.caster == pc);
             // a fireball still forming fizzles
             for (int i = FireballsS.Count - 1; i >= 0; i--)
@@ -1112,6 +1147,20 @@ namespace SuddenMageEncounter
                 case CardId.RemoteDetonation:
                 case CardId.FlameBombToss:
                     return CastBombs(caster, card, target, yaw, targetId, now);
+                case CardId.ShatterHex:
+                case CardId.StasisHex:
+                case CardId.MindHex:
+                    return CastHex(caster, card, targetId, now);
+                case CardId.NecromaticBlast:
+                {
+                    // (torn out of the ground as Rock Barrage's is)
+                    Vector3 fwd = Quaternion.Euler(0, caster.ViewYaw, 0) * Vector3.forward;
+                    if (!SpellPlans.PlanRock(world, caster.transform.position, feet, fwd, target, out var center)) return false;
+                    int id = WorldNet.ServerNecroBall(caster.NetworkObjectId, center, SpellPlans.RockRadius4);
+                    if (id == 0) return false;
+                    FireballsS.Add(new FireballState { id = id, caster = caster, start = now, necro = true });
+                    return true;
+                }
                 case CardId.BallOfFlame:
                 {
                     int id = WorldNet.ServerFireball(caster.NetworkObjectId);
@@ -1434,6 +1483,8 @@ namespace SuddenMageEncounter
             TickBreath(now);
             TickTarot3(net, now, Time.deltaTime);
             TickGuns(net, now);
+            TickHex(now);
+            TickHazards(now, Time.deltaTime);
         }
 
         /// <summary>

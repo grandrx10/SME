@@ -43,11 +43,32 @@ namespace SuddenMageEncounter
         public bool IsUndead => IsSpawned && Status.Value.Undead;
         /// <summary>Held by the legs by Undying Grasp: can't move or cast (until it's ragdolled).</summary>
         public bool Grasped => IsSpawned && Status.Value.Grasped(WorldNet.Now);
+        /// <summary>The hexes on this body (their bars). Server writes.</summary>
+        public readonly NetworkVariable<HexMarks> Hexes = new();
+        /// <summary>Frozen by Stasis Hex: can't move or act, held in the pose it's in.</summary>
+        public bool InStasis => IsSpawned && Status.Value.Stasis(WorldNet.Now);
+        /// <summary>Shatter Hex went off: held in the air for a moment before it breaks.</summary>
+        public bool Shattering => IsSpawned && Status.Value.Shattering(WorldNet.Now);
+        /// <summary>Held just as it is (Stasis, or about to shatter).</summary>
+        public bool HeldStill => InStasis || Shattering;
+        /// <summary>Under the control of whoever Mind Hexed it: moves as they move, can't cast.</summary>
+        public bool MindHeld => IsSpawned && Status.Value.Mind(WorldNet.Now);
+        /// <summary>A hex has hold of it: can't cast.</summary>
+        public bool Hexed => HeldStill || MindHeld;
         /// <summary>Whose side this body is on: its own, or (one of the Undead) its master's.</summary>
         public ulong Team => IsSpawned && Status.Value.Undead ? Status.Value.Master : NetworkObjectId;
 
         /// <summary>Two different bodies on the same side (a necromancer and their Undead): they can't hurt or throw each other.</summary>
         public static bool Allies(Combatant a, Combatant b) => a != null && b != null && a != b && a.IsSpawned && b.IsSpawned && a.Team == b.Team;
+
+        /// <summary>The Team Deathmatch team this body is on (0 = none).</summary>
+        public virtual byte MatchTeam => 0;
+
+        /// <summary>
+        /// Two different bodies on the same Team Deathmatch team. Unlike <see cref="Allies"/> everything works on a teammate
+        /// (aiming, throwing, hexing...), but damage is scaled by <see cref="SpellPlans.TeamDamage"/>.
+        /// </summary>
+        public static bool Teammates(Combatant a, Combatant b) => a != null && b != null && a != b && a.MatchTeam != 0 && a.MatchTeam == b.MatchTeam;
 
         /// <summary>Server: (victim, attacker client id, damage that landed) after every hit.</summary>
         public static System.Action<Combatant, ulong, float> Damaged;
@@ -76,7 +97,7 @@ namespace SuddenMageEncounter
         /// <summary>Lunging teeth first with Infectious Bite right now (its ragdoll flies head first).</summary>
         public virtual bool LungingView => false;
 
-        Renderer[] _renderers;
+        Renderer[] _renderers, _bodyRenderers;
 
         protected virtual void Awake()
         {
@@ -86,9 +107,10 @@ namespace SuddenMageEncounter
             if (GetComponent<StatusBodyFx>() == null) gameObject.AddComponent<StatusBodyFx>();
             if (GetComponent<Tarot3BodyFx>() == null) gameObject.AddComponent<Tarot3BodyFx>();
             if (GetComponent<GraspBodyFx>() == null) gameObject.AddComponent<GraspBodyFx>();
+            if (GetComponent<HexBodyFx>() == null) gameObject.AddComponent<HexBodyFx>();
             if (model == null) model = transform.Find("PlayerModel");
             Bones = Rig.MapBones(model);
-            _renderers = model.GetComponentsInChildren<Renderer>(true);
+            _renderers = _bodyRenderers = model.GetComponentsInChildren<Renderer>(true);
             foreach (var r in _renderers)
                 if (r is SkinnedMeshRenderer smr) smr.updateWhenOffscreen = true;
         }
@@ -113,12 +135,14 @@ namespace SuddenMageEncounter
 
         /// <param name="cutNormal">Non-zero: if this hit kills, the body is cut in half along the plane through <paramref name="point"/> with this normal (Blade).</param>
         /// <param name="bore">Non-zero: if this hit kills, a round tunnel (radius: its length) along this axis through <paramref name="point"/> is missing from the body (the fused ball).</param>
-        public void ServerApplyDamage(float dmg, ulong attacker, Vector3 point, Vector3 dir, int segment, float impulse, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default)
+        /// <param name="shatter">If this hit kills, the body breaks into many pieces (Shatter Hex).</param>
+        public void ServerApplyDamage(float dmg, ulong attacker, Vector3 point, Vector3 dir, int segment, float impulse, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default, bool shatter = false)
         {
             if (!IsServer || Dead.Value || dmg <= 0f) return;
+            var source = PlayerController.ServerFind(attacker);
+            if (Teammates(source, this)) dmg *= SpellPlans.TeamDamage; // friendly fire
             if (DamageScale != null) dmg = DamageScale(this, attacker, dmg); // Empress / Emperor
             if (dmg <= 0f) return;
-            var source = PlayerController.ServerFind(attacker);
             if (source != null && source != this) _lastAttacker = attacker;
             float before = Health.Value;
             Health.Value = Mathf.Max(0f, Health.Value - dmg);
@@ -132,16 +156,18 @@ namespace SuddenMageEncounter
             {
                 // spells credit the caster; falls and barriers credit whoever hurt you last
                 ulong credit = cause == DeathCause.Spell && source != null && source != this ? attacker : _lastAttacker;
-                ServerDie(credit, point, dir * impulse, segment, cause, cutNormal, bore);
+                ServerDie(credit, point, dir * impulse, segment, cause, cutNormal, bore, shatter);
             }
+            else if (!Dead.Value) SpellServer.HexDamaged(this, attacker, before - Health.Value, dir);
         }
 
         /// <summary>Server: instant elimination from the level (kill barrier, falling out of the arena).</summary>
-        public void ServerKillByHazard(DeathCause cause, Vector3 point)
+        /// <param name="impulse">How the body is thrown (a train).</param>
+        public void ServerKillByHazard(DeathCause cause, Vector3 point, Vector3 impulse = default)
         {
             if (!IsServer || Dead.Value) return;
             Health.Value = 0f;
-            ServerDie(_lastAttacker, point, Vector3.zero, -1, cause);
+            ServerDie(_lastAttacker, point, impulse, -1, cause);
         }
 
         /// <summary>Server: scales damage before it lands (victim, attacker client id, damage) → damage.</summary>
@@ -179,7 +205,9 @@ namespace SuddenMageEncounter
             {
                 float bite = _burnOwed;
                 _burnOwed = 0f;
+                SpellServer.BurnTicking = true;
                 ServerApplyDamage(bite, lastAttacker, transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
+                SpellServer.BurnTicking = false;
             }
         }
 
@@ -248,14 +276,15 @@ namespace SuddenMageEncounter
             if (IsServer && by != null && by != this && !Dead.Value) _lastAttacker = by.OwnerClientId;
         }
 
-        void ServerDie(ulong attacker, Vector3 point, Vector3 impulse, int segment, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default)
+        void ServerDie(ulong attacker, Vector3 point, Vector3 impulse, int segment, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default, bool shatter = false)
         {
             Dead.Value = true;
+            Hexes.Value = default;
             ClearBurns();
             OnServerKilled(attacker);
             Killed?.Invoke(this, attacker, cause);
             if (!InPracticeChamber) ServerBroadcastKill(attacker, cause); // practice deaths stay out of the kill feed
-            DieRpc(point, impulse, (byte)Mathf.Clamp(segment, 0, 255), cutNormal, bore);
+            DieRpc(point, impulse, (byte)Mathf.Clamp(segment, 0, 255), cutNormal, bore, shatter);
             _lastAttacker = NoAttacker;
         }
 
@@ -265,6 +294,7 @@ namespace SuddenMageEncounter
             if (!IsServer || !IsSpawned) return;
             Health.Value = MaxHealth;
             Dead.Value = false;
+            Hexes.Value = default;
             _lastAttacker = NoAttacker;
             ClearBurns();
             _heals.Clear();
@@ -304,7 +334,7 @@ namespace SuddenMageEncounter
         // ---------------- everyone ----------------
 
         [Rpc(SendTo.Everyone)]
-        void DieRpc(Vector3 point, Vector3 impulse, byte segment, Vector3 cutNormal, Vector3 bore)
+        void DieRpc(Vector3 point, Vector3 impulse, byte segment, Vector3 cutNormal, Vector3 bore, bool shatter)
         {
             if (LastRagdoll) Destroy(LastRagdoll);
             SetOutline(null); // the ragdoll copies the body's materials
@@ -325,6 +355,12 @@ namespace SuddenMageEncounter
             {
                 try { BodyBorer.Bore(LastRagdoll, point, bore, bore.magnitude); }
                 catch (System.Exception e) { Debug.LogWarning("[SME] Bore failed, using ragdoll: " + e.Message); }
+            }
+            // killed by Shatter Hex: in pieces
+            if (shatter && LastRagdoll != null)
+            {
+                try { var bits = BodyShatter.Shatter(LastRagdoll, impulse); if (bits != null) LastRagdoll = bits; }
+                catch (System.Exception e) { Debug.LogWarning("[SME] Shatter failed, using ragdoll: " + e.Message); }
             }
             if (LastRagdoll != null) SetUpCorpse(LastRagdoll);
             SetVisible(false);
@@ -410,7 +446,9 @@ namespace SuddenMageEncounter
             WatchRagdoll(null);
             if (r != null)
             {
-                Destroy(r.GetComponent<LiveRagdoll>());
+                var steering = r.GetComponent<LiveRagdoll>();
+                if (steering != null) steering.Freeze(false); // (killed while frozen: limp again)
+                Destroy(steering);
                 r.AddComponent<RagdollLifetime>().dieAt = Time.time + RagdollFactory.Lifetime;
                 SetModelHidden(false);
                 OnLiveRagdollChanged();
@@ -431,6 +469,28 @@ namespace SuddenMageEncounter
             foreach (var r in _renderers) if (r) r.enabled = on && !_modelHidden && !Balled;
             Hitboxes?.SetEnabled(on && !Balled);
             if (_ballBox != null) _ballBox.SetActive(on && Balled);
+        }
+
+        readonly List<GameObject> _worn = new();
+
+        /// <summary>Every peer: wear these cosmetics instead (they hide, and are outlined, with the body).</summary>
+        protected void Wear(List<OutfitPiece> outfit)
+        {
+            SetOutline(null); // (back to everything's own materials before what has them changes)
+            foreach (var w in _worn)
+            {
+                if (w == null) continue;
+                w.transform.SetParent(null, false); // gone from the body now, not at the end of the frame
+                w.SetActive(false);
+                Destroy(w);
+            }
+            _worn.Clear();
+            _worn.AddRange(CosmeticLook.Wear(Bones, outfit, true));
+            var all = new List<Renderer>(_bodyRenderers);
+            foreach (var w in _worn) all.AddRange(w.GetComponentsInChildren<Renderer>(true));
+            _renderers = all.ToArray();
+            _baseMaterials = null;
+            SetModelHidden(_modelHidden);
         }
 
         bool _modelHidden;
@@ -488,7 +548,8 @@ namespace SuddenMageEncounter
             if (_baseMaterials == null)
             {
                 _baseMaterials = new Material[_renderers.Length][];
-                for (int i = 0; i < _renderers.Length; i++) _baseMaterials[i] = _renderers[i] ? _renderers[i].sharedMaterials : null;
+                // (a cosmetic's outlines go on its hull, not on the part itself)
+                for (int i = 0; i < _renderers.Length; i++) _baseMaterials[i] = _renderers[i] && !CosmeticLook.IsPart(_renderers[i]) ? _renderers[i].sharedMaterials : null;
             }
             _outA = a;
             _outB = b;
@@ -525,7 +586,7 @@ namespace SuddenMageEncounter
             _ragdollRenderers = ragdoll.GetComponentsInChildren<Renderer>(true);
             _ragdollBase = new Material[_ragdollRenderers.Length][];
             for (int i = 0; i < _ragdollRenderers.Length; i++)
-                _ragdollBase[i] = _ragdollRenderers[i].name == FaceDecal.ObjectName
+                _ragdollBase[i] = _ragdollRenderers[i].name == FaceDecal.ObjectName || CosmeticLook.IsPart(_ragdollRenderers[i])
                     ? null
                     : System.Array.FindAll(_ragdollRenderers[i].sharedMaterials, m => m == null || m != _outA && m != _outB && m != _outC);
         }

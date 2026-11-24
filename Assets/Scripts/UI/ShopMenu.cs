@@ -14,9 +14,9 @@ namespace SuddenMageEncounter
     /// A card that came along with one (Remote Detonation) peeks out behind it. When all are up: ✓ to go back to the pack. The cards are added to your collection the
     /// moment the pack is bought.
     /// </summary>
-    public class ShopMenu : MonoBehaviour
+    public partial class ShopMenu : MonoBehaviour
     {
-        enum Phase { Idle, Shaking, Dealing, Revealing, Done }
+        enum Phase { Idle, Shaking, Dealing, Revealing, Done, Opening, Reeling, Won }
 
         const float PackW = 256f, PackH = 360f;
         const float CardW = 220f, CardGap = 40f;
@@ -104,6 +104,7 @@ namespace SuddenMageEncounter
             click.onClick = ClickPack;
             click.onHover = h => _packHover = h;
             _pack = pack;
+            BuildCrate();
 
             // price: coin + 100
             _price = UIFactory.Rect("Price", _stage);
@@ -221,14 +222,16 @@ namespace SuddenMageEncounter
             _pack.localScale = popIn ? Vector3.zero : Vector3.one;
             _circle.localScale = popIn ? Vector3.zero : Vector3.one;
             _circleImg.color = IdleCircleColour;
+            ResetCrate(popIn);
         }
 
         // ------------------------------------------------------------------ input
 
         void ClickPack()
         {
-            if (_phase != Phase.Idle) return;
-            BuyAndOpen();
+            if (_phase != Phase.Idle || _slideT < 1f) return;
+            if (_crateMode) BuyCrate();
+            else BuyAndOpen();
         }
 
         void BuyAndOpen()
@@ -238,6 +241,7 @@ namespace SuddenMageEncounter
             if (_phase != Phase.Idle) ResetToPack(false);
             _phase = Phase.Shaking;
             _t = 0f;
+            HideArrows();
             _price.gameObject.SetActive(false);
             for (int i = 0; i < cards.Length; i++) _dealt.Add(new Dealt { id = cards[i].id, with = cards[i].with });
         }
@@ -279,6 +283,9 @@ namespace SuddenMageEncounter
             {
                 case Phase.Idle: UpdateIdle(dt); break;
                 case Phase.Shaking: UpdateShaking(dt); break;
+                case Phase.Opening: UpdateOpening(dt); break;
+                case Phase.Reeling: UpdateReeling(dt); break;
+                case Phase.Won: UpdateWon(dt); break;
                 case Phase.Dealing:
                 case Phase.Revealing:
                 case Phase.Done: UpdateCards(dt); break;
@@ -320,8 +327,9 @@ namespace SuddenMageEncounter
             float deny = _denyT > 0f ? Mathf.Sin(_denyT * 70f) * 16f * (_denyT / 0.45f) : 0f;
             _pack.anchoredPosition = PackPos + new Vector2(deny, Mathf.Sin(_idleT * 2f) * 8f);
             _pack.localRotation = Quaternion.Euler(0, 0, Mathf.Sin(_idleT * 1.3f) * 3f);
-            _priceText.color = _denyT > 0f ? new Color(1f, 0.25f, 0.2f) : (Packs.CanAfford ? new Color(1f, 0.86f, 0.4f) : new Color(0.6f, 0.55f, 0.5f));
+            _priceText.color = _denyT > 0f ? new Color(1f, 0.25f, 0.2f) : (CanAfford ? new Color(1f, 0.86f, 0.4f) : new Color(0.6f, 0.55f, 0.5f));
             _price.localScale = Vector3.one * (1f + (_denyT > 0f ? 0.15f : 0f));
+            UpdateIdleCrate(dt, deny);
 
             // now and then a rune is written on the air around the pack
             if (UnityEngine.Random.value < dt * 1.6f)
@@ -739,7 +747,7 @@ namespace SuddenMageEncounter
     /// spells write, <see cref="RuneGlyphs"/>), a rune circle and a core of light. Cartoony, flat colours, every
     /// shape inked with a dark outline. The white ones are tinted (the ink stays dark).
     /// </summary>
-    public static class ShopArt
+    public static partial class ShopArt
     {
         static readonly Color32 Ink = new(18, 14, 26, 255);
         static readonly Color32 White = new(255, 255, 255, 255);

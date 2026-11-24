@@ -325,7 +325,7 @@ namespace SuddenMageEncounter
                 var f = FireballsS[i];
                 if (!f.launched || !net.Fireballs.TryGetValue(f.id, out var fx) || fx.owner == by.NetworkObjectId) continue;
                 Vector3 p = WorldNet.FireballPosition(fx, now);
-                if (DistToSegment(p, a, b) > r + SpellPlans.FireballRadius) continue;
+                if (DistToSegment(p, a, b) > r + f.Radius) continue;
                 WorldNet.ServerFireballEnd(f.id, p, true);
                 FireballsS.RemoveAt(i);
                 if (slash) WorldNet.ServerSlash(p, across, 1f);

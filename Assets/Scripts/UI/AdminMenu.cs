@@ -36,7 +36,7 @@ namespace SuddenMageEncounter
             dim.gameObject.AddComponent<GraphicRaycaster>();
 
             _window = UIFactory.Image("Window", _root, UIFactory.PanelCol).rectTransform;
-            UIFactory.Place(_window, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(440, 404));
+            UIFactory.Place(_window, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(440, 478));
             var o = _window.gameObject.AddComponent<Outline>();
             o.effectColor = UIFactory.Accent;
             o.effectDistance = new Vector2(3, -3);
@@ -65,8 +65,9 @@ namespace SuddenMageEncounter
             coin.texture = ShopArt.Coin;
             coin.raycastTarget = false;
             UIFactory.Place(coin.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(34, 0), new Vector2(40, 40));
-            UIFactory.Size(UIFactory.Button("Fresh", _toolsPage, "FRESH INVENTORY", () => { Collection.Clear(); Wallet.ResetFirstRound(); }, 26), 60);
+            UIFactory.Size(UIFactory.Button("Fresh", _toolsPage, "FRESH INVENTORY", () => { Collection.Clear(); Wardrobe.Clear(); Wallet.ResetFirstRound(); }, 26), 60);
             UIFactory.Size(UIFactory.Button("AllCards", _toolsPage, "ALL CARDS", Collection.AddAll, 26), 60);
+            UIFactory.Size(UIFactory.Button("AllCosmetics", _toolsPage, "ALL COSMETICS", Wardrobe.AddAll, 26), 60);
             // a new server of your own (max 1 player), for testing alone
             UIFactory.Size(UIFactory.Button("DevServer", _toolsPage, "DEV TEST SERVER", () => { Close(); SessionManager.HostSolo(); }, 26), 60);
 

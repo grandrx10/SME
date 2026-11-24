@@ -206,6 +206,7 @@ namespace SuddenMageEncounter
         public const int TowerCapOver = 1;                   // the top section juts out this far each side...
         public const int TowerCapHeight = 8;                 // ...and is this tall
         public const float TowerDamage = 60f, TowerKnock = 14f, TowerRagdoll = 1.5f;
+        public const int TowerScrap = 64;                    // pieces it cuts loose smaller than this (voxels) vanish instead of falling
         static float TowerHalf => TowerBase * VoxelWorld.Size * 0.5f;
 
         static List<Vector3Int> _towerShape;
@@ -340,6 +341,7 @@ namespace SuddenMageEncounter
         // ---------------------------------------------------------------- Necromancy
         public const float ReviveTime = 1f;                  // crouched over the corpse
         public const float ReviveReach = 2f;                 // the corpse must be this close
+        public const float TeamDamage = 0.5f; // Team Deathmatch: damage done to a teammate
         public const float UndeadHealth = 30f;
         public const byte UndeadMana = 5;
         public const float InfectTime = 1f;                  // a bitten body turns green and gets up this long after dying
@@ -392,6 +394,7 @@ namespace SuddenMageEncounter
         // ---------------------------------------------------------------- Icy Breath
         public const float BreathLean = 0.3f;
         public const float IceBreathTime = 2.25f;
+        public const float IceCoatTime = 20f;                // the frost it leaves on the ground melts off after this
         public const float IceBreathReach = 6.5f, IceBreathAngle = 24f;
         public const float SlowScale = 0.5f, SlowTime = 2f;   // breathed on: half speed, frosted over, until 2 s after the last of it
         public const float IceSlipSpeed = 1.5f;              // walking on ice faster than this: feet out from under you

@@ -535,6 +535,7 @@ namespace SuddenMageEncounter
             w.ticks = due;
             float dmg = SpellPlans.WorldTickDamage * (1f + Mathf.Floor((float)((age - SpellPlans.WorldGrace) / SpellPlans.WorldTickEvery)));
             w.caster.ServerApplyDamage(dmg, Combatant.NoAttacker, w.caster.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
+            if (Combatant.Teammates(w.caster, w.target)) dmg *= SpellPlans.TeamDamage;
             if (w.target != null && w.target.IsAlive) w.target.ServerApplyDamage(dmg, Combatant.NoAttacker, w.target.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
         }
 

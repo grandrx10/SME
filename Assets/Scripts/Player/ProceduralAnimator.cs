@@ -575,6 +575,26 @@ namespace SuddenMageEncounter
             new(0.42f, new(0.2f, 0.16f, 0.6f), new(0f, 0.5f, 1f), M(new(0.2f, 0.16f, 0.6f)), new(0f, 0.5f, 1f), 0f, 0.03f, 10f),
         };
 
+        // ---- Necromatic Blast: both hands down at the ground, hauled up over the head as the ball gathers... then hurled ----
+        static readonly Key[] NecroRaiseKeys =
+        {
+            new(0.00f, new(0.24f, -0.3f, 0.4f), PalmsDown, M(new(0.24f, -0.3f, 0.4f)), PalmsDown, 0f, 0.12f, 12f),
+            new(0.12f, new(0.26f, -0.5f, 0.42f), new(0f, -0.8f, 0.8f), M(new(0.26f, -0.5f, 0.42f)), new(0f, -0.8f, 0.8f), 0f, 0.22f, 18f),
+            new(0.36f, new(0.2f, 0.9f, 0.08f), new(0f, 1f, 0.1f), M(new(0.2f, 0.9f, 0.08f)), new(0f, 1f, 0.1f), 0f, 0f, -6f),
+            new(SpellPlans.NecroCharge - 0.03f, new(0.2f, 0.95f, -0.02f), new(0f, 1f, -0.1f), M(new(0.2f, 0.95f, -0.02f)), new(0f, 1f, -0.1f), 0f, 0f, -10f),
+            new(SpellPlans.NecroCharge + 0.08f, new(0.16f, 0.1f, 0.66f), new(0f, -0.1f, 1f), M(new(0.16f, 0.1f, 0.66f)), new(0f, -0.1f, 1f), 0f, 0.06f, 16f),
+            new(SpellPlans.NecroCharge + 0.26f, new(0.18f, -0.05f, 0.56f), new(0f, -0.3f, 1f), M(new(0.18f, -0.05f, 0.56f)), new(0f, -0.3f, 1f), 0f, 0.03f, 8f),
+        };
+        // ---- a Hex: the left hand held out, pointing... then flicked at them ----
+        static readonly Key[] HexPointKeys =
+        {
+            new(0.00f, new(0.22f, -0.3f, 0.1f), new(0f, -1f, 0.3f), new(-0.22f, 0f, 0.34f), Fwd),
+            new(0.14f, new(0.24f, -0.26f, 0.08f), new(0f, -1f, 0.3f), new(-0.1f, 0.14f, 0.66f), Fwd, 12f, 0f, 4f),
+            new(SpellPlans.HexCast - 0.1f, new(0.24f, -0.26f, 0.08f), new(0f, -1f, 0.3f), new(-0.1f, 0.16f, 0.66f), Fwd, 12f, 0f, 4f),
+            new(SpellPlans.HexCast - 0.02f, new(0.24f, -0.26f, 0.08f), new(0f, -1f, 0.3f), new(-0.14f, 0.2f, 0.4f), new(0f, 0.4f, 1f), 4f, 0f, -2f),
+            new(SpellPlans.HexCast + 0.08f, new(0.26f, -0.24f, -0.04f), new(0f, -1f, 0.2f), new(-0.06f, 0.16f, 0.74f), Fwd, 22f, 0.02f, 9f),
+        };
+
         /// <summary>Keyframes of a pose, and when it starts / finishes fading back to rest.</summary>
         static (Key[] keys, float fadeStart, float fadeEnd, bool shake) PoseData(SpellPose p) => p switch
         {
@@ -649,6 +669,8 @@ namespace SuddenMageEncounter
             SpellPose.SkinKneel => (SkinKneelKeys, SpellPlans.SkinTime, SpellPlans.SkinTime + 0.3f, true),
             SpellPose.BombPlace => (BombPlaceKeys, 0.4f, 0.6f, false),
             SpellPose.BombToss => (BombTossKeys, 0.42f, 0.6f, false),
+            SpellPose.NecroRaise => (NecroRaiseKeys, SpellPlans.NecroCharge + 0.22f, SpellPlans.NecroCharge + 0.42f, false),
+            SpellPose.HexPoint => (HexPointKeys, SpellPlans.HexCast + 0.2f, SpellPlans.HexCast + 0.4f, false),
             SpellPose.Flex => (FlexKeys, SpellPlans.StrengthFlex + 0.1f, SpellPlans.StrengthFlex + 0.3f, true),
             SpellPose.BreathLean => (BreathLeanKeys, SpellPlans.BreathLean + SpellPlans.IceBreathTime, SpellPlans.BreathLean + SpellPlans.IceBreathTime + 0.2f, false),
             _ => (null, 0f, 0f, false),
@@ -688,6 +710,9 @@ namespace SuddenMageEncounter
         {
             if (!_initialised || !_pc.IsSpawned) return;
             float dt = Time.deltaTime;
+            // Stasis (or Shatter) Hex: held in whatever pose it was in (the bones stay as they were left)
+            if (_posedOnce && _pc.HeldStill) { _pc.Hitboxes?.Sync(); return; }
+            _posedOnce = true;
 
             // ---- inputs ----
             byte flags = _pc.ViewFlags;
@@ -813,6 +838,7 @@ namespace SuddenMageEncounter
         /// <summary>The body squashed about its middle (x: width, y: height), on top of everything else. Set by Warp Self.</summary>
         public Vector2 Fold { get; set; } = Vector2.one;
 
+        bool _posedOnce;
         float _levelW, _headBack, _strongW, _hitScale = 1f;
         Vector3 _modelScale0 = Vector3.one, _headScale0 = Vector3.one;
 

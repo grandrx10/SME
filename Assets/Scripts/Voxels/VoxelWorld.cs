@@ -287,7 +287,7 @@ namespace SuddenMageEncounter
                 for (int j = 1; j < Palette.Count && found < 0; j++)
                 {
                     var p = Palette[j];
-                    if (!_isSoot.Contains((ushort)j) && !_isIce.Contains((ushort)j) && !_worldStuff.ContainsKey((ushort)j) && p.indestructible == m.indestructible && p.color.Equals(m.color)) found = j;
+                    if (!_isSoot.Contains((ushort)j) && !_isBlight.Contains((ushort)j) && !_isIce.Contains((ushort)j) && !_worldStuff.ContainsKey((ushort)j) && p.indestructible == m.indestructible && p.color.Equals(m.color)) found = j;
                 }
                 if (found < 0) { Palette.Add(m); found = Palette.Count - 1; }
                 map[i] = (ushort)found;
@@ -513,6 +513,46 @@ namespace SuddenMageEncounter
             return s;
         }
 
+        // ------------------------------------------------------------------ blight (Necromatic Blast)
+
+        readonly Dictionary<ushort, ushort> _blight = new();
+        readonly HashSet<ushort> _isBlight = new();
+
+        /// <summary>The sickly green version of a material, light where it was light. Added the first time it's needed, in op order, as soot is.</summary>
+        ushort BlightOf(ushort v)
+        {
+            if (v == 0 || _isBlight.Contains(v) || _worldStuff.ContainsKey(v)) return v;
+            if (_blight.TryGetValue(v, out var b)) return b;
+            var m = Palette[v];
+            Color c = m.color;
+            float lum = c.r * 0.3f + c.g * 0.59f + c.b * 0.11f;
+            Color green = new Color(0.5f, 0.78f, 0.22f) * (0.4f + 0.6f * lum);
+            green.a = 1f;
+            Palette.Add(new VoxelMaterial { color = green, indestructible = m.indestructible });
+            b = (ushort)(Palette.Count - 1);
+            _blight[v] = b;
+            _isBlight.Add(b);
+            if (_isIce.Contains(v)) _isIce.Add(b);
+            return b;
+        }
+
+        /// <summary>Every cell within radius r4/4 cells turns a sickly green. Call it only while applying an op.</summary>
+        public void Blight(Vector3Int center, int r4)
+        {
+            int r = (r4 + 3) / 4, lim = r4 * r4;
+            for (int dx = -r; dx <= r; dx++)
+            for (int dy = -r; dy <= r; dy++)
+            for (int dz = -r; dz <= r; dz++)
+            {
+                if ((dx * dx + dy * dy + dz * dz) * 16 > lim) continue;
+                var p = new Vector3Int(center.x + dx, center.y + dy, center.z + dz);
+                ushort v = Get(p);
+                if (v == 0) continue;
+                ushort b = BlightOf(v);
+                if (b != v) Set(p, b);
+            }
+        }
+
         /// <summary>The scorched version of a material (see <see cref="SootOf"/>). Adds a palette entry: call it only while applying an op.</summary>
         public ushort Scorched(ushort v) => SootOf(v);
 
@@ -540,6 +580,14 @@ namespace SuddenMageEncounter
 
         /// <summary>Is this ice (an Ice Spike's), singed or not?</summary>
         public bool IsIce(ushort v) => v != 0 && _isIce.Contains(v);
+
+        /// <summary>Ice melting off a cell: back to what it was (singed or blighted if the ice was). Call it only while applying an op.</summary>
+        public void Thaw(Vector3Int p, ushort was)
+        {
+            ushort v = Get(p);
+            if (!IsIce(v) || was == 0) return;
+            Set(p, _isSoot.Contains(v) ? SootOf(was) : _isBlight.Contains(v) ? BlightOf(was) : was);
+        }
 
         /// <summary>Scorches the exposed surface (cells touching air) within radius r4/4 cells: turned to soot.</summary>
         /// <remarks>With <paramref name="all"/>, every cell in the ball is scorched, not just the surface (rubble about to be blown out).</remarks>

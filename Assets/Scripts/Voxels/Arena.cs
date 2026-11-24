@@ -22,6 +22,9 @@ namespace SuddenMageEncounter
         public float killHeight = -25f;
 
         public VoxelWorld World { get; private set; }
+        /// <summary>This is a practice chamber's copy; and when (server time) its hazards were set off by hand (0 = they're off).</summary>
+        [System.NonSerialized] public bool isChamber;
+        [System.NonSerialized] public double practiceHazards;
         /// <summary>Voxels made in code (the practice arena) instead of a baked file.</summary>
         public VoxelArenaData RuntimeData { get; set; }
         public readonly List<SpawnPoint> Spawns = new();

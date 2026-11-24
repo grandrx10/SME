@@ -6,7 +6,7 @@ namespace SuddenMageEncounter
 {
     /// <summary>
     /// Practice chambers: everyone can step out of the match into a private copy of the practice arena (the loadout
-    /// screen's target button) to try spells on dummies. J resets it, K drops a one-off dummy where you aim, L leaves.
+    /// screen's target button) to try spells on dummies. J resets it, O swaps it for the next map, P sets off its map's hazards (or stops them), K drops a one-off dummy where you aim, L leaves.
     ///
     /// Each chamber is stamped into the same voxel world as the main arena, <see cref="SlotCells"/> cells further along
     /// +x per slot. All spells, voxel ops and late-join replays keep working unchanged, because chambers are just
@@ -51,6 +51,7 @@ namespace SuddenMageEncounter
         class Chamber
         {
             public GameObject root;
+            public Arena arena;
             public float killY;
             public readonly List<SpawnPoint> spawns = new();
             public readonly List<DummySpot> dummySpots = new();
@@ -61,14 +62,15 @@ namespace SuddenMageEncounter
         static VoxelArenaData _generated;
 
         /// <summary>(Re)builds the chamber in <paramref name="slot"/> fresh: voxels, spawn points, dummy spots, kill volumes.</summary>
-        public static void LoadLocal(int slot)
+        public static void LoadLocal(int slot, int map)
         {
             var world = VoxelWorld.Current;
             if (world == null || slot < 1 || slot > MaxSlots) return;
             CloseLocal(slot);
 
             Vector3 at = SlotOrigin(slot);
-            var prefab = MatchManager.PracticePrefab;
+            var maps = MatchManager.PracticeMaps;
+            var prefab = maps.Count > 0 ? maps[map < maps.Count ? map : 0] : null;
             Arena arena;
             VoxelArenaData data;
             if (prefab != null)
@@ -86,15 +88,24 @@ namespace SuddenMageEncounter
                 data = _generated = arena.RuntimeData;
             }
             arena.name = "Practice Chamber " + slot;
+            arena.isChamber = true;
             arena.HideSources();
             if (data != null) world.Stamp(data, new Vector3Int(slot * SlotCells, 0, 0));
             Physics.SyncTransforms();
 
-            var ch = new Chamber { root = arena.gameObject, killY = arena.KillY };
+            var ch = new Chamber { root = arena.gameObject, arena = arena, killY = arena.KillY };
             arena.GetComponentsInChildren(true, ch.spawns);
             arena.GetComponentsInChildren(true, ch.dummySpots);
             Chambers[slot] = ch;
         }
+
+        /// <summary>The chamber's hazards: going since <paramref name="start"/> (server time), or 0 = off, as they are in a fresh chamber.</summary>
+        public static void SetHazardsLocal(int slot, double start)
+        {
+            if (Chambers.TryGetValue(slot, out var ch) && ch.arena != null) ch.arena.practiceHazards = start;
+        }
+
+        public static bool HazardsOn(int slot) => Chambers.TryGetValue(slot, out var ch) && ch.arena != null && ch.arena.practiceHazards > 0;
 
         /// <summary>Removes the chamber in <paramref name="slot"/> (its voxels, its objects, and any rocks/walls still moving in it).</summary>
         public static void CloseLocal(int slot)
@@ -140,7 +151,8 @@ namespace SuddenMageEncounter
             int slot = FreeSlot();
             if (slot == 0) return;
             SlotOfClient[pc.OwnerClientId] = slot;
-            WorldNet.ServerPracticeLoad(slot);
+            if (pc.IsAlive) MatchManager.ServerLoseShare(pc); // walked out on their team
+            WorldNet.ServerPracticeLoad(slot, MapOf(pc.OwnerClientId));
             pc.PracticeSlot.Value = (byte)slot;
             SpawnDummies(slot);
             SpawnPlayer(pc, slot);
@@ -154,9 +166,36 @@ namespace SuddenMageEncounter
             // everything else in it goes too: summoned zombies, and spells still running there (a tower, rocks circling...)
             Vector3 o = SlotOrigin(slot);
             SpellServer.ServerClearPractice(pc, slot, o.x - SlotMeters * 0.5f, o.x + SlotMeters * 0.5f);
-            WorldNet.ServerPracticeLoad(slot);
+            WorldNet.ServerPracticeLoad(slot, MapOf(pc.OwnerClientId));
             SpawnDummies(slot);
             SpawnPlayer(pc, slot);
+        }
+
+        /// <summary>Which of <see cref="MatchManager.PracticeMaps"/> each player practises on (kept until the session ends).</summary>
+        static readonly Dictionary<ulong, int> MapOfClient = new();
+        static readonly Dictionary<ulong, double> MapSwapped = new();
+        /// <summary>A whole map loads on every machine: not more often than this (s).</summary>
+        const double MapSwapEvery = 1.5;
+
+        static int MapOf(ulong client) => MapOfClient.TryGetValue(client, out int m) ? m : 0;
+
+        /// <summary>Server: the chamber becomes the next map, fresh.</summary>
+        public static void ServerNextMap(PlayerController pc)
+        {
+            if (!IsServer || pc == null || !SlotOfClient.ContainsKey(pc.OwnerClientId)) return;
+            int count = MatchManager.PracticeMaps.Count;
+            if (count < 2 || MapSwapped.TryGetValue(pc.OwnerClientId, out double t) && WorldNet.Now - t < MapSwapEvery) return;
+            MapSwapped[pc.OwnerClientId] = WorldNet.Now;
+            MapOfClient[pc.OwnerClientId] = (MapOf(pc.OwnerClientId) + 1) % count;
+            ServerReset(pc);
+        }
+
+        /// <summary>Server: sets off the hazards of the map they're practising on, or stops them and puts them back.</summary>
+        public static void ServerHazards(PlayerController pc)
+        {
+            if (!IsServer || pc == null || !SlotOfClient.TryGetValue(pc.OwnerClientId, out int slot)) return;
+            SpellServer.DryOff(pc);
+            WorldNet.ServerPracticeHazards(slot, !HazardsOn(slot));
         }
 
         /// <summary>Server: a dummy that doesn't come back, standing where the player aimed (<paramref name="corpse"/>: lying there dead, to raise).</summary>
@@ -247,6 +286,8 @@ namespace SuddenMageEncounter
         public static void ResetAll()
         {
             SlotOfClient.Clear();
+            MapOfClient.Clear();
+            MapSwapped.Clear();
             DummiesIn.Clear();
             DiedAt.Clear();
             ClearAllLocal();
@@ -285,6 +326,7 @@ namespace SuddenMageEncounter
                 if (Physics.Raycast(pos + Vector3.up * 80f, Vector3.down, out var hit, 200f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
                     pos = hit.point + Vector3.up;
             }
+            SpellServer.DryOff(pc);
             pc.ServerPracticeSpawn(pos, yaw);
         }
 

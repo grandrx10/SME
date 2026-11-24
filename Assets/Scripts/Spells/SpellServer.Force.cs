@@ -270,13 +270,21 @@ namespace SuddenMageEncounter
                 rock.lastTime = now;
             }
 
-            foreach (var fb in FireballsS)
+            for (int k = FireballsS.Count - 1; k >= 0; k--)
             {
+                var fb = FireballsS[k];
                 if (!fb.launched || !net.Fireballs.TryGetValue(fb.id, out var fx) || fx.owner == mine) continue;
                 Vector3 p = WorldNet.FireballPosition(fx, now);
                 Vector3 to = f.pos - p;
+                if (fb.necro && to.magnitude <= r + SpellPlans.FireballRadius)
+                {
+                    // Necromatic Blast: swallowed in the middle, as a rock is (water doesn't put it out)
+                    WorldNet.ServerFireballEnd(fb.id, p, false);
+                    FireballsS.RemoveAt(k);
+                    continue;
+                }
                 bool caught = f.pulledFireballs.Contains(fb.id);
-                if (to.magnitude > (caught ? keep : reach) + SpellPlans.FireballRadius) { f.pulledFireballs.Remove(fb.id); continue; }
+                if (to.magnitude > (caught ? keep : reach) + fb.Radius) { f.pulledFireballs.Remove(fb.id); continue; }
                 f.pulledFireballs.Add(fb.id);
                 if (!step) continue; // (it goes out when it reaches the water: TickFireballs)
                 WorldNet.ServerFireballLaunch(fb.id, p, SpellPlans.AttractPull(fx.velocity, to, f.vel, dt), fx.owner);

@@ -327,12 +327,14 @@ namespace SuddenMageEncounter
 
         void OnGoldEarned(int amount) => GoldPopup.Show(_canvas.transform, amount);
 
-        /// <summary>In a practice chamber: J resets it, K drops a dummy where you aim, I drops a corpse there, L leaves, H says whether the next round pulls you in (J, L and H work from the loadout screen too).</summary>
+        /// <summary>In a practice chamber: J resets it, O swaps it for the next map, P sets off its hazards (or stops them), K drops a dummy where you aim, I drops a corpse there, L leaves, H says whether the next round pulls you in (J, O, P, L and H work from the loadout screen too).</summary>
         void PracticeKeys()
         {
             var pc = PlayerController.Local;
             if (pc == null || !pc.InPractice || _paused || _settingsOpen || _shop.IsOpen || _admin.IsOpen || LoadoutMenu.IsTyping) return;
             if (InputMap.DownRaw(GameAction.PracticeReset)) pc.RequestPractice(PlayerController.PracticeAction.Reset);
+            else if (InputMap.DownRaw(GameAction.PracticeMap)) pc.RequestPractice(PlayerController.PracticeAction.NextMap);
+            else if (InputMap.DownRaw(GameAction.PracticeHazard)) pc.RequestPractice(PlayerController.PracticeAction.Hazards);
             else if (InputMap.DownRaw(GameAction.PracticeLeave)) { _loadout.Close(); pc.RequestPractice(PlayerController.PracticeAction.Leave); }
             else if (InputMap.DownRaw(GameAction.PracticeRounds)) pc.JoinRounds.Value = !pc.JoinRounds.Value;
             else if (InputMap.Down(GameAction.PracticeDummy) && pc.IsAlive)
@@ -870,6 +872,8 @@ namespace SuddenMageEncounter
             GameAction.PracticeReset => "Practice: Reset",
             GameAction.PracticeDummy => "Practice: Dummy",
             GameAction.PracticeCorpse => "Practice: Corpse",
+            GameAction.PracticeMap => "Practice: Next Map",
+            GameAction.PracticeHazard => "Practice: Hazard",
             GameAction.PracticeLeave => "Practice: Leave",
             GameAction.PracticeRounds => "Practice: Join Rounds",
             GameAction.SkipVote => "Vote: Skip Break",
@@ -1170,7 +1174,7 @@ namespace SuddenMageEncounter
 
         const float HintRow = 46f, HintGap = 8f;
         RectTransform _practiceHints;
-        const int HintCount = 5;
+        const int HintCount = 7, HazardHint = 2;
         readonly Text[] _hintKeys = new Text[HintCount];
         readonly Text[] _hintWords = new Text[HintCount];
         Image _roundsCap;
@@ -1180,7 +1184,7 @@ namespace SuddenMageEncounter
         {
             _practiceHints = UIFactory.Rect("PracticeKeys", _hud);
             UIFactory.Place(_practiceHints, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-30, TopRightY), new Vector2(260, HintCount * HintRow + (HintCount - 1) * HintGap));
-            string[] words = { "RESET", "DUMMY", "CORPSE", "LEAVE", "ROUNDS" };
+            string[] words = { "RESET", "MAP", "HAZARD", "DUMMY", "CORPSE", "LEAVE", "ROUNDS" };
             for (int i = 0; i < HintCount; i++)
             {
                 float y = -i * (HintRow + HintGap);
@@ -1212,13 +1216,17 @@ namespace SuddenMageEncounter
                 _wasPracticing = on;
                 _practiceHints.gameObject.SetActive(on);
                 _hintKeys[0].text = GameSettings.Binds[GameAction.PracticeReset].ShortName;
-                _hintKeys[1].text = GameSettings.Binds[GameAction.PracticeDummy].ShortName;
-                _hintKeys[2].text = GameSettings.Binds[GameAction.PracticeCorpse].ShortName;
-                _hintKeys[3].text = GameSettings.Binds[GameAction.PracticeLeave].ShortName;
-                _hintKeys[4].text = GameSettings.Binds[GameAction.PracticeRounds].ShortName;
+                _hintKeys[1].text = GameSettings.Binds[GameAction.PracticeMap].ShortName;
+                _hintKeys[HazardHint].text = GameSettings.Binds[GameAction.PracticeHazard].ShortName;
+                _hintKeys[3].text = GameSettings.Binds[GameAction.PracticeDummy].ShortName;
+                _hintKeys[4].text = GameSettings.Binds[GameAction.PracticeCorpse].ShortName;
+                _hintKeys[5].text = GameSettings.Binds[GameAction.PracticeLeave].ShortName;
+                _hintKeys[6].text = GameSettings.Binds[GameAction.PracticeRounds].ShortName;
                 // (the kill feed moves down out of the way: UpdateGold)
             }
             if (!on) return;
+            // hazards: red while they're going
+            _hintWords[HazardHint].color = Practice.HazardsOn(me.PracticeSlot.Value) ? HazardsGoing : Color.white;
             // join rounds: a green tick while the next round will pull you in, a dim cross while you stay here
             bool joins = me.JoinRounds.Value;
             _hintWords[HintCount - 1].text = joins ? "ROUNDS ✓" : "ROUNDS ✕";
@@ -1226,7 +1234,7 @@ namespace SuddenMageEncounter
             _roundsCap.color = joins ? new Color(RoundsOn.r * 0.45f, RoundsOn.g * 0.45f, RoundsOn.b * 0.45f, 0.95f) : new Color(0.08f, 0.09f, 0.12f, 0.85f);
         }
 
-        static readonly Color RoundsOn = new(0.4f, 0.95f, 0.5f);
+        static readonly Color RoundsOn = new(0.4f, 0.95f, 0.5f), HazardsGoing = new(1f, 0.35f, 0.25f);
 
         void BuildRings()
         {
@@ -1395,7 +1403,8 @@ namespace SuddenMageEncounter
             _roundGroup.alpha = Mathf.MoveTowards(_roundGroup.alpha, over ? 1f : 0f, Time.deltaTime * 4f);
             if (over)
             {
-                bool mine = me != null && s.winner == me.DisplayName;
+                bool mine = me != null && (s.winnerTeam != 0 ? me.MatchTeam == s.winnerTeam : s.winner == me.DisplayName);
+                _roundWinner.fontSize = s.winner.Length > 24 ? 46 : 78; // (a whole team)
                 string hex = s.winnerColor >= 0 ? PlayerPalette.HexString(s.winnerColor) : "FFFFFF";
                 _roundWinner.text = $"♔  <color=#{hex}>{s.winner.ToUpperInvariant()}</color>";
                 _roundWinner.rectTransform.localScale = Vector3.one * (1f + Mathf.Max(0f, 0.25f - MatchManager.PhaseTime) * 1.5f);
@@ -1442,8 +1451,31 @@ namespace SuddenMageEncounter
                 _mapName.text = $"⌛  {MatchManager.ReadyForRound(out _)} / {MatchManager.MinPlayers}";
                 _mapScale = Mathf.MoveTowards(_mapScale, 0.8f + 0.04f * Mathf.Sin(Time.time * 3f), Time.deltaTime * 4f);
             }
+            else if (s.phase == MatchPhase.Countdown && s.teams > 0 && !(me != null && me.InPractice))
+            {
+                // Team Deathmatch: a square for each player, in their team's colour
+                _mapName.text = TeamSquares(s.teams);
+                _mapScale = Mathf.MoveTowards(_mapScale, 1f, Time.deltaTime * 6f);
+            }
             else _mapScale = Mathf.MoveTowards(_mapScale, 0f, Time.deltaTime * 5f);
             _mapName.rectTransform.localScale = Vector3.one * _mapScale;
+        }
+
+        static string TeamSquares(int teams)
+        {
+            var text = new System.Text.StringBuilder();
+            for (int t = 1; t <= teams; t++)
+            {
+                bool any = false;
+                foreach (var p in PlayerController.All)
+                {
+                    if (p == null || p.MatchTeam != t) continue;
+                    if (!any && text.Length > 0) text.Append("    ");
+                    any = true;
+                    text.Append($"<color=#{p.ColorHex}>■</color>");
+                }
+            }
+            return text.ToString();
         }
 
         /// <summary>The 3-2-1 before a round (everyone frozen in place), then FIGHT: each number punches in big, holds, and shrinks away.</summary>

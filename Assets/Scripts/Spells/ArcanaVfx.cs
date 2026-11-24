@@ -682,6 +682,7 @@ namespace SuddenMageEncounter
             Color col = Color.Lerp(_from, SpellPlans.UndeadSkin, u);
             foreach (var r in body.GetComponentsInChildren<Renderer>())
             {
+                if (CosmeticLook.Is(r)) continue;
                 r.GetPropertyBlock(_mpb);
                 _mpb.SetColor("_BaseColor", col);
                 _mpb.SetColor("_Color", col);

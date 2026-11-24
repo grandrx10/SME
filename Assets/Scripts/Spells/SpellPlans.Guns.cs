@@ -120,7 +120,7 @@ namespace SuddenMageEncounter
         // ---------------------------------------------------------------- Undying Grasp
         public const float GraspCast = 0.5f;                 // down on one knee, turning with the camera (knocked down meanwhile: nothing)
         public const float GraspRise = 0.4f;                 // the hands shoot out; whoever is in reach meanwhile is grabbed
-        public const float GraspHold = 2f;
+        public const float GraspHold = 2.5f;
         public const int GraspCount = 15;                    // hands along the line, 1 m apart: 15 m
         public const float GraspSpacing = 1f;
         public const float GraspSide = 0.28f;                // left and right of the line in turn

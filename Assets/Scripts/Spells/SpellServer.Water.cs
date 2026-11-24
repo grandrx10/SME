@@ -105,6 +105,7 @@ namespace SuddenMageEncounter
                 if ((p - BubbleCenterOf(b)).sqrMagnitude < r * r) return true;
             }
             if (InWaterBall(p, pad)) return true; // an Attraction ball
+            if (RisingWater.InAny(p, pad)) return true; // the map's own
             foreach (var s in WavesS)
                 if (InWave(s, p, now, pad)) return true;
             return false;
@@ -114,7 +115,7 @@ namespace SuddenMageEncounter
         static bool WaterAlong(Vector3 a, Vector3 b, float pad, out Vector3 at)
         {
             at = b;
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall()) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
             int n = Mathf.Max(1, Mathf.CeilToInt((b - a).magnitude / 0.2f));
             for (int k = 0; k <= n; k++)
             {
@@ -127,7 +128,7 @@ namespace SuddenMageEncounter
         /// <summary>Does the risen part of a hellfire wall touch water anywhere?</summary>
         static bool WallInWater(HellfireState h, float lit)
         {
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall()) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
             float total = 0f;
             for (int k = 1; k < h.points.Count; k++) total += Vector3.Distance(h.points[k - 1], h.points[k]);
             float limit = total * lit, along = 0f;

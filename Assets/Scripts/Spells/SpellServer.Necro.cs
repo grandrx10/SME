@@ -309,7 +309,7 @@ namespace SuddenMageEncounter
                 if (p.Skin.Value.On) skin = p.Skin.Value; // (wearing someone's skin already: that one)
                 else
                 {
-                    skin.Color = p.ColorIndex.Value;
+                    skin.Color = p.BodyColor;
                     skin.Face = p.NetworkObjectId;
                     skin.SetName(p.DisplayName);
                 }
