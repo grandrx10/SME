@@ -9,7 +9,7 @@ namespace SuddenMageEncounter
     /// Checks cost and the 1 s per-ability cooldown locally (the server checks again), predicts the mana spent,
     /// and plays the caster's arm animation.
     /// </summary>
-    public class AbilityCaster : MonoBehaviour
+    public partial class AbilityCaster : MonoBehaviour
     {
         PlayerController _pc;
         SpellIndicator _indicator;
@@ -47,6 +47,7 @@ namespace SuddenMageEncounter
             WorldNet.HellfireStarted += OnHellfireStarted;
             WorldNet.BubbleEnded += OnBubbleEnded;
             WorldNet.FuseCharging += OnFuseCharging;
+            WorldNet.DomainEnded += OnDomainEnded;
             WorldNet.ForceEnded += OnForceEnded;
             WorldNet.BreathEnded += OnBreathEnded;
             WorldNet.HookAttached += OnHookAttached;
@@ -69,25 +70,55 @@ namespace SuddenMageEncounter
         void OnFuseCharging(int id, ulong caster, double start)
         {
             if (_pc == null || caster != _pc.NetworkObjectId) return;
+            int over = WorldNet.Instance != null && WorldNet.Instance.Fuses.TryGetValue(id, out var fx) ? fx.over : 0;
+            if (over > 0) { _wheelFuses.Add((id, start + SpellPlans.FuseThrowAt(over))); return; } // (Wheel of Fortune's)
             _fuseId = id;
             _fuseLaunchAt = start + SpellPlans.FuseCharge;
         }
 
+        readonly System.Collections.Generic.List<(int id, double at)> _wheelFuses = new();
+
         void TickFuse()
         {
+            // Wheel of Fortune's 7: one after another, whatever else we're up to
+            for (int i = _wheelFuses.Count - 1; i >= 0; i--)
+            {
+                if (WorldNet.Now < _wheelFuses[i].at) continue;
+                ThrowFuse(_wheelFuses[i].id);
+                _wheelFuses.RemoveAt(i);
+            }
             if (_fuseId == 0 || WorldNet.Now < _fuseLaunchAt) return;
+            ThrowFuse(_fuseId);
+            _fuseId = 0;
+        }
+
+        void ThrowFuse(int id)
+        {
             var net = WorldNet.Instance;
-            Vector3 from = net != null && net.Fuses.TryGetValue(_fuseId, out var fx) ? WorldNet.FusePosition(fx, WorldNet.Now) : _pc.transform.position + Vector3.up;
+            Vector3 from = net != null && net.Fuses.TryGetValue(id, out var fx) ? WorldNet.FusePosition(fx, WorldNet.Now) : _pc.transform.position + Vector3.up;
             // at whatever the centre dot is on (any angle, not just level)
             Vector3 d = AimPoint(true, out bool hit) - from;
             Vector3 dir = hit && d.sqrMagnitude > 4f ? d.normalized : CameraRig.AimRay.direction;
-            if (_pc.IsAlive) _pc.RequestFuseLaunch(_fuseId, dir);
-            _fuseId = 0;
+            if (_pc.IsAlive) _pc.RequestFuseLaunch(id, dir);
         }
+
+        /// <summary>Our Empress or Emperor is over: not again for a while.</summary>
+        void OnDomainEnded(ulong caster, byte kind, double at)
+        {
+            if (_pc == null || caster != _pc.NetworkObjectId) return;
+            CardId card = kind == 0 ? CardId.TheEmpress : CardId.TheEmperor;
+            for (int s = 0; s < Loadout.Slots; s++)
+                if (CardIn(s) == card) _cooldownUntil[s] = Mathf.Max(_cooldownUntil[s], Time.time + SpellPlans.DomainRest - (float)(WorldNet.Now - at));
+        }
+
+        /// <summary>Our Empress (or Emperor) is up, or its hands are still clasped.</summary>
+        WorldNet.DomainFx OwnDomain(CardId card) =>
+            WorldNet.Instance != null && _pc != null ? WorldNet.Instance.OpenDomain(_pc.NetworkObjectId, (byte)(card == CardId.TheEmpress ? 0 : 1)) : null;
 
         void OnDisable()
         {
             WorldNet.FuseCharging -= OnFuseCharging;
+            WorldNet.DomainEnded -= OnDomainEnded;
             WorldNet.ForceEnded -= OnForceEnded;
             WorldNet.BreathEnded -= OnBreathEnded;
             WorldNet.HookAttached -= OnHookAttached;
@@ -112,7 +143,22 @@ namespace SuddenMageEncounter
         public CardId CardIn(int slot) => _pc != null ? _pc.CardInSlot(slot) : Loadouts.Selected.Get(slot);
         /// <summary>Free to cast: a card rolled by The Fool (used once), or Warp Space's second portal.</summary>
         public bool IsFree(int slot) => _pc != null && (_pc.IsFoolCard(slot) || CardIn(slot) == CardId.WarpSpace && PortalWaiting());
-        public float CooldownLeft(int slot) => CardIn(slot) == CardId.WarpSpace && PortalWaiting() ? 0f : Mathf.Max(0f, _cooldownUntil[slot] - Time.time);
+        public float CooldownLeft(int slot) => CardIn(slot) == CardId.WarpSpace && PortalWaiting() ? 0f : Mathf.Max(0f, _cooldownUntil[slot] - Time.time, SwiftRestLeft(slot));
+        /// <summary>Arcane Swiftness: not again until a second after the last one ended.</summary>
+        /// <summary>(and Ephemerate, Submerge: not again until a second after the last one ended)</summary>
+        float SwiftRestLeft(int slot)
+        {
+            if (_pc == null || _pc.Motor == null) return 0f;
+            var card = CardIn(slot);
+            if (card == CardId.ArcaneSwiftness && _pc.Motor.SwiftEndsAt > 0f) return _pc.Motor.SwiftEndsAt + SpellPlans.SwiftRest - Time.time;
+            if (card == CardId.Ephemerate && _pc.Motor.EphemEndsAt > 0f) return _pc.Motor.EphemEndsAt + SpellPlans.EphemRest - Time.time;
+            if (card == CardId.Submerge && _pc.IsSpawned)
+            {
+                var st = _pc.Status.Value;
+                if (st.SubUntil > 0 && st.SubUntil <= WorldNet.Now) return (float)(st.SubUntil + SpellPlans.SubRest - WorldNet.Now);
+            }
+            return 0f;
+        }
 
         /// <summary>Our first Warp Space portal is open and waiting for its partner (which is free, with no cooldown).</summary>
         bool PortalWaiting() => OwnPortals(false);
@@ -134,10 +180,16 @@ namespace SuddenMageEncounter
         {
             if (_pc == null || !_pc.IsSpawned) return 0f;
             if (CardIn(slot) == CardId.TheLovers) return OwnTether() != null ? 1f : 0f; // the beam's out (press again to let go)
-            if (CardIn(slot) == CardId.Death) return OwnDeath() != null ? 1f : 0f;            // the aura's up (press again to end it)
+
             if (CardIn(slot) == CardId.GrappleHook) return OwnHook() != null ? 1f : 0f;       // the hook's out (press again to let go)
-            if (CardIn(slot) == CardId.TheHangedMan) return _pc.Status.Value.HangUntil > WorldNet.Now ? 1f : 0f; // hanging (press again to let go)
-            if (CardIn(slot) == CardId.TheMoon) return Left(_pc.Status.Value.MoonAt, SpellPlans.MoonClasp + SpellPlans.MoonFill);
+
+            if (CardIn(slot) == CardId.TheMoon) return Left(_pc.Status.Value.MoonAt, SpellPlans.MoonClasp + SpellPlans.MoonTime);
+            if (CardIn(slot) == CardId.TheEmpress || CardIn(slot) == CardId.TheEmperor)
+            {
+                var d = OwnDomain(CardIn(slot));
+                float lasts = CardIn(slot) == CardId.TheEmpress ? SpellPlans.EmpressTime : SpellPlans.EmperorTime;
+                return d != null ? Left(d.start + lasts, SpellPlans.DomainDelay + lasts) : 0f;
+            }
             if (CardIn(slot) == CardId.TheSun) return Left(_pc.Status.Value.SunUntil, SpellPlans.SunDelay + SpellPlans.SunTime);
             if (CardIn(slot) == CardId.Strength) return Mathf.Clamp01((float)(_pc.Status.Value.StrongUntil - WorldNet.Now) / SpellPlans.StrengthTime);
             if (CardIn(slot) != CardId.TheMagician) return 0f;
@@ -147,12 +199,13 @@ namespace SuddenMageEncounter
 
         public bool Affordable(int slot) => _pc != null && (IsFree(slot) || _pc.CanAfford(Cards.Get(CardIn(slot)), _predictedSpend));
 
-        /// <summary>What a slot's card costs right now (0 for a free one; Temperance puts 1 on the others).</summary>
+        /// <summary>What a slot's card costs right now (0 for a free one).</summary>
         public int CostIn(int slot) => IsFree(slot) || _pc == null ? 0 : _pc.CostOf(Cards.Get(CardIn(slot)));
 
         public void ResetForRound()
         {
             CancelAll();
+            _wheelFuses.Clear();
             _starId = 0;
             for (int i = 0; i < _cooldownUntil.Length; i++) { _cooldownUntil[i] = 0f; _foolRolling[i] = false; }
             _predictedSpend = 0f;
@@ -162,6 +215,7 @@ namespace SuddenMageEncounter
         {
             _castUntil = 0f;
             _holding = -1;
+            _shedSlot = -1;
             _rockId = 0;
             _fireId = 0;
             _hellId = 0;
@@ -169,6 +223,9 @@ namespace SuddenMageEncounter
             _fuseId = 0;
             _biteAt = -1f;
             _shotAt = _graspAt = _tossAt = -1f;
+            _heavenAt = -1f;
+            _justiceDoneAt = -1f; // (knocked out of the kneel: not investigated after all)
+            if (Pose == SpellPose.WolfgangFire && _pc != null) _pc.Motor.FaceLock(0f); // (the pistols dropped: free to turn again)
             LoseRifle();
             _flaming = false;
             if (Pose == SpellPose.GraspKneel && _pc != null) _pc.Motor.Unroot();
@@ -191,12 +248,12 @@ namespace SuddenMageEncounter
             if (!able && _holding >= 0) { if (_rifleFireAt < 0f) LoseRifle(); _holding = -1; SetPose(SpellPose.None); }
             // knocked down mid-cast: the spell stops (the server cancels its side too)
             bool knocked = !_pc.IsAlive || _pc.Motor.Ragdolled || _pc.Motor.Carried || _pc.Hexed; // (or a hex took hold: the same)
-            if (knocked && (Casting || _rockId != 0 || _fireId != 0 || _hellId != 0 || _escapeAt >= 0f || _shotAt >= 0f || _graspAt >= 0f || _tossAt >= 0f || _rifleSlot >= 0)) CancelAll();
+            if (knocked && (Casting || _rockId != 0 || _fireId != 0 || _hellId != 0 || _escapeAt >= 0f || _shotAt >= 0f || _graspAt >= 0f || _tossAt >= 0f || _rifleSlot >= 0 || _heavenAt >= 0f)) CancelAll();
 
             // the corpse got up (or went) before its skin was taken: nothing left to kneel over
             if (Pose == SpellPose.SkinKneel && Casting && WorldNet.Fizzled(_pc.NetworkObjectId, PoseStart + 0.1, WorldNet.Now)) CancelAll();
 
-            // knocked down (or spun by a tornado): only Bubble Away and The Hanged Man can be cast (each stands you up)
+            // knocked down (or spun by a tornado): only Bubble Away and The Hanged Man (each stands you up), and The Hermit, can be cast
             bool down = _pc.Motor.Ragdolled || _pc.Motor.Carried || _pc.Motor.GettingUp;
             bool ableDown = !able && down && _pc.IsAlive && !_pc.Motor.Pinned && !_pc.Trapped && !_pc.Grasped && !_pc.Hexed && MatchManager.CastingAllowedFor(_pc);
 
@@ -212,7 +269,11 @@ namespace SuddenMageEncounter
             else if (ableDown && !InputMap.Blocked)
             {
                 for (int slot = 0; slot < Loadout.Slots; slot++)
-                    if ((CardIn(slot) == CardId.BubbleAway || CardIn(slot) == CardId.TheHangedMan) && InputMap.Down(GameSettings.AbilityAction(slot))) Press(slot);
+                {
+                    if (!InputMap.Down(GameSettings.AbilityAction(slot))) continue;
+                    if (CardIn(slot) == CardId.BubbleAway || CardIn(slot) == CardId.TheHangedMan) Press(slot);
+                    else if (CardIn(slot) == CardId.TheHermit) TryCast(slot, Cards.Get(CardId.TheHermit)); // (no preview from the floor)
+                }
             }
             else if (InputMap.Blocked && _holding >= 0 && _holding == _rifleSlot) Release(_holding); // a menu opened: let go of
             else if (InputMap.Blocked && _holding >= 0)
@@ -221,11 +282,27 @@ namespace SuddenMageEncounter
                 SetPose(SpellPose.None);
             }
 
+            TickShield(able);
+
             if (_holding >= 0) ShowIndicator(_holding);
             else if (_graspAt >= 0f) ShowGrasp(); // still turning it
+            else if (ShowHeaven()) { } // Heavenly Slash: the cut's angle, while posing
             else _indicator?.Hide();
             // charging Flowing Cut, Sebastian: down on one knee, not walking
-            _pc.Motor.Kneeling = _holding >= 0 && Charges(CardIn(_holding));
+            _pc.Motor.Kneeling = _holding >= 0 && (Charges(CardIn(_holding)) || CardIn(_holding) == CardId.HammerSpin); // (Hammer Spin: planted, winding up)
+            // charging Compressed Shot: half speed, falling gently
+            _pc.Motor.Concentrating = _holding >= 0 && CardIn(_holding) == CardId.CompressedShot;
+            // Submerge: under while its key is held; let go, out you come
+            if (_subSlot >= 0)
+            {
+                bool sunk = _pc.Status.Value.SubUntil > WorldNet.Now || WorldNet.Now - PoseStart < 0.4 && Pose == SpellPose.SubDive;
+                if (!sunk) _subSlot = -1;
+                else if (!_subLetGo && (InputMap.Blocked || !GameSettings.Binds[GameSettings.AbilityAction(_subSlot)].IsPressed))
+                {
+                    _subLetGo = true;
+                    _pc.RequestCardCancel(CardId.Submerge);
+                }
+            }
 
             // timed rock throw
             if (_rockId != 0 && WorldNet.Now >= _rockLaunchAt)
@@ -234,6 +311,7 @@ namespace SuddenMageEncounter
                 _rockId = 0;
             }
 
+            TickShed(able);
             TickFlame();
             TickFuse();
             TickBite();
@@ -241,6 +319,9 @@ namespace SuddenMageEncounter
             TickTowerAim();
             TickStars();
             TickGuns();
+            TickHeaven();
+            // Justice: knelt the whole time, so that body's been investigated (each only once)
+            if (_justiceDoneAt >= 0f && Time.time >= _justiceDoneAt) { _justiceDoneAt = -1f; if (_justiceBody != null && _pc.IsAlive) _investigated.Add(_justiceBody); }
 
             // gestures end on their own
             float t = (float)(WorldNet.Now - PoseStart);
@@ -249,6 +330,7 @@ namespace SuddenMageEncounter
                 SpellPose.CastWall => 0.75f, SpellPose.CastFold => 0.95f, SpellPose.Gather => 1.15f,
                 SpellPose.Dash => 0.5f, SpellPose.ShoveCast => 0.6f, SpellPose.TornadoCast => 0.9f, SpellPose.MissileCharge => 1.2f,
                 SpellPose.Barrier => 1.25f, SpellPose.Siphon => SpellPlans.SiphonTime + 0.1f, SpellPose.SiphonPunch => 0.5f,
+                SpellPose.DeathDash => SpellPlans.DeathDashTime + 0.1f,
                 SpellPose.FlameCharge => 0.95f, SpellPose.HellfireDraw => SpellPlans.HellfireDraw + 0.2f, SpellPose.FlameHands => 0.7f,
                 SpellPose.JudgmentCast => 1.6f, SpellPose.TugCast => 0.7f, SpellPose.Platform => 0.7f,
                 SpellPose.FoolRoll => 0.5f, SpellPose.Magician => 0.7f, SpellPose.SunRaise => SpellPlans.PriestessDelay + 0.35f, SpellPose.Prayer => SpellPlans.DomainDelay + 0.35f,
@@ -265,9 +347,8 @@ namespace SuddenMageEncounter
                 SpellPose.HammerSlam => HammerMotion.SlamSwing + HammerMotion.SlamSettle + 0.3f,
                 SpellPose.SwarmRaise => 0.65f,
                 SpellPose.IceCrouch => SpellPlans.IceCrouch + 0.35f,
-                SpellPose.HermitKneel => SpellPlans.HermitKneel + SpellPlans.HermitBuild + 0.25f,
                 SpellPose.WheelSpin => 0.5f,
-                SpellPose.Clasp => SpellPlans.JusticeClasp + 0.3f,
+                SpellPose.Clasp => SpellPlans.MoonClasp + 0.3f,
                 SpellPose.HeadBack => SpellPlans.DeathDelay + 0.3f,
                 SpellPose.RightHandUp => SpellPlans.DevilRaise + 0.35f,
                 SpellPose.TowerPray => SpellPlans.TowerPray + 0.3f,
@@ -279,10 +360,18 @@ namespace SuddenMageEncounter
                 SpellPose.RifleFire => SpellPlans.SebWindup + SpellPlans.SebRecover + 0.15f,
                 SpellPose.GraspKneel => SpellPlans.GraspCast + 0.35f,
                 SpellPose.SkinKneel => SpellPlans.SkinTime + 0.3f,
-                SpellPose.BombPlace or SpellPose.BombToss or SpellPose.LeftArmUp => 0.6f,
+                SpellPose.BombPlace or SpellPose.BombToss or SpellPose.LeftArmUp or SpellPose.PotThrow => 0.6f,
                 SpellPose.NecroRaise => SpellPlans.NecroCharge + 0.42f,
                 SpellPose.HexPoint => SpellPlans.HexCast + 0.4f,
                 SpellPose.GrapplePoint => OwnHook() != null ? float.MaxValue : 0.6f, // held while the hook is out
+                SpellPose.PotHold => OwnPot() != null || t < 0.4f ? float.MaxValue : 0f, // held while the pot is
+                SpellPose.WindShot => 0.35f, SpellPose.CloudStep => 0.4f,
+                SpellPose.SubDive => SpellPlans.SubDive + 0.15f, SpellPose.SubEmerge => SpellPlans.SubSpin + 0.2f,
+                SpellPose.HammerSpin => _spinTime + 0.3f, // (a moment stopped, the hammer still out, before it goes)
+                SpellPose.WolfgangFire => SpellPlans.WolfDraw + SpellPlans.WolfFireTime + 0.15f,
+                SpellPose.HeavenSlash => BladeMotion.Sweep + BladeMotion.Settle + 0.25f,
+                SpellPose.ParryGuard => SpellPlans.ParryWindow,
+                SpellPose.ParryStab => 0.5f,
                 _ => float.MaxValue,
             };
             if (t > ends) SetPose(SpellPose.None);
@@ -339,19 +428,45 @@ namespace SuddenMageEncounter
             if (info == null) return;
             // The Lovers already out: pressing it again lets go (the cooldown starts when it ends)
             if (info.id == CardId.TheLovers && OwnTether() != null) { _pc.RequestLoversCancel(); return; }
-            // Death's aura up, the grapple hook out: pressing it again ends it (free)
-            if (info.id == CardId.Death && OwnDeath() != null) { _pc.RequestCardCancel(CardId.Death); return; }
+            // the grapple hook out: pressing it again lets go (free)
             if (info.id == CardId.GrappleHook && OwnHook() != null) { _pc.RequestCardCancel(CardId.GrappleHook); return; }
-            if (info.id == CardId.TheHangedMan && _pc.Status.Value.HangUntil > WorldNet.Now) { _pc.RequestCardCancel(CardId.TheHangedMan); return; }
+            // under Submerge (or diving in): no other card meanwhile (letting go of its key brings you out)
+            if (_pc.Status.Value.SubUntil > WorldNet.Now)
+            {
+                if (info.id != CardId.Submerge) Denied?.Invoke(slot);
+                return;
+            }
+            // holding a pot: no other card; the Fly Trap pressed again is thrown
+            var pot = OwnPot();
+            if (pot != null)
+            {
+                if (info.id == CardId.FlyTrap && pot.kind == SpellPlans.PotFlyTrap && WorldNet.Now - pot.start > 0.15)
+                {
+                    _pc.RequestCardCancel(CardId.FlyTrap);
+                    SetPose(SpellPose.PotThrow);
+                }
+                else Denied?.Invoke(slot);
+                return;
+            }
             if (Cards.IsPassive(info.id)) { Denied?.Invoke(slot); return; } // Temperance: it works just by being there
             // charging Flowing Cut, Sebastian: no other cards until it's released
-            if (_holding >= 0 && _holding != slot && Charges(CardIn(_holding))) { Denied?.Invoke(slot); return; }
+            if (_holding >= 0 && _holding != slot && (Charges(CardIn(_holding)) || CardIn(_holding) == CardId.ExplosiveEscape || CardIn(_holding) == CardId.HammerSpin)) { Denied?.Invoke(slot); return; }
             if ((Casting && !Fuses(info.id)) || CooldownLeft(slot) > 0f) { Denied?.Invoke(slot); return; }
+            if (info.id == CardId.Skinwalker && _pc.Skin.Value.On && FindCorpse() == null)
+            {
+                // wearing a skin, and no corpse to take another from: held, it comes off
+                _shedSlot = slot;
+                _shedAt = Time.time + SpellPlans.SkinShed;
+                RuneSpew.Create(() => _pc.transform.position + Vector3.down * 0.1f, () => this != null && _shedSlot >= 0, SpellPlans.SkinShed, SpellPlans.SkinGrey, 18f, new Vector3(0.35f, 0.5f, 0.35f));
+                return;
+            }
             if (info.castOnPress)
             {
                 TryCast(slot, info);
                 return;
             }
+            // charged cards that are paid for when let go: not even started without the mana for them
+            if (info.id == CardId.CompressedShot && !Affordable(slot)) { Denied?.Invoke(slot); return; }
             if (info.id == CardId.Sebastian)
             {
                 // paid for now, as the charge begins (the server gives it back if it's let go too early)
@@ -378,6 +493,10 @@ namespace SuddenMageEncounter
                 CardId.Sebastian => SpellPose.RifleKneel,
                 CardId.TheHierophant => SpellPose.HierophantHold,
                 CardId.RemoteFlameBomb => SpellPose.PortalHold,
+                CardId.CompressedShot => SpellPose.WindCharge,
+                CardId.BubbleBomb => SpellPose.WaterHold,
+                CardId.TheHermit => SpellPose.None,
+                CardId.HammerSpin => SpellPose.HammerSpinCharge,
                 _ => SpellPose.HoldWall,
             });
             _heldSince = Time.time;
@@ -426,6 +545,7 @@ namespace SuddenMageEncounter
                 case CardId.ShatterHex:
                 case CardId.StasisHex:
                 case CardId.MindHex:
+                case CardId.SmallifyHex:
                 {
                     var t = FindHexTarget(SpellPlans.HexKind(info.id));
                     if (t == null) { NoTarget?.Invoke(); return false; } // no cost, no cooldown
@@ -486,6 +606,10 @@ namespace SuddenMageEncounter
                     SetPose(SpellPose.HellfireDraw); // the line is drawn once the server's hellfire appears
                     break;
                 case CardId.ExplosiveEscape:
+                    // held: the blast grows (the server is told how long, and checks it)
+                    _escapeHeld = Mathf.Clamp(_heldFor, 0f, SpellPlans.EscapeChargeMax);
+                    targetId = (ulong)Mathf.RoundToInt(_escapeHeld * 1000f);
+                    target = SpellPlans.EscapeSpot(_pc.transform.position, yaw); // goes off exactly where the preview showed
                     _escapeAt = Time.time + SpellPlans.EscapeDelay;
                     SetPose(SpellPose.FlameHands);
                     break;
@@ -530,6 +654,7 @@ namespace SuddenMageEncounter
                     break;
                 case CardId.TheEmpress:
                 case CardId.TheEmperor:
+                    if (OwnDomain(info.id) != null) { Denied?.Invoke(slot); return false; } // still up
                     _pc.Motor.Root(SpellPlans.DomainDelay); // locked in place while the hands are clasped
                     SetPose(SpellPose.Prayer);
                     break;
@@ -647,6 +772,36 @@ namespace SuddenMageEncounter
                     _pc.Motor.HammerLeap(SpellPlans.HammerCrouch);
                     SetPose(SpellPose.HammerLeap);
                     break;
+                case CardId.HammerSpin:
+                {
+                    // not wound up long enough: nothing happens (no cost, no cooldown)
+                    if (_heldFor < SpellPlans.SpinMinHold) { Denied?.Invoke(slot); return false; }
+                    target = SpellPlans.SpinDestination(world, _pc.FeetPosition, yaw, SpellPlans.SpinRange(_heldFor)); // where the feet end up
+                    Vector3 way = target - _pc.FeetPosition;
+                    way.y = 0f;
+                    if (way.magnitude < 0.5f) { Denied?.Invoke(slot); return false; } // something unbreakable right in front
+                    targetId = (ulong)Mathf.RoundToInt(Mathf.Min(_heldFor, 10f) * 1000f);
+                    _pc.Motor.Kneeling = false;
+                    _spinTime = SpellPlans.SpinTime(way.magnitude);
+                    _pc.Motor.Blink(target + (_pc.transform.position - _pc.FeetPosition), _spinTime, false, SpellPlans.SpinEase);
+                    if (WorldNet.Instance != null) WorldNet.Instance.Spins[_pc.NetworkObjectId] = (WorldNet.Now, _spinTime); // (our own body turns with it at once)
+                    SetPose(SpellPose.HammerSpin);
+                    break;
+                }
+                case CardId.Wolfgang:
+                    // the body stays facing where it was cast (the camera looks round, the legs still walk)
+                    _pc.Motor.FaceLock(SpellPlans.WolfDraw + SpellPlans.WolfFireTime, true);
+                    SetPose(SpellPose.WolfgangFire);
+                    break;
+                case CardId.HeavenlySlash:
+                    _heavenAt = Time.time + SpellPlans.HeavenCrouch;
+                    _heavenStage = 0;
+                    _pc.Motor.Root(SpellPlans.HeavenCrouch);
+                    SetPose(SpellPose.HeavenCrouch);
+                    break;
+                case CardId.Parry:
+                    SetPose(SpellPose.ParryGuard);
+                    break;
                 case CardId.Rachmaninoff:
                     _shotAt = Time.time + SpellPlans.RachDelay;
                     SetPose(SpellPose.ShotgunAim);
@@ -669,28 +824,60 @@ namespace SuddenMageEncounter
                     SetPose(SpellPose.IceCrouch);
                     break;
                 case CardId.TheHermit:
-                    if (!SpellPlans.PlanHouse(world, _pc.FeetPosition, yaw).valid) { Denied?.Invoke(slot); return false; }
-                    // down on one knee while the house goes up round you
-                    _pc.Motor.Root(SpellPlans.HermitKneel + SpellPlans.HermitBuild);
-                    SetPose(SpellPose.HermitKneel);
+                    // (standing or knocked down, no gesture: the house just goes up)
+                    if (!SpellPlans.PlanHouse(world, SpellPlans.HouseFeet(_pc), yaw).valid) { Denied?.Invoke(slot); return false; }
                     break;
                 case CardId.WheelOfFortune:
                     SetPose(SpellPose.WheelSpin);
                     break;
                 case CardId.Justice:
                 {
-                    var t = FindNearCursor(SpellPlans.JusticePick);
-                    if (t == null) { NoTarget?.Invoke(); return false; } // no cost, no cooldown
-                    targetId = t.NetworkObjectId;
-                    SetPose(SpellPose.Clasp);
+                    var corpse = FindCorpse(true);
+                    if (corpse == null) { NoTarget?.Invoke(); return false; } // no cost, no cooldown
+                    targetId = corpse.NetworkObjectId;
+                    _justiceBody = corpse.LastRagdoll;
+                    _justiceDoneAt = Time.time + SpellPlans.JusticeCast;
+                    _pc.Motor.Root(SpellPlans.JusticeCast);
+                    SetPose(SpellPose.SkinKneel);
                     break;
                 }
                 case CardId.TheHangedMan:
                     // (from the ground, knocked down, too: the noose hauls you up)
                     _pc.Motor.StandUpNow();
                     break;
+                case CardId.CompressedShot:
+                    // how long it was charged (the server takes it as told, up to full)
+                    targetId = (ulong)Mathf.RoundToInt(Mathf.Clamp(_heldFor, 0f, SpellPlans.ShotChargeTime) * 1000f);
+                    target = AimPoint(true, out _); // what the centre dot is on
+                    SetPose(SpellPose.WindShot);
+                    break;
+                case CardId.Ephemerate:
+                    _pc.Motor.Ephemerate(SpellPlans.EphemTime);
+                    break;
+                case CardId.CloudStep:
+                    if (!_pc.Motor.IsGrounded && _pc.Motor.AirSteps >= SpellPlans.CloudAirSteps) { Denied?.Invoke(slot); return false; } // land first
+                    _pc.Motor.CloudStep();
+                    SetPose(SpellPose.CloudStep);
+                    break;
+                case CardId.Submerge:
+                    // a hop, head first into the pool; held: under; let go: out (see Update)
+                    _pc.Motor.Knock(Quaternion.Euler(0f, yaw, 0f) * Vector3.forward * SpellPlans.SubHopForward + Vector3.up * SpellPlans.SubHop, 0f);
+                    _subSlot = slot;
+                    _subLetGo = false;
+                    SetPose(SpellPose.SubDive);
+                    break;
+                case CardId.BubbleBomb:
+                    target = SpellPlans.MineSpot(_pc.transform.position, yaw);
+                    SetPose(SpellPose.WaterCast);
+                    break;
+                case CardId.Sunflower:
+                case CardId.Cactus:
+                case CardId.FlyTrap:
+                    SetPose(SpellPose.PotHold); // (held until the pot's gone: see the gestures below)
+                    break;
                 case CardId.Death:
-                    SetPose(SpellPose.HeadBack);
+                    _pc.Motor.Siphon(SpellPlans.DeathDashTime); // Mana Siphon's charge, twice as long
+                    SetPose(SpellPose.DeathDash);
                     break;
                 case CardId.TheDevil:
                     SetPose(SpellPose.RightHandUp);
@@ -798,7 +985,9 @@ namespace SuddenMageEncounter
         bool _flaming;
         int _flameSlot;
 
-        WorldNet.DeathFx OwnDeath() => WorldNet.Instance != null && _pc != null ? WorldNet.Instance.ActiveDeath(_pc.NetworkObjectId) : null;
+
+        /// <summary>Our pot still in our hands (null: none).</summary>
+        WorldNet.PotFx OwnPot() => WorldNet.Instance != null && _pc != null ? WorldNet.Instance.HeldPot(_pc.NetworkObjectId) : null;
         WorldNet.HookFx OwnHook() => WorldNet.Instance != null && _pc != null ? WorldNet.Instance.ActiveHook(_pc.NetworkObjectId) : null;
 
         /// <summary>Infectious Bite: the crouch is over — lunge head first at the aim (ragdolled; it bites until you're up).</summary>
@@ -815,6 +1004,65 @@ namespace SuddenMageEncounter
         }
 
         float _shotAt = -1f, _graspAt = -1f, _tossAt = -1f;
+
+        // ---------------- Hammer Spin, Heavenly Slash, Parry ----------------
+
+        float _spinTime, _heavenAt = -1f, _justiceDoneAt = -1f;
+        GameObject _justiceBody;
+        readonly System.Collections.Generic.HashSet<GameObject> _investigated = new();
+        int _heavenStage;
+
+        /// <summary>Heavenly Slash: the crouch is over, the leap; up there, the pose; then the cut (the server sends it).</summary>
+        void TickHeaven()
+        {
+            if (_heavenAt < 0f || Time.time < _heavenAt) return;
+            if (!_pc.IsAlive) { _heavenAt = -1f; return; }
+            switch (_heavenStage)
+            {
+                case 0:
+                {
+                    // straight up (not as high under a ceiling)
+                    float rise = SpellPlans.HeavenRise;
+                    if (Physics.SphereCast(_pc.transform.position, 0.3f, Vector3.up, out var hit, rise + 1f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore))
+                        rise = Mathf.Max(0f, hit.distance - 1f);
+                    _pc.Motor.Blink(_pc.transform.position + Vector3.up * rise, SpellPlans.HeavenRiseTime);
+                    SetPose(SpellPose.HeavenHover);
+                    _heavenStage = 1;
+                    _heavenAt = Time.time + SpellPlans.HeavenRiseTime;
+                    break;
+                }
+                case 1:
+                    _pc.Motor.Blink(_pc.transform.position + Vector3.up * SpellPlans.HeavenDrift, SpellPlans.HeavenHover); // drifting on up a little, slowing to a stop
+                    _heavenStage = 2;
+                    _heavenAt = Time.time + SpellPlans.HeavenHover;
+                    break;
+                default:
+                    SetPose(SpellPose.HeavenSlash);
+                    _heavenAt = -1f;
+                    break;
+            }
+        }
+
+        /// <summary>Heavenly Slash, posing in the air: the outline of the cut at its angle, along the aim (the caster's alone).</summary>
+        bool ShowHeaven()
+        {
+            var net = WorldNet.Instance;
+            if (_heavenAt < 0f || net == null || !net.HeavenRollOf(_pc.NetworkObjectId, out float roll)) return false;
+            _indicator ??= new SpellIndicator();
+            _indicator.ShowHeaven(_pc.transform.position + Vector3.up * 0.3f, CameraRig.AimRay.direction, roll);
+            return true;
+        }
+
+        /// <summary>Parry deflected a blow: dash in (the server says where) and stab.</summary>
+        public void ParryDash(Vector3 to, float seconds)
+        {
+            if (_pc == null || !_pc.IsAlive) return;
+            Vector3 d = to - _pc.transform.position;
+            if (new Vector2(d.x, d.z).sqrMagnitude > 1e-4f) _pc.Motor.FaceToward(Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg, seconds + 0.3f);
+            _pc.Motor.Blink(to, seconds, true);
+            SetPose(SpellPose.ParryStab);
+            _castUntil = Time.time + seconds + 0.25f;
+        }
         GunView _guns;
 
         /// <summary>Aiming down Sebastian's sights (the camera eases in to it).</summary>
@@ -822,7 +1070,7 @@ namespace SuddenMageEncounter
 
         /// <summary>Sebastian: the slot it's being charged (or about to fire) from, else -1; and when it fires.</summary>
         int _rifleSlot = -1;
-        float _rifleFireAt = -1f, _rifleYaw;
+        float _rifleFireAt = -1f, _rifleYaw, _riflePitch;
 
         /// <summary>Sebastian let go: not charged yet, the mana comes back; charged, the gun charges up and then fires.</summary>
         void ReleaseRifle(int slot)
@@ -839,7 +1087,8 @@ namespace SuddenMageEncounter
             }
             _rifleFireAt = Time.time + SpellPlans.SebWindup;
             _rifleYaw = _pc.Motor.Yaw; // this is the shot: from here the camera turns, the body and the gun don't
-            _pc.Motor.FaceLock(SpellPlans.SebWindup + SpellPlans.SebRecover);
+            _riflePitch = _pc.Motor.Pitch;
+            _pc.Motor.FaceLock(SpellPlans.SebWindup + SpellPlans.SebRecover, true);
             _pc.Motor.Kneeling = false;
             _pc.Motor.Root(SpellPlans.SebWindup + SpellPlans.SebRecover);
             SetPose(SpellPose.RifleFire);
@@ -877,7 +1126,7 @@ namespace SuddenMageEncounter
             {
                 _rifleFireAt = -1f;
                 _rifleSlot = -1;
-                if (_pc.IsAlive) _pc.RequestSebastianShot(_rifleYaw);
+                if (_pc.IsAlive) _pc.RequestSebastianShot(_rifleYaw, _riflePitch);
             }
             // Flame Bomb Toss: at whatever the centre dot is on right then
             if (_tossAt >= 0f && Time.time >= _tossAt)
@@ -985,6 +1234,7 @@ namespace SuddenMageEncounter
             {
                 if (c == null || c == _pc || !c.IsAlive || !c.Visible || Combatant.Allies(_pc, c) || c.Status.Value.Taken(WorldNet.Now)) continue;
                 if (kind == SpellPlans.MindHex && SpellServer.MindHexed(c)) continue;
+                if (kind == SpellPlans.SmallifyHex && SpellServer.Smallified(c)) continue;
                 if ((c.transform.position - _pc.transform.position).magnitude > SpellPlans.HexRange) continue;
                 float angle = Vector3.Angle(ray.direction, c.transform.position + Vector3.up * 0.3f - ray.origin);
                 if (angle < bestAngle && SpellPlans.HexSight(_pc.transform.position, c)) { bestAngle = angle; best = c; }
@@ -1022,7 +1272,7 @@ namespace SuddenMageEncounter
                 if (fx.caster != _pc.NetworkObjectId) continue;
                 if (fx.id < _starId) continue; // (an older cast: the server sends those on its own if we don't)
                 if (fx.id != _starId) { _starId = fx.id; _starNext = 0; }
-                if (_starNext >= SpellPlans.StarCount || now < fx.start + SpellPlans.StarEvery * (_starNext + 1)) continue;
+                if (_starNext >= fx.stars.Length || now < fx.start + SpellPlans.StarEvery * (_starNext + 1)) continue;
                 Vector3 from = WorldNet.StarPosition(fx, _starNext, now);
                 Vector3 d = AimPoint(true, out bool hit) - from;
                 Vector3 dir = hit && d.sqrMagnitude > 1f ? d.normalized : CameraRig.AimRay.direction;
@@ -1030,26 +1280,26 @@ namespace SuddenMageEncounter
             }
         }
 
-        /// <summary>Justice: whoever is nearest the point under the centre dot (not you), within <paramref name="reach"/> of it.</summary>
-        Combatant FindNearCursor(float reach)
+        int _shedSlot = -1;
+        float _shedAt;
+
+        /// <summary>Skinwalker's key held away from any corpse: after a moment the skin comes off (let go sooner, or came up to a corpse: it doesn't).</summary>
+        void TickShed(bool able)
         {
-            Vector3 p = AimPoint(true, out _);
-            Combatant best = null;
-            float bestD = reach;
-            foreach (var c in Combatant.Registry)
-            {
-                if (c == null || c == _pc || !c.IsAlive || !c.Visible) continue;
-                if ((c.transform.position - _pc.transform.position).magnitude > SpellPlans.JusticeBreak) continue; // (in reach of the tether)
-                Vector3 feet = c.FeetPosition, ab = Vector3.up * 1.9f * c.transform.localScale.y;
-                float u = Mathf.Clamp01(Vector3.Dot(p - feet, ab) / ab.sqrMagnitude);
-                float d = (p - (feet + ab * u)).magnitude;
-                if (d < bestD) { bestD = d; best = c; }
-            }
-            return best;
+            if (_shedSlot < 0) return;
+            int slot = _shedSlot;
+            bool held = able && !InputMap.Blocked && CardIn(slot) == CardId.Skinwalker && _pc.Skin.Value.On
+                && GameSettings.Binds[GameSettings.AbilityAction(slot)].IsPressed;
+            if (!held || FindCorpse() != null) { _shedSlot = -1; return; }
+            if (Time.time < _shedAt) return;
+            _shedSlot = -1;
+            _cooldownUntil[slot] = Time.time + Cards.Cooldown;
+            _pc.RequestShedSkin();
         }
 
-        /// <summary>Undead Servitude: a corpse lying within reach, the one nearest the centre dot.</summary>
-        Combatant FindCorpse()
+        /// <summary>Undead Servitude, Skinwalker, Justice: a corpse lying within reach, the one nearest the centre dot.</summary>
+        /// <param name="justice">Leave out the bodies we've already investigated (each only once).</param>
+        Combatant FindCorpse(bool justice = false)
         {
             var ray = CameraRig.AimRay;
             Combatant best = null;
@@ -1057,8 +1307,9 @@ namespace SuddenMageEncounter
             foreach (var c in Combatant.Registry)
             {
                 if (c == null || c == _pc || !c.IsSpawned || !c.Dead.Value || c.LastRagdoll == null) continue;
+                if (justice && _investigated.Contains(c.LastRagdoll)) continue;
                 Vector3 body = SpellServer.CorpsePoint(c);
-                if ((body - _pc.transform.position).magnitude > SpellPlans.ReviveReach + 0.5f) continue;
+                if (!SpellPlans.CorpseInReach(body, _pc.transform.position, 0.5f)) continue;
                 float angle = Vector3.Angle(ray.direction, body - ray.origin);
                 if (angle < bestAngle) { bestAngle = angle; best = c; }
             }
@@ -1124,7 +1375,9 @@ namespace SuddenMageEncounter
 
         int _fireId, _hellId;
         double _fireLaunchAt;
-        float _escapeAt = -1f, _hellNextPoint, _hellUntil;
+        float _escapeAt = -1f, _escapeHeld, _hellNextPoint, _hellUntil;
+        int _subSlot = -1;
+        bool _subLetGo;
         Vector3 _hellTip, _hellDir;
 
         void OnFireballCharging(int id, ulong caster, double start)
@@ -1197,7 +1450,7 @@ namespace SuddenMageEncounter
                 if (_pc.IsAlive)
                 {
                     Vector3 fwd = Quaternion.Euler(0, _pc.Motor.Yaw, 0) * Vector3.forward;
-                    _pc.Motor.Knock(-fwd * SpellPlans.EscapeBack + Vector3.up * SpellPlans.EscapeUp, 0f);
+                    _pc.Motor.Knock((-fwd * SpellPlans.EscapeBack + Vector3.up * SpellPlans.EscapeUp) * SpellPlans.EscapeKnockScale(_escapeHeld), 0f);
                 }
             }
         }
@@ -1374,7 +1627,7 @@ namespace SuddenMageEncounter
                     else _indicator.Hide();
                     break;
                 case CardId.Judgement:
-                    if (ok) _indicator.ShowSlidingJudgment(target, Quaternion.Euler(0, yaw, 0) * Vector3.forward, SpellPlans.TarotJudgmentRadius, SpellPlans.TarotJudgmentSlide);
+                    if (ok) _indicator.ShowJudgment(target, SpellPlans.TarotJudgmentRadius, true);
                     else _indicator.Hide();
                     break;
                 case CardId.Tug:
@@ -1383,6 +1636,20 @@ namespace SuddenMageEncounter
                     Vector3 to = _pc.transform.position + Vector3.up * 0.4f;
                     if ((to - from).magnitude > 1.5f) _indicator.ShowTug(from, to);
                     else _indicator.Hide();
+                    break;
+                }
+                case CardId.BubbleBomb:
+                {
+                    // where it starts, and where it'll have drifted to
+                    Vector3 start = SpellPlans.MineSpot(_pc.transform.position, yaw);
+                    _indicator.ShowMine(start, start + Quaternion.Euler(0f, yaw, 0f) * Vector3.forward * SpellPlans.MineGlide, SpellPlans.MineRadius);
+                    break;
+                }
+                case CardId.ExplosiveEscape:
+                {
+                    // the explosion itself (the crater) in front, growing as it's held
+                    float held = Mathf.Min(Time.time - _heldSince, SpellPlans.EscapeChargeMax);
+                    _indicator.ShowOrb(SpellPlans.EscapeCraterCentre(SpellPlans.EscapeSpot(_pc.transform.position, yaw)), SpellPlans.EscapeCraterRadius(held));
                     break;
                 }
                 case CardId.WaterOfLife:
@@ -1421,7 +1688,7 @@ namespace SuddenMageEncounter
                 }
                 case CardId.TheHermit:
                 {
-                    var plan = SpellPlans.PlanHouse(world, _pc.FeetPosition, yaw);
+                    var plan = SpellPlans.PlanHouse(world, SpellPlans.HouseFeet(_pc), yaw);
                     if (!plan.valid) { _indicator.Hide(); return; }
                     SpellPlans.HouseBoxes(world, plan, _boxes);
                     _indicator.ShowBoxes(_boxes, true);
@@ -1445,6 +1712,14 @@ namespace SuddenMageEncounter
                 case CardId.UndyingGrasp:
                     ShowGrasp();
                     break;
+                case CardId.HammerSpin:
+                {
+                    // the path it'll take, growing as it's held (lit once it's wound up enough)
+                    float held = Time.time - _heldSince;
+                    Vector3 feet = _pc.FeetPosition;
+                    _indicator.ShowSpin(feet, SpellPlans.SpinDestination(world, feet, yaw, SpellPlans.SpinRange(held)), held >= SpellPlans.SpinMinHold);
+                    break;
+                }
                 case CardId.FlowingCut:
                 {
                     // where you'll end up (lit once there's at least one charge)

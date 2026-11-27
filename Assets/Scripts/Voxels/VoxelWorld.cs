@@ -581,6 +581,34 @@ namespace SuddenMageEncounter
         /// <summary>Is this ice (an Ice Spike's), singed or not?</summary>
         public bool IsIce(ushort v) => v != 0 && _isIce.Contains(v);
 
+        // ------------------------------------------------------------------ black bile (Death)
+
+        readonly Dictionary<byte, ushort> _bile = new();
+        readonly HashSet<ushort> _isBile = new();
+        static readonly Color32[] BileShades = { new(30, 29, 32, 255), new(39, 38, 41, 255) }; // black and a dark grey, close (no checkerboard)
+
+        /// <summary>The palette entry for bile of this shade (0..1), added the first time it's needed. Call it only while applying an op.</summary>
+        public ushort BileValue(byte shade)
+        {
+            shade = (byte)Mathf.Min(shade, BileShades.Length - 1);
+            if (_bile.TryGetValue(shade, out var v)) return v;
+            Palette.Add(new VoxelMaterial { color = BileShades[shade] });
+            v = (ushort)(Palette.Count - 1);
+            _bile[shade] = v;
+            _isBile.Add(v);
+            return v;
+        }
+
+        /// <summary>Is this Death's black bile?</summary>
+        public bool IsBile(ushort v) => v != 0 && _isBile.Contains(v);
+
+        /// <summary>Bile drying off a cell: back to what it was. Call it only while applying an op.</summary>
+        public void Unbile(Vector3Int p, ushort was)
+        {
+            if (!IsBile(Get(p)) || was == 0) return;
+            Set(p, was);
+        }
+
         /// <summary>Ice melting off a cell: back to what it was (singed or blighted if the ice was). Call it only while applying an op.</summary>
         public void Thaw(Vector3Int p, ushort was)
         {

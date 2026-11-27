@@ -7,6 +7,7 @@ Shader "SME/Glow"
         [HDR] _BaseColor ("Colour", Color) = (0.3, 0.7, 3, 1)
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
         [Enum(Off, 0, On, 1)] _ZWrite ("Depth Write", Float) = 1
+        [Enum(UnityEngine.Rendering.ColorWriteMask)] _ColorMask ("Colour Write", Float) = 15
     }
 
     SubShader
@@ -19,6 +20,7 @@ Shader "SME/Glow"
             Tags { "LightMode" = "UniversalForward" }
             Cull [_Cull]
             ZWrite [_ZWrite]
+            ColorMask [_ColorMask]
 
             HLSLPROGRAM
             #pragma vertex vert
@@ -30,6 +32,7 @@ Shader "SME/Glow"
                 half4 _BaseColor;
                 float _Cull;
                 float _ZWrite;
+                float _ColorMask;
             CBUFFER_END
 
             struct Attributes { float4 positionOS : POSITION; UNITY_VERTEX_INPUT_INSTANCE_ID };

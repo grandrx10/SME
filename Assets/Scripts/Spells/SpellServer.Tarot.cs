@@ -16,11 +16,17 @@ namespace SuddenMageEncounter
 
         const byte Empress = 0, Emperor = 1;
         static readonly List<DomainState> Domains = new();
+        /// <summary>When each caster's last domain of each kind ended (another has to wait <see cref="SpellPlans.DomainRest"/>).</summary>
+        static readonly Dictionary<(PlayerController, byte), double> DomainRested = new();
+        /// <summary>Where the damage being dealt right now comes from, when that isn't where whoever deals it stands (The Emperor asks).</summary>
+        static Vector3? DamageFrom;
 
         static void ResetTarot()
         {
             foreach (var d in Domains) Release(d);
             Domains.Clear();
+            DomainRested.Clear();
+            DamageFrom = null;
             Combatant.DamageScale = ScaleDamage;
         }
 
@@ -43,7 +49,9 @@ namespace SuddenMageEncounter
                     // can't be cast again while it runs (refused: no cost, no cooldown)
                     var m = caster.Mana.Value;
                     if (m.Fast(now)) return false;
-                    caster.Mana.Value = new ManaState { Value = m.At(now), Time = now, FastUntil = now + SpellPlans.MagicianTime, Flow = m.Flow, Cap = m.Cap };
+                    m = m.With(now, m.At(now));
+                    m.FastUntil = now + SpellPlans.MagicianTime;
+                    caster.Mana.Value = m;
                     return true;
                 }
                 case CardId.TheHighPriestess:
@@ -54,7 +62,8 @@ namespace SuddenMageEncounter
                 {
                     byte kind = card == CardId.TheEmpress ? Empress : Emperor;
                     // still clasping hands for one already: no
-                    foreach (var old in Domains) if (old.caster == caster && !old.formed) return false;
+                    foreach (var old in Domains) if (old.caster == caster && (!old.formed || old.kind == kind)) return false; // (nor while one of these is up...)
+                    if (DomainRested.TryGetValue((caster, kind), out double rested) && now < rested + SpellPlans.DomainRest - 0.15) return false; // (...nor just after)
                     var d = new DomainState
                     {
                         kind = kind, caster = caster, center = caster.FeetPosition,
@@ -71,18 +80,14 @@ namespace SuddenMageEncounter
 
         static void TickTarot(double now)
         {
+            // (a ragdoll the server didn't cause: slipping on ice, a bite's own lunge)
+            foreach (var pc in PlayerController.All)
+                if (pc != null && pc.IsSpawned && pc.IsRagdolled && pc.Mana.Value.Fast(now)) DispelMagician(pc);
             for (int i = Domains.Count - 1; i >= 0; i--)
             {
                 var d = Domains[i];
                 if (d.caster == null || !d.caster.IsAlive || now >= d.endAt) { End(d); continue; }
                 if (now < d.formAt) continue;
-                if (!d.formed && d.kind == Emperor)
-                {
-                    // one Emperor aura at a time per caster: a new one replaces the old
-                    foreach (var old in Domains.ToArray())
-                        if (old != d && old.kind == Emperor && old.caster == d.caster) End(old);
-                    i = Domains.IndexOf(d);
-                }
                 d.formed = true;
                 if (d.kind == Emperor) { d.center = d.caster.FeetPosition; continue; }
 
@@ -102,6 +107,7 @@ namespace SuddenMageEncounter
                     if (!d.caughtAt.ContainsKey(p) && Inside(d, p.FeetPosition, now, 0.3f))
                     {
                         d.caughtAt[p] = now;
+                        if (ParryCatch(p, d.caster, p.transform.position)) continue; // Parry: the chains never take hold
                         d.trapped.Add(p);
                         RefreshTrapped(p);
                     }
@@ -113,6 +119,7 @@ namespace SuddenMageEncounter
         {
             Domains.Remove(d);
             Release(d);
+            if (d.formed && d.caster != null) DomainRested[(d.caster, d.kind)] = WorldNet.Now;
             WorldNet.ServerDomainEnd(d.id);
         }
 
@@ -160,26 +167,36 @@ namespace SuddenMageEncounter
             return new Vector2(o.x, o.z).magnitude <= SpellPlans.DomainRadius(d.kind) * grow + pad;
         }
 
+        /// <summary>Inside a formed Empress circle that isn't their own: they can't hold up their arcane shield.</summary>
+        public static bool InEnemyEmpress(Combatant c)
+        {
+            if (c == null || Domains.Count == 0) return false;
+            double now = WorldNet.Now;
+            foreach (var d in Domains)
+                if (d.kind == Empress && d.formed && d.caster != c && Inside(d, c.FeetPosition, now, 0.3f)) return true;
+            return false;
+        }
+
         /// <summary>
         /// Every hit passes through here. Bubble Away: someone in their bubble takes nothing (the bubble does).
-        /// Empress: her damage to people in her domain ×1.25. Emperor: damage from people inside his aura ×0.5.
+        /// Empress: her damage to people in her domain ×1.25. Emperor: anything from outside his circle ×0.3.
         /// </summary>
         static float ScaleDamage(Combatant victim, ulong attacker, float dmg)
         {
             if (Invulnerable(victim)) return 0f;          // mid-warp, or Arcane Swiftness
-            if (victim.IsSpawned && victim.Status.Value.Gold(WorldNet.Now)) return 0f; // Wheel of Fortune's 6: nothing hurts you
             var source = PlayerController.ServerFind(attacker);
             if (Combatant.Allies(source, victim)) return 0f; // a necromancer and their Undead
             if (source != null && source != victim && source.Status.Value.Strong(WorldNet.Now)) dmg *= SpellPlans.StrengthDamage; // Strength
             if (AbsorbInBubble(victim, dmg)) return 0f; // Bubble Away: the bubble takes it
             if (Domains.Count == 0) return dmg;
-            if (source == null || source == victim) return dmg;
+            if (source == victim) return dmg;
             double now = WorldNet.Now;
+            Vector3? from = DamageFrom ?? (source != null ? source.FeetPosition : (Vector3?)null);
             foreach (var d in Domains)
             {
                 if (!d.formed) continue;
-                if (d.kind == Empress && d.caster == source && Inside(d, victim.FeetPosition, now, 0.3f)) dmg *= SpellPlans.EmpressDamage;
-                else if (d.kind == Emperor && d.caster == victim && Inside(d, source.FeetPosition, now, 0.3f)) dmg *= SpellPlans.EmperorDamage;
+                if (d.kind == Empress && source != null && d.caster == source && Inside(d, victim.FeetPosition, now, 0.3f)) dmg *= SpellPlans.EmpressDamage;
+                else if (d.kind == Emperor && d.caster == victim && from.HasValue && !Inside(d, from.Value, now, 0.3f)) dmg *= SpellPlans.EmperorDamage;
             }
             return dmg;
         }
@@ -192,13 +209,16 @@ namespace SuddenMageEncounter
                 if (d.caster == p && !d.formed) End(d);
         }
 
-        /// <summary>The Magician ends early (ragdolled, trapped).</summary>
-        static void DispelMagician(PlayerController p)
+        /// <summary>The Magician ends early (hurt, or ragdolled by anything at all).</summary>
+        public static void DispelMagician(PlayerController p)
         {
-            if (p == null) return;
+            if (p == null || !p.IsSpawned) return;
             double now = WorldNet.Now;
             var m = p.Mana.Value;
-            if (m.Fast(now)) p.Mana.Value = new ManaState { Value = m.At(now), Time = now, Flow = m.Flow, Cap = m.Cap };
+            if (!m.Fast(now)) return;
+            m = m.With(now, m.At(now));
+            m.FastUntil = 0;
+            p.Mana.Value = m;
         }
     }
 }

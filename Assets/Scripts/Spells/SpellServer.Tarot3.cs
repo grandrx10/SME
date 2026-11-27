@@ -4,35 +4,36 @@ using UnityEngine;
 namespace SuddenMageEncounter
 {
     /// <summary>
-    /// Server rules for The Star, The Moon, The Sun and The World. (Judgement is Arcane Judgment's smaller, mahogany twin:
-    /// see TickJudgments.)
-    ///  - The Star: the right hand up 0.3 s (knocked down meanwhile: none), then five stars over the caster's head. Every 0.8 s
-    ///    one flies at the caster's aim, 15 m at most, whatever happens to them meanwhile (short of dying). Whoever one
-    ///    hits takes 8 and is outlined through walls for 3 s.
-    ///  - The Moon: hands clasped 0.3 s, then a moon fills over the caster in 1.5 s; full, it pulses out to 4 m, healing the
-    ///    caster and anyone it touches 15. Ragdolled before that: it goes.
+    /// Server rules for The Star, The Moon, The Sun and The World. (Judgement: see TickJudgments.)
+    ///  - The Star: the right hand up 0.3 s (knocked down meanwhile: none), then four stars over the caster's head, one more
+    ///    for every earlier cast that hit someone (once per cast, up to 12; back to four when they die). Every 0.1 s
+    ///    one flies at the caster's aim, 25 m at most, whatever happens to them meanwhile (short of dying). Whoever one
+    ///    hits takes 5 and is outlined through walls for 3 s.
+    ///  - The Moon: hands clasped 0.3 s, then a moon over the caster for 15 s (ragdolled or not) that fills as they hurt enemies.
+    ///    Full after 30 damage: it heals them 15. Not full in time: it just goes.
     ///  - The Sun: 1.5 s after the cast the caster's colours are inverted for 3 s; anyone with them on their screen (nothing
-    ///    in the way) takes 15 a second. Ragdolled: over.
+    ///    in the way) takes 12 a second. Ragdolled: over.
     ///  - The World: hands clasped 0.5 s (knocked down meanwhile: nothing), then caster and target are crushed away, and a
-    ///    sphere of radius 8.5 m swells 3 m above where the caster stood (sunk into the ground), throwing anyone else out: ground below, a glass dome
-    ///    above, its shell unbreakable. The two come back inside on opposite sides with no mana, and stay there till one is
-    ///    dead: after 20 s both take 5 a second, after 30 s 10, and so on. Then the dome shatters. Not inside another World.
+    ///    sphere of radius 8.5 m swells 1.5 m above where the caster stood (sunk into the ground; moved to the nearest place with
+    ///    room, if something unbreakable is in the way), throwing anyone else out: ground below, a glass dome
+    ///    above, its shell unbreakable. The caster is at full health again. The two come back inside on opposite sides with no mana, and stay there till one is
+    ///    dead or 12 s are up. Then the dome shatters. Not inside another World.
     /// </summary>
     public static partial class SpellServer
     {
         class StarState
         {
-            public int id; public PlayerController caster; public double start; public int next;
-            public readonly Vector3[] lastPos = new Vector3[SpellPlans.StarCount];
-            public readonly ulong[] owner = new ulong[SpellPlans.StarCount]; // whose each one is (The Hierophant sends them back as its own)
+            public int id; public PlayerController caster; public double start; public int next, count;
+            public bool scored; // one of them hit someone (the next cast gets one more)
+            public readonly Vector3[] lastPos = new Vector3[SpellPlans.StarMax];
+            public readonly ulong[] owner = new ulong[SpellPlans.StarMax]; // whose each one is (The Hierophant sends them back as its own)
         }
         class PendingStars { public PlayerController caster; public double at; }
-        class PulseState { public PlayerController caster; public Vector3 feet; public double start; public readonly HashSet<Combatant> touched = new(); }
+
         class WorldState
         {
             public int id, phase; public PlayerController caster; public Combatant target; public double castAt, crushAt, growAt, readyAt;
             public Vector3Int cell; public Vector3 center, spotA, spotB; public float yawA, yawB; public ushort body, top;
-            public int ticks;
             public readonly Dictionary<Combatant, double> pushed = new();
             public readonly HashSet<Combatant> putOut = new();
             public bool Fighter(Combatant c) => c != null && (c == caster || c == target);
@@ -40,7 +41,9 @@ namespace SuddenMageEncounter
 
         static readonly List<PendingStars> PendingStarsS = new();
         static readonly List<StarState> StarsS = new();
-        static readonly List<PulseState> PulsesS = new();
+        /// <summary>Extra stars each caster's next cast gets (one per earlier cast that hit; until they die).</summary>
+        static readonly Dictionary<PlayerController, int> StarBonus = new();
+
         static readonly List<WorldState> WorldsS = new();
         /// <summary>(who's looking, whose Sun) as their owners report it.</summary>
         static readonly HashSet<(PlayerController looker, ulong sun)> Gazes = new();
@@ -52,7 +55,7 @@ namespace SuddenMageEncounter
         {
             PendingStarsS.Clear();
             StarsS.Clear();
-            PulsesS.Clear();
+            StarBonus.Clear();
             WorldsS.Clear();
             Gazes.Clear();
             _sunOwed.Clear();
@@ -72,7 +75,8 @@ namespace SuddenMageEncounter
                     var st = caster.Status.Value;
                     if (st.MoonAt > now) return false; // one's still filling
                     st.MoonFrom = now + SpellPlans.MoonClasp;
-                    st.MoonAt = st.MoonFrom + SpellPlans.MoonFill;
+                    st.MoonAt = st.MoonFrom + SpellPlans.MoonTime;
+                    st.MoonFill = 0f;
                     caster.Status.Value = st;
                     WorldNet.ServerGather(caster.NetworkObjectId, false, now, SpellPlans.MoonClasp);
                     return true;
@@ -121,21 +125,28 @@ namespace SuddenMageEncounter
             WorldsS.RemoveAll(w => w.caster == pc && w.phase == WorldClasping);
         }
 
-        /// <summary>Knocked down at any point: the moon goes, the sun is over.</summary>
+        /// <summary>Knocked down at any point: the sun is over.</summary>
         static void InterruptTarot3(PlayerController pc, bool knocked)
         {
             if (!knocked || !pc.IsSpawned) return;
             var st = pc.Status.Value;
-            if (st.MoonAt == 0 && st.SunUntil == 0) return;
-            st.MoonAt = st.SunUntil = 0;
+            if (st.SunUntil == 0) return;
+            st.SunUntil = 0;
             pc.Status.Value = st;
         }
 
         /// <summary>A practice chamber is being reset: what's going on in it (or by its player) is dropped.</summary>
+        /// <summary>A player died: their next Star is back to four.</summary>
+        static void ForgetStars(Combatant c)
+        {
+            if (c is PlayerController pc) StarBonus.Remove(pc);
+        }
+
         static void ClearTarot3(PlayerController pc, System.Func<Vector3, bool> inside)
         {
             PendingStarsS.RemoveAll(p => p.caster == pc);
-            PulsesS.RemoveAll(p => p.caster == pc || inside(p.feet));
+            if (pc != null) StarBonus.Remove(pc);
+
             foreach (var s in StarsS.ToArray()) if (s.caster == pc) EndStars(s, true);
             WorldsS.RemoveAll(w => w.Fighter(pc) || inside(w.center));
         }
@@ -156,7 +167,7 @@ namespace SuddenMageEncounter
         static void SendStar(StarState s, Vector3 dir)
         {
             var net = WorldNet.Instance;
-            if (net == null || s.next >= SpellPlans.StarCount || !net.Stars.TryGetValue(s.id, out var fx)) return;
+            if (net == null || s.next >= s.count || !net.Stars.TryGetValue(s.id, out var fx)) return;
             if (dir.sqrMagnitude < 1e-4f) dir = ViewDir(s.caster);
             int k = s.next++;
             Vector3 from = WorldNet.StarPosition(fx, k, WorldNet.Now);
@@ -170,10 +181,10 @@ namespace SuddenMageEncounter
         {
             var net = WorldNet.Instance;
             if (net != null && net.Stars.TryGetValue(s.id, out var fx))
-                for (int k = flying ? 0 : s.next; k < SpellPlans.StarCount; k++)
+                for (int k = flying ? 0 : s.next; k < s.count; k++)
                     if (fx.stars[k].Alive) WorldNet.ServerStarEnd(s.id, k, WorldNet.StarPosition(fx, k, WorldNet.Now), false);
             if (flying) StarsS.Remove(s);
-            s.next = SpellPlans.StarCount;
+            s.next = s.count;
         }
 
         static void TickStars(WorldNet net, double now)
@@ -184,22 +195,24 @@ namespace SuddenMageEncounter
                 if (now < p.at) continue;
                 PendingStarsS.RemoveAt(i);
                 if (p.caster == null || !p.caster.IsAlive) continue;
-                int id = WorldNet.ServerStars(p.caster.NetworkObjectId, now);
-                if (id != 0) StarsS.Add(new StarState { id = id, caster = p.caster, start = now });
+                StarBonus.TryGetValue(p.caster, out int extra);
+                int count = Mathf.Min(SpellPlans.StarCount + extra, SpellPlans.StarMax);
+                int id = WorldNet.ServerStars(p.caster.NetworkObjectId, now, count);
+                if (id != 0) StarsS.Add(new StarState { id = id, caster = p.caster, start = now, count = count });
             }
             for (int i = StarsS.Count - 1; i >= 0; i--)
             {
                 var s = StarsS[i];
                 if (!net.Stars.TryGetValue(s.id, out var fx)) { StarsS.RemoveAt(i); continue; }
                 bool gone = s.caster == null || !s.caster.IsAlive;
-                if (s.next < SpellPlans.StarCount)
+                if (s.next < s.count)
                 {
                     if (gone) EndStars(s, false);
                     // the owner never said where (lag): it goes where they're facing
                     else if (now > s.start + SpellPlans.StarEvery * (s.next + 1) + 0.3) SendStar(s, ViewDir(s.caster));
                 }
-                bool any = s.next < SpellPlans.StarCount;
-                for (int k = 0; k < SpellPlans.StarCount; k++)
+                bool any = s.next < s.count;
+                for (int k = 0; k < s.count; k++)
                 {
                     var b = fx.stars[k];
                     if (!b.launched || !b.Alive) continue;
@@ -229,7 +242,14 @@ namespace SuddenMageEncounter
                 if (victim != null)
                 {
                     bool touched = !Invulnerable(victim);
-                    Hit(victim, by, SpellPlans.StarDamage, hit.point, Vector3.zero, 0f);
+                    Hit(victim, by, SpellPlans.StarDamage, hit.point, Vector3.zero, 0f, from: hit.point - step.normalized);
+                    // the caster's own star hit an enemy: their next cast gets one more (once per cast)
+                    if (touched && !s.scored && s.caster != null && s.owner[k] == s.caster.NetworkObjectId && !Combatant.Allies(s.caster, victim))
+                    {
+                        s.scored = true;
+                        StarBonus.TryGetValue(s.caster, out int extra);
+                        StarBonus[s.caster] = Mathf.Min(extra + 1, SpellPlans.StarMax - SpellPlans.StarCount);
+                    }
                     if (touched && victim.IsAlive)
                     {
                         // seen through everything for a while (another star starts it over)
@@ -252,7 +272,7 @@ namespace SuddenMageEncounter
             foreach (var s in StarsS)
             {
                 if (!net.Stars.TryGetValue(s.id, out var fx)) continue;
-                for (int k = 0; k < SpellPlans.StarCount; k++)
+                for (int k = 0; k < fx.stars.Length; k++)
                 {
                     var b = fx.stars[k];
                     if (!b.launched || !b.Alive || s.owner[k] == me) continue;
@@ -269,6 +289,7 @@ namespace SuddenMageEncounter
 
         // ------------------------------------------------------------------ The Moon
 
+        /// <summary>Time's up before it was full: it goes.</summary>
         static void TickMoons(double now)
         {
             foreach (var pc in PlayerController.All)
@@ -278,24 +299,21 @@ namespace SuddenMageEncounter
                 if (st.MoonAt <= 0 || now < st.MoonAt) continue;
                 st.MoonAt = 0;
                 pc.Status.Value = st;
-                if (!pc.IsAlive) continue;
-                PulsesS.Add(new PulseState { caster = pc, feet = pc.FeetPosition, start = now });
-                WorldNet.ServerMoonPulse(pc.NetworkObjectId, pc.FeetPosition, now);
             }
-            for (int i = PulsesS.Count - 1; i >= 0; i--)
-            {
-                var p = PulsesS[i];
-                float t = (float)(now - p.start), r = SpellPlans.MoonRadiusAt(t);
-                foreach (var c in Combatant.Registry)
-                {
-                    if (c == null || !c.IsAlive || p.touched.Contains(c)) continue;
-                    Vector3 d = c.FeetPosition - p.feet;
-                    if (c != p.caster && (Mathf.Abs(d.y) > SpellPlans.MoonReachUp || new Vector2(d.x, d.z).magnitude > r)) continue;
-                    p.touched.Add(c);
-                    c.ServerHeal(SpellPlans.MoonHeal, SpellPlans.MoonHealTime);
-                }
-                if (t >= SpellPlans.MoonSpread) PulsesS.RemoveAt(i);
-            }
+        }
+
+        /// <summary>A player hurt an enemy: their moon fills; full, they're healed.</summary>
+        static void MoonFills(PlayerController by, Combatant victim, float dmg, double now)
+        {
+            var st = by.Status.Value;
+            if (!st.Moon(now) || Combatant.Allies(by, victim) || Combatant.Teammates(by, victim)) return;
+            st.MoonFill = Mathf.Min(1f, st.MoonFill + dmg / SpellPlans.MoonNeeds);
+            bool full = st.MoonFill >= 0.9999f;
+            if (full) st.MoonAt = 0;
+            by.Status.Value = st;
+            if (!full) return;
+            by.ServerHeal(SpellPlans.MoonHeal, SpellPlans.MoonHealTime);
+            WorldNet.ServerMoonFull(by.NetworkObjectId);
         }
 
         // ------------------------------------------------------------------ The Sun
@@ -373,9 +391,9 @@ namespace SuddenMageEncounter
                         if (now >= w.readyAt) FightInWorld(w, now);
                         break;
                     default:
-                        if (!both) { EndWorld(w); break; }
+                        // one of them dead, or time's up: the dome shatters
+                        if (!both || now >= w.readyAt + SpellPlans.WorldLife) { EndWorld(w); break; }
                         KeepInWorld(w, now);
-                        TickWorldDamage(w, now);
                         break;
                 }
             }
@@ -393,9 +411,10 @@ namespace SuddenMageEncounter
             int ys = top == int.MinValue ? under.y : top;
             w.body = SpellPlans.GroundValue(world, under.x, ys, under.z, false);
             w.top = SpellPlans.GroundValue(world, under.x, ys, under.z, true);
-            // the sphere half sunk into the ground there
-            w.cell = world.CellOf(feet + Vector3.up * SpellPlans.WorldLift);
+            // the sphere half sunk into the ground there (or the nearest place it fits)
+            w.cell = WorldSpot(world, world.CellOf(feet + Vector3.up * SpellPlans.WorldLift));
             w.center = world.CellCenter(w.cell);
+            w.caster.Health.Value = w.caster.MaxHealth;
             // opposite sides, facing each other
             Vector3 dir = w.target.transform.position - w.caster.transform.position;
             dir.y = 0f;
@@ -412,6 +431,61 @@ namespace SuddenMageEncounter
             w.phase = WorldCrushing;
             Take(w.caster, w.caster, w.spotA, w.yawA, now, w.readyAt);
             Take(w.caster, w.target, w.spotB, w.yawB, now, w.readyAt);
+            return true;
+        }
+
+        // ---------------- somewhere it fits
+
+        /// <summary>The cell nearest <paramref name="want"/> the sphere can be raised round: nothing unbreakable in its upper half, in the arena, clear of any other World. (Nowhere: there, and what won't break stays in it.)</summary>
+        static Vector3Int WorldSpot(VoxelWorld world, Vector3Int want)
+        {
+            if (WorldFits(world, want)) return want;
+            float S = VoxelWorld.Size;
+            var spots = new List<(float far, Vector3Int cell)>();
+            for (float across = 0f; across <= SpellPlans.WorldSearch; across += 2.5f)
+            {
+                int turns = across <= 0f ? 1 : Mathf.Clamp(Mathf.CeilToInt(across * 2f), 6, 32);
+                for (int k = 0; k < turns; k++)
+                for (float up = 0f; up <= SpellPlans.WorldSearchUp; up += 2f)
+                {
+                    float a = k * Mathf.PI * 2f / turns;
+                    spots.Add((across + up * 1.5f, want + new Vector3Int(Mathf.RoundToInt(Mathf.Cos(a) * across / S), Mathf.RoundToInt(up / S), Mathf.RoundToInt(Mathf.Sin(a) * across / S))));
+                }
+            }
+            spots.Sort((x, y) => x.far.CompareTo(y.far));
+            foreach (var s in spots) if (WorldFits(world, s.cell)) return s.cell;
+            return want;
+        }
+
+        static readonly Collider[] _worldIn = new Collider[64];
+
+        static bool WorldFits(VoxelWorld world, Vector3Int c)
+        {
+            Vector3 center = world.CellCenter(c);
+            if (ArenaLimits.Outside(center, ArenaLimits.Margin + 2f, false) || WorldNet.WorldAround(center, SpellPlans.WorldRadius + 1f) != null) return false;
+            // structures that aren't voxels at all
+            int n = Physics.OverlapSphereNonAlloc(center + Vector3.up * 1f, SpellPlans.WorldRadius - 1f, _worldIn, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < n; i++)
+            {
+                var s = _worldIn[i];
+                // (not ground on the move, rubble, or a portal)
+                if (s == null || VoxelWorld.IsVoxelCollider(s) || s.attachedRigidbody != null || s.bounds.max.y <= center.y) continue;
+                if (s.GetComponentInParent<PortalView>() == null && s.GetComponentInParent<VoxelBody>() == null && s.GetComponentInParent<TrainCar>() == null) return false;
+            }
+            // coarsely first (most places that won't do show it at once), then every cell
+            return ClearAbove(world, c, 3) && ClearAbove(world, c, 1);
+        }
+
+        static bool ClearAbove(VoxelWorld world, Vector3Int c, int step)
+        {
+            int r = SpellPlans.WorldCells;
+            for (int y = 1; y <= r; y += step)
+            for (int x = -r; x <= r; x += step)
+            for (int z = -r; z <= r; z += step)
+            {
+                if (x * x + y * y + z * z > r * r) continue;
+                if (world.IsIndestructible(world.Get(c.x + x, c.y + y, c.z + z))) return false;
+            }
             return true;
         }
 
@@ -466,7 +540,7 @@ namespace SuddenMageEncounter
                 Vector3 away = new Vector3(d.x, 0f, d.z);
                 away = away.sqrMagnitude > 0.01f ? away.normalized : Random.onUnitSphere;
                 away.y = 0f;
-                Hit(c, w.caster, 0f, c.transform.position, away.normalized * SpellPlans.WorldPush + Vector3.up * SpellPlans.WorldPushUp, SpellPlans.WorldPushRagdoll);
+                Hit(c, w.caster, 0f, c.transform.position, away.normalized * SpellPlans.WorldPush + Vector3.up * SpellPlans.WorldPushUp, SpellPlans.WorldPushRagdoll, from: w.center, card: CardId.TheWorld);
             }
         }
 
@@ -525,19 +599,7 @@ namespace SuddenMageEncounter
             }
         }
 
-        /// <summary>After 20 s: 5 a second to both. After 30 s: 10, and so on.</summary>
-        static void TickWorldDamage(WorldState w, double now)
-        {
-            double age = now - w.readyAt;
-            if (age < SpellPlans.WorldGrace) return;
-            int due = (int)(age - SpellPlans.WorldGrace) + 1;
-            if (w.ticks >= due) return;
-            w.ticks = due;
-            float dmg = SpellPlans.WorldTickDamage * (1f + Mathf.Floor((float)((age - SpellPlans.WorldGrace) / SpellPlans.WorldTickEvery)));
-            w.caster.ServerApplyDamage(dmg, Combatant.NoAttacker, w.caster.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
-            if (Combatant.Teammates(w.caster, w.target)) dmg *= SpellPlans.TeamDamage;
-            if (w.target != null && w.target.IsAlive) w.target.ServerApplyDamage(dmg, Combatant.NoAttacker, w.target.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
-        }
+
 
         static void EndWorld(WorldState w)
         {

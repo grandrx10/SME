@@ -6,12 +6,12 @@ using Random = UnityEngine.Random;
 namespace SuddenMageEncounter
 {
     /// <summary>
-    /// Looks for Wheel of Fortune, Justice, Death, the breaths, the Grapple Hook and the Necromancy cards: flat HDR glow
+    /// Looks for Wheel of Fortune's die, Justice, Death, the breaths, the Grapple Hook and the Necromancy cards: flat HDR glow
     /// with ink outlines, things shrink away rather than fade. Local-only; drawn by every peer from the op stream.
     /// </summary>
     public static class ArcanaVfx
     {
-        public static readonly Color Steel = new(2.2f, 2.35f, 2.6f, 1f);           // Weapon: steel silver-white
+
         public static readonly Color GoldPurple = new(2.6f, 1.2f, 2.8f, 1f);       // Wheel 6
         public static readonly Color Doom = new(4f, 0.2f, 0.12f, 1f);              // Wheel 0
         public static readonly Color Pip = new(3.2f, 2.4f, 0.6f, 1f);              // the die's spots (gold on mahogany)
@@ -19,7 +19,7 @@ namespace SuddenMageEncounter
         public static readonly Color Frost = new(2.6f, 2.9f, 3.1f, 1f);
         public static readonly Color Blood = new(0.75f, 0.03f, 0.04f, 1f);
 
-        /// <summary>Spots of a die face showing <paramref name="n"/> (0..6), on a unit face, in face coordinates (-0.5..0.5).</summary>
+        /// <summary>Spots of a die face showing <paramref name="n"/> (0..7), on a unit face, in face coordinates (-0.5..0.5).</summary>
         public static IEnumerable<Vector2> Pips(int n)
         {
             const float a = 0.27f;
@@ -31,6 +31,8 @@ namespace SuddenMageEncounter
                 case 4: yield return new(-a, -a); yield return new(a, a); yield return new(-a, a); yield return new(a, -a); break;
                 case 5: yield return new(-a, -a); yield return new(a, a); yield return new(-a, a); yield return new(a, -a); yield return Vector2.zero; break;
                 case 6:
+                case 7:
+                    if (n == 7) yield return Vector2.zero;
                     yield return new(-a, -a); yield return new(-a, 0f); yield return new(-a, a);
                     yield return new(a, -a); yield return new(a, 0f); yield return new(a, a);
                     break;
@@ -52,7 +54,7 @@ namespace SuddenMageEncounter
                 Vector3 v = Vector3.Cross(normal, u);
                 if (n == 0)
                 {
-                    // the 1-in-100: a red cross
+                    // a red cross
                     for (int k = 0; k < 2; k++)
                     {
                         var bar = Glow.Piece(root, Glow.CubeMesh, Doom, "Cross", false);
@@ -104,7 +106,7 @@ namespace SuddenMageEncounter
                 var go = new GameObject(name) { layer = Layers.Fx };
                 go.transform.SetParent(parent, false);
                 var l = go.AddComponent<LineRenderer>();
-                l.sharedMaterial = m;
+                Glow.SetStrip(l, m);
                 l.widthMultiplier = w;
                 l.numCapVertices = 2;
                 l.useWorldSpace = true;
@@ -158,8 +160,6 @@ namespace SuddenMageEncounter
             float end = SpellPlans.WheelRoll + SpellPlans.WheelShow;
             if (t >= end || c == null || !c.IsAlive)
             {
-                // a 3: it's thrown (the flying die takes over at once); anything else: it shrinks away
-                if (_fx.result == 3 && t >= end) { Destroy(gameObject); return; }
                 ArcanaVfx.ShrinkAway(gameObject, 0.15f);
                 enabled = false;
                 return;
@@ -187,90 +187,11 @@ namespace SuddenMageEncounter
         }
     }
 
-    /// <summary>The die thrown on a roll of 3: tumbling along its flight.</summary>
-    public class DieView : MonoBehaviour
-    {
-        WorldNet.DieFx _fx;
-
-        public static DieView Create(WorldNet.DieFx fx)
-        {
-            var go = new GameObject("ThrownDie") { layer = Layers.Fx };
-            var v = go.AddComponent<DieView>();
-            v._fx = fx;
-            ArcanaVfx.Die(go.transform, 3);
-            go.transform.localScale = Vector3.one * SpellPlans.DieSize;
-            Glow.Trail(go.transform, TarotVfx.Mahogany, 0.2f, 0.25f);
-            v.LateUpdate();
-            return v;
-        }
-
-        void LateUpdate()
-        {
-            if (_fx.ended >= 0)
-            {
-                foreach (var t in GetComponentsInChildren<TrailRenderer>()) if (t.transform.parent == transform) Glow.DropTrail(t);
-                Destroy(gameObject);
-                return;
-            }
-            double now = WorldNet.Now;
-            transform.position = WorldNet.DiePosition(_fx, now);
-            float a = (float)(now - _fx.t);
-            transform.rotation = Quaternion.Euler(a * 720f, a * 300f, 0f);
-        }
-    }
-
-    // ====================================================================== Justice
-
-    /// <summary>A golden mahogany tether from the caster's chest to the target's: a glowing cord, sagging a little.</summary>
-    public class JusticeView : MonoBehaviour
-    {
-        WorldNet.JusticeFx _fx;
-        (LineRenderer core, LineRenderer edge) _cord;
-        readonly List<Vector3> _pts = new();
-        float _grow;
-        static readonly Color Cord = Color.Lerp(TarotVfx.Gold, TarotVfx.Mahogany, 0.45f);
-
-        public static JusticeView Create(WorldNet.JusticeFx fx)
-        {
-            var go = new GameObject("JusticeTether") { layer = Layers.Fx };
-            var v = go.AddComponent<JusticeView>();
-            v._fx = fx;
-            v._cord = ArcanaVfx.Line(go.transform, Cord, 0.08f);
-            return v;
-        }
-
-        void LateUpdate()
-        {
-            var a = WorldNet.FindCombatant(_fx.caster);
-            var b = WorldNet.FindCombatant(_fx.target);
-            bool live = _fx.ended < 0 && a != null && b != null;
-            _grow = Mathf.MoveTowards(_grow, live ? 1f : 0f, Time.deltaTime / (live ? 0.18f : 0.15f));
-            if (!live && _grow <= 0f)
-            {
-                if (_fx.ended >= 0 && !Debris.Suppressed) HierophantView.Spark(_fx.endPoint, 0.6f); // it snaps
-                Destroy(gameObject);
-                return;
-            }
-            Vector3 from = a != null ? SpellPlans.LoversChest(a) : transform.position, to = b != null ? SpellPlans.LoversChest(b) : from;
-            transform.position = from;
-            Vector3 span = to - from;
-            float len = span.magnitude, sag = Mathf.Min(0.6f, len * 0.05f);
-            _pts.Clear();
-            const int n = 24;
-            for (int i = 0; i <= n; i++)
-            {
-                float u = i / (float)n * _grow;
-                _pts.Add(from + span * u + Vector3.down * (sag * 4f * u * (1f - u)) + Vector3.up * (0.04f * Mathf.Sin(Time.time * 8f + u * 12f)));
-            }
-            ArcanaVfx.SetLine(_cord, _pts);
-        }
-    }
-
     // ====================================================================== Death
 
     /// <summary>
-    /// Death's aura: one black ring on the ground round the caster, spreading out to its full size, following them.
-    /// Shrinks away when it ends.
+    /// Death's aura: a ring of arcane symbols in black on the ground round the caster, spreading out to its full size,
+    /// turning slowly, following them. Shrinks away when it ends.
     /// </summary>
     public class DeathView : MonoBehaviour
     {
@@ -289,7 +210,7 @@ namespace SuddenMageEncounter
             ring.transform.localPosition = Vector3.up * 0.06f;
             v._ringT = ring.transform;
             v._ring = new RuneDrawing(ring);
-            v._ring.AddRune(new List<List<Vector2>> { TarotVfx.Ring(1f, 0f, 96) }, SpellPlans.DeathRadius * 2f, 0.12f);
+            v._ring.AddRune(Symbols(), SpellPlans.DeathRadius * 2f, 0.12f);
             v._ring.Progress = 1f;
             v._ring.SetColour(Black);
             ring.transform.localScale = Vector3.zero;
@@ -312,6 +233,27 @@ namespace SuddenMageEncounter
             }
             else scale = t < 0f ? 0f : 1f - Mathf.Pow(1f - Mathf.Clamp01(t / SpellPlans.DeathGrow), 3f);
             _ringT.localScale = Vector3.one * Mathf.Max(0.001f, scale);
+            _ringT.localRotation = Quaternion.Euler(0f, t * 14f, 0f);
+        }
+
+        /// <summary>Two rings, the outer one exactly the aura's edge, with symbols all the way round between them.</summary>
+        static List<List<Vector2>> Symbols()
+        {
+            const int n = 22;
+            const float inner = 0.8f, middle = 0.9f, size = 0.075f;
+            var s = new List<List<Vector2>> { TarotVfx.Ring(1f, 0f, 96), TarotVfx.Ring(inner, 0f, 84) };
+            for (int i = 0; i < n; i++)
+            {
+                float a = i / (float)n * Mathf.PI * 2f;
+                Vector2 radial = new(Mathf.Cos(a), Mathf.Sin(a)), tangent = new(-radial.y, radial.x);
+                foreach (var line in RuneGlyphs.Rune(i))
+                {
+                    var l = new List<Vector2>(line.Count);
+                    foreach (var p in line) l.Add(radial * middle + (tangent * -p.x + radial * p.y) * size);
+                    s.Add(l);
+                }
+            }
+            return s;
         }
 
         void OnDestroy() => _ring?.Release();
@@ -327,13 +269,14 @@ namespace SuddenMageEncounter
     public class BreathView : MonoBehaviour
     {
         WorldNet.BreathFx _fx;
-        class Bit { public Transform t; public Vector3 v, spin; public float age, life, size; }
+        class Bit { public Transform t; public Vector3 v, spin; public float age, life, size; public bool heavy; }
         readonly List<Bit> _bits = new();
         float _owed;
+        ArcaneCharge _charge;
 
         public static BreathView Create(WorldNet.BreathFx fx)
         {
-            var go = new GameObject(fx.kind == 0 ? "FlameThrower" : "IcyBreath") { layer = Layers.Fx };
+            var go = new GameObject(fx.kind == 0 ? "FlameThrower" : fx.kind == 2 ? "BlackBile" : "IcyBreath") { layer = Layers.Fx };
             var v = go.AddComponent<BreathView>();
             v._fx = fx;
             return v;
@@ -345,14 +288,24 @@ namespace SuddenMageEncounter
             float dt = Time.deltaTime;
             var c = WorldNet.FindCombatant(_fx.caster);
             bool going = _fx.ended < 0 && now >= _fx.start && c != null && c.IsAlive;
-            bool ice = _fx.kind == 1;
+            bool ice = _fx.kind == 1, bile = _fx.kind == 2;
+            // the Flame Thrower: fire gathering in the hands before it comes
+            if (!ice && !bile && _charge == null && _fx.ended < 0 && now < _fx.start && c != null)
+                _charge = ArcaneCharge.Create(() =>
+                {
+                    var who = WorldNet.FindCombatant(_fx.caster);
+                    return who != null ? (SpellVisuals.RightHand(who) + SpellVisuals.LeftHand(who)) * 0.5f : transform.position;
+                }, () => this != null && _fx.ended < 0, SpellPlans.FlameStart, FireVfx.Orange, false);
+            if (_charge != null && now >= _fx.start) { _charge.Release(); _charge = null; }
             if (going)
             {
-                SpellPlans.BreathFrom(c, out var origin, out var dir);
-                if (!ice && c is PlayerController) origin = (SpellVisuals.RightHand(c) + SpellVisuals.LeftHand(c)) * 0.5f + dir * 0.15f;
-                float reach = ice ? SpellPlans.IceBreathReach : SpellPlans.FlameReach;
-                float angle = ice ? SpellPlans.IceBreathAngle : SpellPlans.FlameAngle;
-                _owed += (ice ? 120f : 160f) * dt;
+                Vector3 origin, dir;
+                if (bile) SpellPlans.BileFrom(c, out origin, out dir); // Death: black bile out of the mouth, forward and down
+                else SpellPlans.BreathFrom(c, out origin, out dir);
+                if (!ice && !bile && c is PlayerController) origin = (SpellVisuals.RightHand(c) + SpellVisuals.LeftHand(c)) * 0.5f + dir * 0.15f;
+                float reach = bile ? SpellPlans.BileReach : ice ? SpellPlans.IceBreathReach : SpellPlans.FlameReach;
+                float angle = bile ? SpellPlans.BileAngle : ice ? SpellPlans.IceBreathAngle : SpellPlans.FlameAngle;
+                _owed += (bile ? 90f : ice ? 120f : 160f) * dt;
                 while (_owed >= 1f)
                 {
                     _owed -= 1f;
@@ -364,13 +317,15 @@ namespace SuddenMageEncounter
                     Vector3 d = (dir + side * r.x + up * r.y).normalized;
                     float life = Random.Range(0.3f, 0.45f);
                     bool flake = ice && Random.value < 0.4f;
-                    var t = flake ? Flake(transform) : Glow.Piece(transform, Glow.CubeMesh, ice ? (Random.value < 0.5f ? ArcanaVfx.Ice : ArcanaVfx.Frost) : FireVfx.Random3(), "Bit");
+                    Color col = bile ? (Random.value < 0.5f ? SpellPlans.BileBlack : SpellPlans.BileBody)
+                        : ice ? (Random.value < 0.5f ? ArcanaVfx.Ice : ArcanaVfx.Frost) : FireVfx.Random3();
+                    var t = flake ? Flake(transform) : Glow.Piece(transform, Glow.CubeMesh, col, "Bit");
                     t.position = origin + d * Random.Range(0f, 0.3f);
                     t.rotation = Random.rotation;
                     _bits.Add(new Bit
                     {
-                        t = t, v = d * (reach / life * Random.Range(0.85f, 1.05f)) + (ice ? Vector3.zero : Vector3.up * 1.5f),
-                        spin = Random.insideUnitSphere * 540f, life = life, size = Random.Range(0.12f, 0.22f) * (flake ? 1.6f : 1f),
+                        t = t, v = d * (reach / life * Random.Range(0.85f, 1.05f)) + (ice || bile ? Vector3.zero : Vector3.up * 1.5f),
+                        spin = Random.insideUnitSphere * 540f, life = life, size = Random.Range(0.12f, 0.22f) * (flake ? 1.6f : 1f), heavy = bile,
                     });
                 }
             }
@@ -380,6 +335,7 @@ namespace SuddenMageEncounter
                 b.age += dt;
                 if (b.age >= b.life) { Destroy(b.t.gameObject); _bits.RemoveAt(i); continue; }
                 b.v *= Mathf.Exp(-1.2f * dt);
+                if (b.heavy) b.v += Vector3.down * 9f * dt; // (bile falls)
                 b.t.position += b.v * dt;
                 b.t.rotation *= Quaternion.Euler(b.spin * dt);
                 float u = b.age / b.life;
@@ -527,6 +483,42 @@ namespace SuddenMageEncounter
             };
             RuneSpew.Create(me, alive, SpellPlans.SkinTime, SpellPlans.SkinGrey, 18f, new Vector3(0.35f, 0.5f, 0.35f));
             RuneSpew.Create(body, alive, SpellPlans.SkinTime, SpellPlans.SkinGrey, 18f, new Vector3(0.4f, 0.2f, 0.4f));
+        }
+
+        /// <summary>Justice: mahogany symbols pouring off the caster and the corpse (stops if they're knocked down).</summary>
+        public static void Judging(ulong caster, ulong corpse, double start)
+        {
+            var dead = WorldNet.FindCombatant(corpse);
+            if (dead != null) dead.HoldCorpse(SpellPlans.JusticeCast + 0.6f);
+            Func<bool> alive = () =>
+            {
+                var c = WorldNet.FindCombatant(caster);
+                return c != null && c.IsAlive && !WorldNet.Fizzled(caster, start, WorldNet.Now) && WorldNet.Now < start + SpellPlans.JusticeCast;
+            };
+            Func<Vector3> hands = () =>
+            {
+                var c = WorldNet.FindCombatant(caster);
+                return c != null ? (SpellVisuals.RightHand(c) + SpellVisuals.LeftHand(c)) * 0.5f : Vector3.zero;
+            };
+            Func<Vector3> body = () =>
+            {
+                var c = WorldNet.FindCombatant(corpse);
+                return c != null ? SpellServer.CorpsePoint(c) : Vector3.zero;
+            };
+            RuneSpew.Create(hands, alive, SpellPlans.JusticeCast, SpellPlans.JusticeGlow, 14f);
+            RuneSpew.Create(body, alive, SpellPlans.JusticeCast, SpellPlans.JusticeGlow, 18f, new Vector3(0.4f, 0.2f, 0.4f));
+        }
+
+        /// <summary>Justice is done: a mahogany burst off the body and the caster.</summary>
+        public static void Judged(ulong caster, Vector3 body)
+        {
+            var burst = new EnergyBurst.Settings
+            {
+                flashSize = 1.2f, flashTime = 0.18f, sparkCount = 12, sparkSize = 0.28f, sparkSpeed = new Vector2(3f, 7f), sparkLife = 0.35f, colour = SpellPlans.JusticeGlow,
+            };
+            EnergyBurst.Create(body, burst);
+            var c = WorldNet.FindCombatant(caster);
+            if (c != null) EnergyBurst.Create(c.transform.position + Vector3.up * 0.3f, burst);
         }
 
         /// <summary>Skinwalker's done: a grey burst off each, the corpse shrinking away as the caster comes up in its skin.</summary>
@@ -744,7 +736,7 @@ namespace SuddenMageEncounter
             Vector3 neck = SpellPlans.LoversChest(_c) + Vector3.up * 0.38f * _c.transform.localScale.y;
             if (on)
             {
-                _ropeDown = Mathf.Clamp01(1f - (float)(st.HangFrom - now) / SpellPlans.HangedDrop);
+                _ropeDown = SpellPlans.HangedDrop <= 0f ? 1f : Mathf.Clamp01(1f - (float)(st.HangFrom - now) / SpellPlans.HangedDrop);
                 _ropeTop = neck + Vector3.up * SpellPlans.HangedRopeUp;
             }
             else _ropeDown = Mathf.MoveTowards(_ropeDown, 0f, Time.deltaTime / 0.3f);

@@ -6,13 +6,17 @@ namespace SuddenMageEncounter
     /// <summary>
     /// Arcane Judgment: a rune circle written onto the ground over a second (double outer ring, inner ring,
     /// runes facing outward with diamonds between them), a bright flare, then an orbital laser column for two
-    /// seconds that shrinks away. All glow + ink outline, nothing fades. Judgement (Tarot) is the same in mahogany.
+    /// seconds that shrinks away. All glow + ink outline, nothing fades. Judgement (Tarot) is written the same in mahogany,
+    /// then a column exactly as big as what it flattens stands on it for an instant and is pressed into the ground.
     /// </summary>
     public class JudgmentView : MonoBehaviour
     {
         WorldNet.JudgmentFx _fx;
         RuneDrawing _circle;
         Transform _circleT, _beam, _ink, _core;
+        RuneDrawing _lid;
+        Transform _lidT;
+        bool _slammed;
         readonly List<Transform> _motes = new();
         float _fizzledAt = -1f;
         static Mesh _tube;
@@ -118,6 +122,17 @@ namespace SuddenMageEncounter
             v._ink = TubePiece(go.transform, "BeamOutline", Glow.Ink, 1f); // back faces only: an inked rim round the beam
             v._core = TubePiece(go.transform, "BeamCore", v.Tarot ? TarotCore : BeamCore, 2f);
             v._beam.localScale = v._ink.localScale = v._core.localScale = Vector3.zero;
+            if (v.Tarot)
+            {
+                var lid = new GameObject("Lid") { layer = Layers.Fx };
+                lid.transform.SetParent(go.transform, false);
+                v._lidT = lid.transform;
+                v._lid = new RuneDrawing(lid);
+                v._lid.AddRune(CircleStrokes(), SpellPlans.TarotJudgmentRadius * 2f, 0.18f);
+                v._lid.Progress = 1f;
+                v._lid.SetColour(TarotFlare);
+                lid.SetActive(false);
+            }
             return v;
         }
 
@@ -177,7 +192,6 @@ namespace SuddenMageEncounter
             float draw = SpellPlans.JudgmentDrawOf(_fx.kind), from = SpellPlans.JudgmentStartOf(_fx.kind), until = SpellPlans.JudgmentEndOf(_fx.kind);
             if (t > until + SpellPlans.JudgmentFade || WorldNet.Instance == null) { Destroy(gameObject); return; }
             float R = SpellPlans.JudgmentRadiusOf(_fx.kind);
-            transform.position = _fx.CenterAt(WorldNet.Now); // (Judgement's slides forward)
 
             // the caster was knocked down while drawing it: the half-written circle shrinks away, no beam
             if (_fizzledAt < 0f && WorldNet.Fizzled(_fx.caster, _fx.start, _fx.start + draw)) _fizzledAt = t;
@@ -193,6 +207,8 @@ namespace SuddenMageEncounter
             // writing the circle, slowly turning
             _circle.Progress = t / draw;
             _circleT.localRotation = Quaternion.Euler(0f, t * 12f, 0f);
+
+            if (Tarot) { Slam(t - from, R); return; }
 
             // flare: the circle burns white-hot just before the beam
             bool flare = t >= draw && t < from;
@@ -243,6 +259,45 @@ namespace SuddenMageEncounter
             }
         }
 
-        void OnDestroy() => _circle?.Release();
+        /// <summary>Judgement: the column stands, full size, then it's pressed flat, the circle riding down on top of it.</summary>
+        void Slam(float t, float R)
+        {
+            if (t < 0f) { _circle.SetColour(Line); return; }
+            if (!_slammed)
+            {
+                _slammed = true;
+                _lidT.gameObject.SetActive(true);
+                if (!Debris.Suppressed)
+                    EnergyBurst.Create(transform.position + Vector3.up * 0.3f, new EnergyBurst.Settings
+                    {
+                        flashSize = 0f, flashTime = 0.1f, sparkCount = 26, sparkSize = 0.5f, sparkSpeed = new Vector2(6f, 14f), sparkLife = 0.4f, colour = TarotVfx.Mahogany,
+                    });
+            }
+            float u = Mathf.Clamp01((t - 0.06f) / SpellPlans.TarotJudgmentPress), gone = Mathf.Clamp01((t - 0.06f - SpellPlans.TarotJudgmentPress) / SpellPlans.TarotJudgmentLeave);
+            if (gone >= 1f) { Destroy(gameObject); return; }
+            float low = -SpellPlans.TarotJudgmentDown, top = Mathf.Lerp(SpellPlans.TarotJudgmentUp, low + 0.15f, u * u), r = R * (1f - gone) * (1f - gone);
+            _circle.SetColour(TarotFlare);
+            _circleT.localScale = _lidT.localScale = Vector3.one * Mathf.Max(0.001f, (1f - gone) * (1f - gone));
+            _lidT.localPosition = Vector3.up * top;
+            _lidT.localRotation = _circleT.localRotation;
+            float h = Mathf.Max(0.001f, top - low);
+            foreach (var b in new[] { _beam, _ink }) b.localPosition = Vector3.up * low;
+            _beam.localScale = new Vector3(Mathf.Max(0.001f, r - 0.08f), h, Mathf.Max(0.001f, r - 0.08f));
+            _ink.localScale = new Vector3(r, h, r);
+            _core.localScale = Vector3.zero;
+            // (from inside, the ink rim would be a dark wall all round you)
+            var cam = Camera.main;
+            if (cam != null)
+            {
+                Vector3 d = cam.transform.position - transform.position;
+                _ink.gameObject.SetActive(new Vector2(d.x, d.z).magnitude > r + 0.3f);
+            }
+        }
+
+        void OnDestroy()
+        {
+            _circle?.Release();
+            _lid?.Release();
+        }
     }
 }

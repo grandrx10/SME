@@ -108,6 +108,7 @@ namespace SuddenMageEncounter
             if (RisingWater.InAny(p, pad)) return true; // the map's own
             foreach (var s in WavesS)
                 if (InWave(s, p, now, pad)) return true;
+            if (Splashes.Count > 0 && InSplash(p, pad)) return true; // a Bubble Bomb going off
             return false;
         }
 
@@ -115,7 +116,7 @@ namespace SuddenMageEncounter
         static bool WaterAlong(Vector3 a, Vector3 b, float pad, out Vector3 at)
         {
             at = b;
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && Splashes.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
             int n = Mathf.Max(1, Mathf.CeilToInt((b - a).magnitude / 0.2f));
             for (int k = 0; k <= n; k++)
             {
@@ -128,7 +129,7 @@ namespace SuddenMageEncounter
         /// <summary>Does the risen part of a hellfire wall touch water anywhere?</summary>
         static bool WallInWater(HellfireState h, float lit)
         {
-            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
+            if (OrbsS.Count == 0 && BubblesS.Count == 0 && WavesS.Count == 0 && Splashes.Count == 0 && !AnyWaterBall() && !RisingWater.Any) return false;
             float total = 0f;
             for (int k = 1; k < h.points.Count; k++) total += Vector3.Distance(h.points[k - 1], h.points[k]);
             float limit = total * lit, along = 0f;
@@ -178,10 +179,34 @@ namespace SuddenMageEncounter
                 {
                     if (c == null || !c.IsAlive || !Touching(c, o.center, r)) continue;
                     c.ServerHeal(SpellPlans.OrbHeal, SpellPlans.OrbHealTime);
+                    if (++c.Drunk > SpellPlans.OrbSafe && !c.Status.Value.Bloating)
+                    {
+                        // too much in one life: swelling up, about to burst
+                        var st = c.Status.Value;
+                        st.BloatAt = now + SpellPlans.BloatTime;
+                        c.Status.Value = st;
+                    }
                     OrbsS.RemoveAt(i);
                     WorldNet.ServerOrbEnd(o.id, 1, c.NetworkObjectId);
                     break;
                 }
+            }
+        }
+
+        /// <summary>Too much Water of Life: they burst, in many pieces.</summary>
+        static void TickBloat(double now)
+        {
+            foreach (var c in Combatant.Registry.ToArray())
+            {
+                if (c == null || !c.IsSpawned) continue;
+                var st = c.Status.Value;
+                if (!st.Bloating || now < st.BloatAt) continue;
+                st.BloatAt = 0;
+                c.Status.Value = st;
+                if (!c.IsAlive) continue;
+                Vector3 p = c.transform.position;
+                WorldNet.ServerWheelBlast(2, p, 0f);
+                c.ServerKillByHazard(DeathCause.Spell, p, Vector3.up * 4f, true);
             }
         }
 
@@ -369,7 +394,7 @@ namespace SuddenMageEncounter
                     if ((s.dead & (1 << lane)) != 0) continue;
                     for (float behind = 0f; behind <= SpellPlans.TsunamiDepth; behind += 1f)
                     {
-                        Vector3 d = s.origin + s.dir * (front - behind) + right * SpellPlans.LaneU(lane) - j.CenterAt(now);
+                        Vector3 d = s.origin + s.dir * (front - behind) + right * SpellPlans.LaneU(lane) - j.center;
                         if (new Vector2(d.x, d.z).magnitude > SpellPlans.JudgmentRadiusOf(j.kind)) continue;
                         s.dead |= 1 << lane;
                         break;

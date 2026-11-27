@@ -159,7 +159,8 @@ namespace SuddenMageEncounter
             // fades there (the hand goes back to rest straight away, and following it would jerk the sword across)
             if (want || !_placed)
             {
-                Quaternion body = Quaternion.Euler(0f, _c.ViewYaw, 0f);
+                // (Heavenly Slash: the body lies on its side in the air, the sword with it)
+                Quaternion body = Quaternion.Euler(0f, _c.ViewYaw, 0f) * Quaternion.Euler(0f, 0f, SpellPlans.HeavenBodyRoll(pose, t));
                 BladeAim(pose, t, out var blade, out var edge);
                 Vector3 b = body * blade, e = body * edge;
                 Quaternion want3 = Quaternion.LookRotation(Vector3.ProjectOnPlane(e, b).sqrMagnitude > 1e-4f ? Vector3.ProjectOnPlane(e, b) : body * Vector3.forward, b);
@@ -187,6 +188,10 @@ namespace SuddenMageEncounter
             SpellPose.SeveranceSlash => t < BladeMotion.Sweep + BladeMotion.Settle,
             SpellPose.FlowCharge => true,
             SpellPose.FlowStrike => t < BladeMotion.Sweep + BladeMotion.Settle,
+            SpellPose.HeavenCrouch or SpellPose.HeavenHover => true,
+            SpellPose.HeavenSlash => t < BladeMotion.Sweep + BladeMotion.Settle,
+            SpellPose.ParryGuard => t < SpellPlans.ParryWindow,
+            SpellPose.ParryStab => t < 0.5f,
             _ => false,
         };
 
@@ -274,10 +279,42 @@ namespace SuddenMageEncounter
             };
         }
 
+        static Frame Blend(Frame a, Frame b, float e) => new()
+        {
+            hand = Vector3.Lerp(a.hand, b.hand, e), blade = Vector3.Slerp(a.blade, b.blade, e), edge = Vector3.Slerp(a.edge, b.edge, e), left = Vector3.Lerp(a.left, b.left, e),
+            twist = Mathf.Lerp(a.twist, b.twist, e), drop = Mathf.Lerp(a.drop, b.drop, e), lean = Mathf.Lerp(a.lean, b.lean, e),
+        };
+
+        /// <summary>Parry: on guard, the sword held in front point down, edge out, both hands on the grip at the chest.</summary>
+        static Frame Guard(float t)
+        {
+            float e = Smoother(Mathf.Clamp01(t / 0.1f));
+            Vector3 hand = new(0.1f, 0.06f, 0.4f), blade = new Vector3(0.12f, -1f, 0.3f).normalized;
+            Frame from = Held(false);
+            return new Frame
+            {
+                hand = Vector3.Lerp(from.hand, hand, e), blade = Vector3.Slerp(from.blade, blade, e), edge = Vector3.forward,
+                left = Vector3.Lerp(from.left, hand + new Vector3(-0.05f, 0.08f, -0.03f), e),
+                twist = Mathf.Lerp(from.twist, -6f, e), drop = 0.1f, lean = 6f,
+            };
+        }
+
+        /// <summary>Parry's retaliation: lunging in, the sword thrust straight out in front.</summary>
+        static Frame Stab()
+        {
+            Vector3 hand = new(0.12f, 0.02f, 0.62f), blade = new Vector3(-0.04f, 0.02f, 1f).normalized;
+            return new Frame { hand = hand, blade = blade, edge = Vector3.down, left = new Vector3(-0.26f, -0.12f, -0.08f), twist = 22f, drop = 0.16f, lean = 22f };
+        }
+
         public static Frame Sample(SpellPose pose, float t)
         {
             switch (pose)
             {
+                case SpellPose.HeavenCrouch: return Held(true);
+                case SpellPose.HeavenHover: return Blend(Held(true), Held(false), Smoother(Mathf.Clamp01(t / 0.3f))); // up out of the crouch into the sword by the side, as Severance's start (the body lies on its side)
+                case SpellPose.HeavenSlash: return Cut(t, 0.04f);
+                case SpellPose.ParryGuard: return Guard(t);
+                case SpellPose.ParryStab: return Stab();
                 case SpellPose.FlowCharge: return Held(true);
                 case SpellPose.SeveranceSlash: return Cut(t, 0.14f);
                 case SpellPose.FlowStrike: return Cut(t, 0.3f); // the same cut, done as it flashes along (rising out of the kneel)
@@ -336,7 +373,7 @@ namespace SuddenMageEncounter
             go.transform.SetParent(parent, false);
             go.AddComponent<MeshFilter>().sharedMesh = Lens;
             var r = go.AddComponent<MeshRenderer>();
-            r.sharedMaterial = m;
+            Glow.SetStrip(r, m);
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             r.receiveShadows = false;
             Glow.Tint(r, c);

@@ -271,6 +271,7 @@ namespace SuddenMageEncounter
         Combatant _c;
         DashWind _dash;
         GameObject _glow;
+        Color _glowColour;
         TrailRenderer _glowTrail;
         FlameAura _fireL, _fireR;
 
@@ -313,17 +314,24 @@ namespace SuddenMageEncounter
                 }
             }
 
-            bool glow = alive && (pose == SpellPose.Siphon && t < SpellPlans.SiphonTime + 0.1f || pose == SpellPose.SiphonPunch && t < 0.4f);
+            bool glow = alive && (pose == SpellPose.Siphon && t < SpellPlans.SiphonTime + 0.1f || pose == SpellPose.SiphonPunch && t < 0.4f
+                || pose == SpellPose.DeathDash && t < SpellPlans.DeathDashTime + 0.1f);
             if (glow && _glow == null)
             {
-                _glow = SpellVisuals.GlowBall(null, 0.2f, Glow.Arcane, 3f);
-                _glowTrail = Glow.Trail(_glow.transform, Glow.Arcane, 0.2f, 0.18f);
+                // (Wheel of Fortune's golden dash: a mahogany fist; Death's: a black one)
+                _glowColour = pose == SpellPose.DeathDash ? SpellPlans.BileBlack : _c.Status.Value.Gold(WorldNet.Now) ? TarotVfx.Mahogany : Glow.Arcane;
+                // (GlowBall turns anything not bright into arcane blue: Death's black fist is drawn as it is, unlit)
+                _glow = pose == SpellPose.DeathDash ? Glow.Piece(null, Glow.SphereMesh, _glowColour, "DeathFist").gameObject : SpellVisuals.GlowBall(null, 0.2f, _glowColour, 3f);
+                _glow.transform.localScale = Vector3.one * 0.2f;
+                _glowTrail = Glow.Trail(_glow.transform, _glowColour, 0.2f, 0.18f);
             }
             if (_glow != null)
             {
                 if (!glow)
                 {
-                    EnergyBurst.Create(_glow.transform.position, EnergyBurst.Small);
+                    var small = EnergyBurst.Small;
+                    small.colour = _glowColour;
+                    EnergyBurst.Create(_glow.transform.position, small);
                     Glow.DropTrail(_glowTrail);
                     Destroy(_glow);
                     _glow = null;

@@ -6,7 +6,7 @@ namespace SuddenMageEncounter
 {
     /// <summary>
     /// Practice chambers: everyone can step out of the match into a private copy of the practice arena (the loadout
-    /// screen's target button) to try spells on dummies. J resets it, O swaps it for the next map, P sets off its map's hazards (or stops them), K drops a one-off dummy where you aim, L leaves.
+    /// screen's target button) to try spells on dummies. J resets it, O swaps it for the next map, P sets off its map's hazards (or stops them), K drops a one-off dummy where you aim (U picks which sort), L leaves.
     ///
     /// Each chamber is stamped into the same voxel world as the main arena, <see cref="SlotCells"/> cells further along
     /// +x per slot. All spells, voxel ops and late-join replays keep working unchanged, because chambers are just
@@ -46,6 +46,15 @@ namespace SuddenMageEncounter
             return Arena.Current != null ? Arena.Current.KillY : float.NegativeInfinity;
         }
 
+        /// <summary>How far the chamber in <paramref name="slot"/> goes. False: there's none there.</summary>
+        public static bool ChamberBounds(int slot, out Bounds b)
+        {
+            b = default;
+            if (slot < 1 || !Chambers.TryGetValue(slot, out var ch)) return false;
+            b = ch.bounds;
+            return true;
+        }
+
         // ------------------------------------------------------------------ chambers (every peer, via WorldNet ops)
 
         class Chamber
@@ -53,6 +62,7 @@ namespace SuddenMageEncounter
             public GameObject root;
             public Arena arena;
             public float killY;
+            public Bounds bounds;
             public readonly List<SpawnPoint> spawns = new();
             public readonly List<DummySpot> dummySpots = new();
         }
@@ -93,10 +103,21 @@ namespace SuddenMageEncounter
             if (data != null) world.Stamp(data, new Vector3Int(slot * SlotCells, 0, 0));
             Physics.SyncTransforms();
 
-            var ch = new Chamber { root = arena.gameObject, arena = arena, killY = arena.KillY };
+            var ch = new Chamber { root = arena.gameObject, arena = arena, killY = arena.KillY, bounds = BoundsOf(data, at) };
             arena.GetComponentsInChildren(true, ch.spawns);
             arena.GetComponentsInChildren(true, ch.dummySpots);
             Chambers[slot] = ch;
+        }
+
+        static Bounds BoundsOf(VoxelArenaData data, Vector3 origin)
+        {
+            if (data == null || data.chunks.Count == 0) return default;
+            Vector3Int lo = new(int.MaxValue, int.MaxValue, int.MaxValue), hi = new(int.MinValue, int.MinValue, int.MinValue);
+            foreach (var key in data.chunks.Keys) { lo = Vector3Int.Min(lo, key); hi = Vector3Int.Max(hi, key); }
+            float size = VoxelWorld.ChunkSize * VoxelWorld.Size;
+            var b = new Bounds();
+            b.SetMinMax(origin + (Vector3)lo * size, origin + (Vector3)(hi + Vector3Int.one) * size);
+            return b;
         }
 
         /// <summary>The chamber's hazards: going since <paramref name="start"/> (server time), or 0 = off, as they are in a fresh chamber.</summary>
@@ -199,7 +220,7 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Server: a dummy that doesn't come back, standing where the player aimed (<paramref name="corpse"/>: lying there dead, to raise).</summary>
-        public static void ServerSummon(PlayerController pc, Vector3 point, bool corpse = false)
+        public static void ServerSummon(PlayerController pc, Vector3 point, bool corpse = false, TestDummy.DummyKind kind = TestDummy.DummyKind.Plain)
         {
             if (!IsServer || pc == null || !pc.IsAlive || !SlotOfClient.TryGetValue(pc.OwnerClientId, out int slot)) return;
             if (SlotAt(point) != slot || (point - pc.transform.position).magnitude > SummonReach) return;
@@ -216,7 +237,12 @@ namespace SuddenMageEncounter
             face.y = 0f;
             var rot = face.sqrMagnitude > 0.01f ? Quaternion.LookRotation(face) : Quaternion.identity;
             var made = Spawn(slot, point + Vector3.up * 0.95f, rot, true);
-            if (corpse && made != null) made.ServerMakeCorpse();
+            if (made != null && kind != TestDummy.DummyKind.Plain) made.ServerSetKind(kind);
+            if (corpse && made != null)
+            {
+                made.ServerCredit(pc); // (their own kill, as Justice sees it)
+                made.ServerMakeCorpse();
+            }
         }
 
         /// <summary>Server: out of the chamber, watching the match.</summary>

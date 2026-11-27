@@ -342,6 +342,8 @@ namespace SuddenMageEncounter
         class Bubble { public Transform t; public Vector3 offset; public float age, life, size; }
         readonly List<Bubble> _bubbles = new();
         float _owed;
+        RuneSpew _justice;
+        bool _justNow;
         GameObject _shackles;
         RuneDrawing _ringA, _ringB;
 
@@ -368,6 +370,13 @@ namespace SuddenMageEncounter
                     _bubbles.Add(b);
                 }
             }
+            // Justice: mahogany symbols off whoever it's giving mana
+            bool just = alive && _pc is PlayerController j && (WorldNet.Now < j.Mana.Value.GainUntil || WorldNet.Now < j.Mana.Value.SurgeUntil);
+            if (just && _justice == null)
+                _justice = RuneSpew.Create(() => _pc.RagdollFocus != null ? _pc.RagdollFocus.position : _pc.transform.position,
+                    () => this != null && _justNow, 3600f, SpellPlans.JusticeGlow, 10f, new Vector3(0.35f, 0.6f, 0.35f));
+            _justNow = just;
+            if (!just) _justice = null;
             for (int i = _bubbles.Count - 1; i >= 0; i--)
             {
                 var b = _bubbles[i];

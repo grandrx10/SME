@@ -99,7 +99,7 @@ namespace SuddenMageEncounter
                 Vector3 point = c.transform.position + Vector3.up * 0.1f;
                 WorldNet.ServerHammerHit(point, Vector3.up);
                 // straight up into the air
-                Hit(c, h.caster, SpellPlans.RisingDamage, point, Vector3.up * SpellPlans.RisingLaunch, SpellPlans.RisingRagdoll);
+                Hit(c, h.caster, SpellPlans.RisingDamage, point, Vector3.up * SpellPlans.RisingLaunch, SpellPlans.RisingRagdoll, from: h.caster.transform.position);
             }
         }
 

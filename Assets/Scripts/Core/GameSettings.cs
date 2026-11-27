@@ -6,7 +6,7 @@ using UnityEngine.InputSystem;
 namespace SuddenMageEncounter
 {
     /// <summary>Rebindable actions. Order = order in Settings > Controls. Saved by name, so reordering is safe.</summary>
-    public enum GameAction { Forward, Back, Left, Right, Jump, Crouch, Ability1, Ability2, Ability3, Ability4, Ability5, Loadout, PracticeReset, PracticeDummy, PracticeLeave, PracticeRounds, SkipVote, PracticeCorpse, PracticeMap, PracticeHazard }
+    public enum GameAction { Forward, Back, Left, Right, Jump, Crouch, Ability1, Ability2, Ability3, Ability4, Ability5, Shield, Loadout, PracticeReset, PracticeDummy, PracticeDummyType, PracticeLeave, PracticeRounds, SkipVote, PracticeCorpse, PracticeMap, PracticeHazard }
 
     /// <summary>All user settings, persisted in PlayerPrefs.</summary>
     public static class GameSettings
@@ -92,9 +92,11 @@ namespace SuddenMageEncounter
             { GameAction.Ability3, Key.Q },
             { GameAction.Ability4, Key.F },
             { GameAction.Ability5, Key.LeftShift },
+            { GameAction.Shield, KeyBind.Mouse(KeyBind.MouseButton.Right) },
             { GameAction.Loadout, Key.B },
             { GameAction.PracticeReset, Key.J },
             { GameAction.PracticeDummy, Key.K },
+            { GameAction.PracticeDummyType, Key.U },
             { GameAction.PracticeLeave, Key.L },
             { GameAction.PracticeRounds, Key.H },
             { GameAction.SkipVote, Key.N },
@@ -158,6 +160,10 @@ namespace SuddenMageEncounter
                 int k = PlayerPrefs.GetInt("sme_bind_" + kv.Key, kv.Value.Code);
                 Binds[kv.Key] = KeyBind.IsValidCode(k) ? new KeyBind(k) : kv.Value;
             }
+            // the shield came later: if this player already uses its button for something else, it goes on C instead
+            if (!PlayerPrefs.HasKey("sme_bind_" + GameAction.Shield))
+                foreach (var kv in Binds)
+                    if (kv.Key != GameAction.Shield && kv.Value.Equals(DefaultBinds[GameAction.Shield])) { Binds[GameAction.Shield] = Key.C; break; }
             MaxFpsIndex = Mathf.Clamp(MaxFpsIndex, 0, MaxFpsOptions.Length - 1);
         }
 

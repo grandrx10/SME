@@ -10,7 +10,7 @@ namespace SuddenMageEncounter
     ///    health, 5 mana at most, only Infectious Bite. The Undead and their master can't hurt or throw each other.
     ///  - Infectious Bite: crouched 0.2 s, then a head-first lunge (ragdolled) at the aim. The first enemy it meets takes 15
     ///    and the biter stays limp until it lands; until then it bites, even if something else knocks the biter about.
-    ///    Bitten to death: the body turns green and gets up as one of the Undead 1 s later.
+    ///    Bitten to death: the body turns green and gets up as one of the Undead 1 s later, on the biter's master's side (an Undead just dies).
     ///  - Summon Horde: two small mindless Undead (15 health) climb out of the ground either side of the caster (no more than
     ///    six at once: with six up, it can't be cast), shamble
     ///    at the nearest enemy and bite every 3 s.
@@ -18,7 +18,7 @@ namespace SuddenMageEncounter
     ///    their own side. They still count as standing meanwhile. The Undead don't have it.
     ///  - Skinwalker: down on one knee by a corpse within 2 m for 2 s (grey symbols from both; knocked down meanwhile: nothing). Then
     ///    the caster wears its skin (colour, face, name) and has its moves, Skinwalker itself staying in its slot; full health,
-    ///    10 mana, and the corpse is gone. Until the next round.
+    ///    10 mana, and the corpse is gone. Until the next round, or until it's held 1 s away from any corpse: the skin's shed.
     /// </summary>
     public static partial class SpellServer
     {
@@ -71,7 +71,7 @@ namespace SuddenMageEncounter
                 {
                     var c = WorldNet.FindCombatant(targetId);
                     if (c == null || !c.IsSpawned || !c.Dead.Value || c == caster) return false;
-                    if ((CorpsePoint(c) - caster.transform.position).magnitude > SpellPlans.ReviveReach + 1.5f) return false;
+                    if (!SpellPlans.CorpseInReach(CorpsePoint(c), caster.transform.position, 1.5f)) return false;
                     if (RevivesS.Exists(r => r.corpse == c) || SkinsS.Exists(s => s.corpse == c) || c.LastRagdoll == null) return false;
                     RevivesS.Add(new ReviveState { caster = caster, corpse = c, at = now + SpellPlans.ReviveTime });
                     WorldNet.ServerNecroFx(0, caster.NetworkObjectId, c.NetworkObjectId, CorpsePoint(c), now);
@@ -81,7 +81,7 @@ namespace SuddenMageEncounter
                 {
                     var c = WorldNet.FindCombatant(targetId);
                     if (c == null || !c.IsSpawned || !c.Dead.Value || c == caster || c.LastRagdoll == null || caster.IsUndead) return false;
-                    if ((CorpsePoint(c) - caster.transform.position).magnitude > SpellPlans.ReviveReach + 1.5f) return false;
+                    if (!SpellPlans.CorpseInReach(CorpsePoint(c), caster.transform.position, 1.5f)) return false;
                     if (RevivesS.Exists(r => r.corpse == c) || SkinsS.Exists(s => s.corpse == c)) return false;
                     SkinsS.RemoveAll(s => s.caster == caster);
                     SkinsS.Add(new SkinCast { caster = caster, corpse = c, slot = -1, at = now + SpellPlans.SkinTime });
@@ -127,14 +127,19 @@ namespace SuddenMageEncounter
                 if (now < r.at) continue;
                 RevivesS.RemoveAt(i);
                 if (r.caster == null || !r.caster.IsAlive || r.corpse == null || !r.corpse.IsSpawned || !r.corpse.Dead.Value) continue;
-                RaiseUndead(r.corpse, r.caster.Team, r.caster.ViewYaw);
+                RaiseUndead(r.corpse, r.caster.Team, r.caster.ViewYaw, r.caster);
             }
         }
 
-        /// <summary>The body gets up where it lies, as one of the Undead on <paramref name="master"/>'s side.</summary>
-        static void RaiseUndead(Combatant c, ulong master, float yaw)
+        /// <summary>
+        /// The body gets up where it lies, as one of the Undead on <paramref name="master"/>'s side; if it lies somewhere that
+        /// kills (lava, a kill barrier: the map killed it), beside <paramref name="beside"/> instead.
+        /// </summary>
+        static void RaiseUndead(Combatant c, ulong master, float yaw, Combatant beside = null)
         {
             Vector3 feet = FeetUnder(CorpsePoint(c));
+            if (Deadly(feet) && beside != null) feet = FeetUnder(beside.transform.position + Quaternion.Euler(0f, yaw, 0f) * Vector3.forward * 1.2f);
+            if (Deadly(feet) && beside != null) feet = beside.FeetPosition;
             if (c is PlayerController p) p.ServerReviveUndead(feet, yaw, master);
             else if (c is TestDummy d) d.ServerMakeUndead(feet, yaw, master, false, WorldNet.Now);
         }
@@ -173,7 +178,7 @@ namespace SuddenMageEncounter
                 float best = SpellPlans.BiteReach * me.transform.localScale.y + 0.35f;
                 foreach (var o in Combatant.Registry)
                 {
-                    if (o == null || o == me || !o.IsAlive || Combatant.Allies(me, o) || Folded(o)) continue;
+                    if (o == null || o == me || !o.IsAlive || Combatant.Allies(me, o) || Combatant.RaisedAgainst(me, o) || Folded(o)) continue;
                     Vector3 feet = o.FeetPosition, ab = Vector3.up * 1.9f * o.transform.localScale.y;
                     float u = Mathf.Clamp01(Vector3.Dot(head - feet, ab) / ab.sqrMagnitude);
                     float d = (head - (feet + ab * u)).magnitude;
@@ -184,9 +189,12 @@ namespace SuddenMageEncounter
                 // the kill is the necromancer's (a player's own bite: theirs)
                 var credit = me as PlayerController ?? WorldNet.FindCaster(me.Team);
                 Vector3 push = v.sqrMagnitude > 0.01f ? new Vector3(v.x, 0f, v.z).normalized : me.transform.forward;
-                Hit(victim, credit, SpellPlans.BiteDamage, victim.transform.position + Vector3.up * 0.4f, push * 3f, 0f);
+                bool wasUndead = victim.IsUndead;
+                DamageFrom = me.FeetPosition; // (a zombie's: from where it is, not where its master is)
+                Hit(victim, credit, SpellPlans.BiteDamage, victim.transform.position + Vector3.up * 0.4f, push * 3f, 0f, from: head - push * 0.5f, striker: me);
+                DamageFrom = null;
                 WorldNet.ServerNecroFx(3, me.NetworkObjectId, victim.NetworkObjectId, victim.transform.position + Vector3.up * 0.5f, now);
-                if (!victim.IsAlive && victim.IsSpawned && !UndyingPending(victim)) // (Undying: they get up on their own side instead)
+                if (!victim.IsAlive && victim.IsSpawned && !wasUndead && !UndyingPending(victim)) // (Undying: they get up on their own side instead; an Undead just dies)
                 {
                     // bitten to death: it turns green and gets up on the biter's side
                     var st = victim.Status.Value;
@@ -220,6 +228,9 @@ namespace SuddenMageEncounter
             BitesS.RemoveAll(b => b.biter == victim);
             RevivesS.RemoveAll(r => r.caster == victim);
             SkinsS.RemoveAll(s => s.caster == victim);
+            JusticeDone(victim, attacker);
+            ForgetDeath(victim);
+            ForgetStars(victim);
             // Undying: up again in a moment (not out of a fall or lava; the Undead don't have it)
             if (cause != DeathCause.Spell || victim is not PlayerController pc || pc.IsUndead || Cards.CountOf(pc.Hand, CardId.Undying) == 0) return;
             double now = WorldNet.Now;
@@ -330,6 +341,18 @@ namespace SuddenMageEncounter
             CancelLovers(me);
             me.ServerTakeSkin(skin);
             WorldNet.ServerNecroFx(5, me.NetworkObjectId, corpse.NetworkObjectId, CorpsePoint(corpse), now);
+        }
+
+        /// <summary>The skin comes off: their old look and moves.</summary>
+        public static void ShedSkin(PlayerController me)
+        {
+            // what the skin's moves still have running ends (they may have no way to end it any more)
+            CancelCard(me, CardId.Death);
+            CancelCard(me, CardId.GrappleHook);
+            CancelCard(me, CardId.TheHangedMan);
+            CancelLovers(me);
+            me.ServerShedSkin();
+            WorldNet.ServerNecroFx(5, me.NetworkObjectId, 0, me.transform.position, WorldNet.Now);
         }
 
         // ------------------------------------------------------------------ Summon Horde

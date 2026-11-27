@@ -211,8 +211,34 @@ namespace SuddenMageEncounter
             };
         }
 
+        // Hammer Spin: wound right back, the hammer out behind on the right, low and level...
+        static readonly Vector3 WoundGrip = new(0.3f, -0.18f, -0.02f);
+        const float WoundAngle = 190f, WoundX = 1.6f;
+        // ...then stretched straight out to the right, level, at the hips, the face leading round the spin
+        static readonly Vector3 SpinGrip = new(0.42f, -0.12f, 0.12f);
+        const float SpinAngle = 0f, SpinX = 5f;
+
+        static Frame Wound() => new()
+        {
+            grip = WoundGrip, shaft = Shaft(WoundAngle, WoundX), face = Vector3.down,
+            twist = 38f, drop = 0.2f, lean = 12f,
+        };
+
+        static Frame Spin(float t)
+        {
+            float e = Smoother(Mathf.Clamp01(t / 0.12f)); // swung round from behind into the spin
+            float angle = Mathf.Lerp(WoundAngle, 360f + SpinAngle, e), x = Mathf.Lerp(WoundX, SpinX, e);
+            return new Frame
+            {
+                grip = Vector3.Lerp(WoundGrip, SpinGrip, e), shaft = Shaft(angle, x), face = Vector3.forward,
+                twist = Mathf.Lerp(38f, 0f, e), drop = Mathf.Lerp(0.2f, 0.12f, e), lean = Mathf.Lerp(12f, -4f, e),
+            };
+        }
+
         public static Frame Sample(SpellPose pose, float t) => pose switch
         {
+            SpellPose.HammerSpinCharge => Wound(),
+            SpellPose.HammerSpin => Spin(t),
             SpellPose.HammerRise => Rise(t),
             SpellPose.HammerLeap => Leap(t),
             SpellPose.HammerSlam => Slam(t),
@@ -267,20 +293,22 @@ namespace SuddenMageEncounter
             // (the hands go back to rest straight away, and following them would jerk it across)
             if (want || !_placed)
             {
-                Quaternion body = Quaternion.Euler(0f, _c.ViewYaw, 0f);
+                // (Hammer Spin: the whole body turns round and round, the hammer with it)
+                Quaternion body = Quaternion.Euler(0f, _c.ViewYaw + (pose == SpellPose.HammerSpin ? SpellPlans.SpinAngle(t, WorldNet.SpinTimeOf(_c.NetworkObjectId)) : 0f), 0f);
                 var f = HammerMotion.Sample(pose, t);
                 Vector3 shaft = body * f.shaft;
                 Vector3 face = Vector3.ProjectOnPlane(body * f.face, shaft);
                 if (face.sqrMagnitude < 1e-4f) face = Vector3.ProjectOnPlane(body * Vector3.forward, shaft);
                 Quaternion aim = Quaternion.LookRotation(Vector3.Cross(face.normalized, shaft), shaft);
-                _rot = _placed ? Quaternion.Slerp(_rot, aim, 1f - Mathf.Exp(-40f * dt)) : aim;
+                _rot = _placed && pose != SpellPose.HammerSpin ? Quaternion.Slerp(_rot, aim, 1f - Mathf.Exp(-40f * dt)) : aim;
                 _placed = true;
                 Vector3 grip = (SpellVisuals.RightHand(_c) + SpellVisuals.LeftHand(_c)) * 0.5f;
                 _hammer.transform.SetPositionAndRotation(grip, _rot);
             }
 
             // a hot streak behind the head through the swing
-            bool swinging = want && (pose == SpellPose.HammerRise && t < HammerMotion.RiseSwing + 0.08f || pose == SpellPose.HammerSlam && t < HammerMotion.SlamSwing + 0.06f);
+            bool swinging = want && (pose == SpellPose.HammerRise && t < HammerMotion.RiseSwing + 0.08f || pose == SpellPose.HammerSlam && t < HammerMotion.SlamSwing + 0.06f
+                || pose == SpellPose.HammerSpin && t < WorldNet.SpinTimeOf(_c.NetworkObjectId) - 0.05f);
             if (swinging && _trail == null) _trail = Glow.Trail(_head, HammerVfx.Hot, 0.14f, 0.3f);
             else if (!swinging && _trail != null) { Glow.DropTrail(_trail); _trail = null; }
 
@@ -310,6 +338,8 @@ namespace SuddenMageEncounter
             SpellPose.HammerRise => t < HammerMotion.RiseSwing + HammerMotion.RiseSettle,
             SpellPose.HammerLeap => true,
             SpellPose.HammerSlam => t < HammerMotion.SlamSwing + HammerMotion.SlamSettle,
+            SpellPose.HammerSpinCharge => true,
+            SpellPose.HammerSpin => true,
             _ => false,
         };
 

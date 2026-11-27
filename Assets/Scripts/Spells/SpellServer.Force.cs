@@ -31,6 +31,7 @@ namespace SuddenMageEncounter
         {
             public int id; public PlayerController caster; public double start;
             public bool launched; public Vector3 origin, dir; public double launchTime; public float erased, swept;
+            public byte over; // 0, or which of Wheel of Fortune's (over its caster's head) it is
             public readonly HashSet<Combatant> hit = new();
         }
 
@@ -82,7 +83,7 @@ namespace SuddenMageEncounter
         /// <summary>Forming the purple ball: untouchable.</summary>
         static bool Fusing(Combatant c)
         {
-            foreach (var f in FusesS) if (f.caster == c && !f.launched) return true;
+            foreach (var f in FusesS) if (f.caster == c && !f.launched && f.over == 0) return true;
             return false;
         }
 
@@ -196,7 +197,10 @@ namespace SuddenMageEncounter
                 foreach (var c in Combatant.Registry.ToArray())
                 {
                     if (c == null || c == me || !c.IsAlive || Folded(c)) continue;
-                    if (!f.held.ContainsKey(c) && !f.released.Contains(c) && Touching(c, f.pos, reach)) f.held[c] = now;
+                    if (f.held.ContainsKey(c) || f.released.Contains(c) || !Touching(c, f.pos, reach)) continue;
+                    if (ShieldStops(c, me, f.pos, CardId.Attraction)) f.released.Add(c); // (held off with a shield)
+                    else if (ParryCatch(c, me, f.pos)) f.released.Add(c); // (Parry: not held)
+                    else f.held[c] = now;
                 }
 
                 // enemy projectiles in reach are pulled in
@@ -276,7 +280,7 @@ namespace SuddenMageEncounter
                 if (!fb.launched || !net.Fireballs.TryGetValue(fb.id, out var fx) || fx.owner == mine) continue;
                 Vector3 p = WorldNet.FireballPosition(fx, now);
                 Vector3 to = f.pos - p;
-                if (fb.necro && to.magnitude <= r + SpellPlans.FireballRadius)
+                if (fb.necro && to.magnitude <= r + SpellPlans.NecroRadius)
                 {
                     // Necromatic Blast: swallowed in the middle, as a rock is (water doesn't put it out)
                     WorldNet.ServerFireballEnd(fb.id, p, false);
@@ -386,8 +390,8 @@ namespace SuddenMageEncounter
                 if (c == null || c == me || !c.IsAlive || Folded(c) || Shielded(c) || !Touching(c, at, R)) continue;
                 Vector3 away = c.transform.position - at;
                 away = away.sqrMagnitude > 0.01f ? away.normalized : Vector3.up;
-                Hit(c, me, 0f, c.transform.position, away * SpellPlans.RepelKnock + Vector3.up * SpellPlans.RepelUp, SpellPlans.RepelRagdoll);
-                if (c.IsAlive) for (int k = 0; k < SpellPlans.RepelBurns; k++) Burn(c, me);
+                for (int k = 0; k < SpellPlans.RepelBurns; k++) Burn(c, me, at); // (first: a shield that takes them stops the throw too)
+                Hit(c, me, 0f, c.transform.position, away * SpellPlans.RepelKnock + Vector3.up * SpellPlans.RepelUp, SpellPlans.RepelRagdoll, from: at, card: CardId.Repulsion);
             }
             EndForce(index, true);
         }
@@ -454,7 +458,7 @@ namespace SuddenMageEncounter
         {
             var f = FusesS.Find(x => x.id == id);
             if (f == null || f.caster != pc || f.launched) return;
-            if (WorldNet.Now < f.start + SpellPlans.FuseCharge - 0.15) return;
+            if (WorldNet.Now < f.start + SpellPlans.FuseThrowAt(f.over) - 0.15) return;
             DoLaunchFuse(f, dir);
         }
 
@@ -484,7 +488,7 @@ namespace SuddenMageEncounter
                     // the caster died forming it: it bursts there and then
                     if (f.caster == null || !f.caster.IsAlive) { FusesS.RemoveAt(i); WorldNet.ServerFuseEnd(f.id); continue; }
                     // their owner never threw it (lag): it goes where they're looking
-                    if (now > f.start + SpellPlans.FuseCharge + 0.4)
+                    if (now > f.start + SpellPlans.FuseThrowAt(f.over) + 0.4)
                         DoLaunchFuse(f, Quaternion.Euler(f.caster.ViewPitch, f.caster.ViewYaw, 0f) * Vector3.forward);
                     continue;
                 }

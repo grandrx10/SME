@@ -194,6 +194,11 @@ namespace SuddenMageEncounter
             var gold = UIFactory.Text("Gold", shop.transform, Wallet.Gold.ToString(), 28, TextAnchor.MiddleLeft, new Color(1f, 0.86f, 0.4f), FontStyle.Bold);
             UIFactory.Place(gold.rectTransform, new Vector2(0, 0.5f), new Vector2(0, 0.5f), new Vector2(98, 0), new Vector2(96, 40));
 
+            // patch notes: a scroll
+            var notes = RoundButton(page, "", () => PatchNotes.Open(_root.parent), new Color(0.17f, 0.19f, 0.24f, 1f));
+            UIFactory.Place((RectTransform)notes.transform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(Pad + Loadouts.Count * (BarH + 10) + 20 + 200 + 12, -Pad), new Vector2(BarH, BarH));
+            PatchNotes.Icon(notes.transform);
+
             // practice range (in a game only): lit while you're in there, and pressing it again leaves
             var me = PlayerController.Local;
             if (me != null && me.IsSpawned)

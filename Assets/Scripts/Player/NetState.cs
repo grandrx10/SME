@@ -62,9 +62,9 @@ namespace SuddenMageEncounter
         HammerSlam = 51,     // ...brought down vertically in front on landing
         SwarmRaise = 52,     // Rock Swarm: a scoop down, then both hands thrown up into the air
         IceCrouch = 53,      // Ice Spike: crouched, both palms on the ground... then standing up
-        HermitKneel = 54,    // The Hermit: down on one knee, palms on the ground while the house goes up
+        HermitKneel = 54,    // (no longer used)
         WheelSpin = 55,      // Wheel of Fortune: a flick of the right hand up at the die
-        Clasp = 56,          // Justice: hands clasped together in front of the chest
+        Clasp = 56,          // The Moon: hands clasped together in front of the chest
         LeftArmUp = 57,      // The Hanged Man: the left arm raised straight up
         HeadBack = 58,       // Death: the head tipped back... then forward again
         RightHandUp = 59,    // The Devil: the right hand raised
@@ -79,11 +79,28 @@ namespace SuddenMageEncounter
         RifleKneel = 68,     // Sebastian: down on one knee, aiming down the sights, charging
         RifleFire = 69,      // ...the kick, then standing up
         GraspKneel = 70,     // Undying Grasp: down on one knee, hands out over the ground
-        SkinKneel = 71,      // Skinwalker: down on one knee over the corpse, hands out to it
+        SkinKneel = 71,      // Skinwalker, Justice: down on one knee over the corpse, hands out to it
         BombPlace = 72,      // Remote Flame Bomb: the right hand presses it onto the spot
         BombToss = 73,       // Flame Bomb Toss: both hands thrown forward
         NecroRaise = 74,     // Necromatic Blast: hauled up out of the ground over the head... then hurled forward
         HexPoint = 75,       // a Hex: the left hand pointing... then flicked at them
+        ArcaneShield = 76,   // the arcane shield: the right hand held out along the aim
+        DeathDash = 77,      // Death: the fist drawn back, charging (Mana Siphon's), through everyone
+        PotHold = 78,        // the Botany cards: both hands out in front, a little bent, holding the pot
+        PotThrow = 79,       // the Fly Trap thrown: both hands thrown forward
+        WindCharge = 80,     // Compressed Shot charging: the right hand held out at the aim, wind round it
+        WindShot = 81,       // ...and let go
+        CloudStep = 82,      // Cloud Step: the leap
+        SubDive = 83,        // Submerge: diving into the pool
+        SubEmerge = 84,      // Submerge: coming out of the ground, spinning
+        HammerSpinCharge = 85, // Hammer Spin: wound right back, the hammer out behind on the right, charging
+        HammerSpin = 86,     // ...let go: spinning round and round, the hammer stretched out level, zooming along
+        WolfgangFire = 87,   // Wolfgang: a pistol in each hand, both arms out at the aim, firing turn about
+        HeavenCrouch = 88,   // Heavenly Slash: crouched, the sword low...
+        HeavenHover = 89,    // ...up in the air, posing, the sword held out level
+        HeavenSlash = 90,    // ...the cut
+        ParryGuard = 91,     // Parry: the sword held point down in front, on guard
+        ParryStab = 92,      // ...deflected: dashing in, a straight stab
     }
 
     /// <summary>Owner-authoritative movement snapshot replicated to everyone.</summary>
@@ -132,49 +149,74 @@ namespace SuddenMageEncounter
     {
         public const float Max = 10f, PerSecond = 1f;
         /// <summary>
-        /// <see cref="Flow"/>: refilling as normal / not refilling at all (The Chariot) / draining (The Lovers' tether) /
-        /// draining at <see cref="SpellPlans.ChannelDrain"/> (Death's aura, the Flame Thrower).
+        /// <see cref="Flow"/>: refilling as normal / not refilling at all (The Chariot) / draining, not refilling (The
+        /// Lovers' tether) / refilling, less what the Flame Thrower takes / refilling, less what Death's aura takes.
         /// </summary>
-        public const byte Refill = 0, Held = 1, Draining = 2, DrainingFast = 3;
+        public const byte Refill = 0, Held = 1, Draining = 2, Channel = 3, Aura = 4, Sunk = 5;
         public float Value;
         public double Time;
         /// <summary>The Magician: regeneration runs at double speed until this time.</summary>
         public double FastUntil;
-        /// <summary>Which way it's going: <see cref="Refill"/>, <see cref="Held"/>, <see cref="Draining"/> or <see cref="DrainingFast"/>.</summary>
+        /// <summary>Justice: a little more on top until then (the killer was hurt); and a lot more until then (they were killed).</summary>
+        public double GainUntil, SurgeUntil;
+        /// <summary>Which way it's going: <see cref="Refill"/>, <see cref="Held"/>, <see cref="Draining"/>, <see cref="Channel"/> or <see cref="Aura"/>.</summary>
         public byte Flow;
         /// <summary>The most mana this player can hold (0 = the usual <see cref="Max"/>; Temperance raises it, the Undead lower it).</summary>
         public byte Cap;
 
         public float Limit => Cap > 0 ? Cap : Max;
 
+        /// <summary>Mana a second, right then (before it's full or empty).</summary>
+        public float RateAt(double t)
+        {
+            float r = Flow switch
+            {
+                Held => 0f,
+                Draining => -SpellPlans.LoversDrain,
+                Sunk => 0f, // under Submerge: no regeneration
+                _ => PerSecond * (t < FastUntil ? 2f : 1f) - (Flow == Channel ? SpellPlans.ChannelDrain : Flow == Aura ? SpellPlans.DeathDrain : 0f),
+            };
+            if (t < GainUntil) r += SpellPlans.JusticeGain;
+            if (t < SurgeUntil) r += SpellPlans.JusticeSurge / SpellPlans.JusticeSurgeTime;
+            return r;
+        }
+
         public float At(double now)
         {
-            float dt = (float)(now - Time), max = Limit;
-            if (Flow == Held) return Mathf.Clamp(Value, 0f, max);
-            if (Flow == Draining) return Mathf.Clamp(Value - dt * SpellPlans.LoversDrain, 0f, max);
-            if (Flow == DrainingFast) return Mathf.Clamp(Value - dt * SpellPlans.ChannelDrain, 0f, max);
-            float extra = (float)System.Math.Max(0.0, System.Math.Min(now, FastUntil) - Time);
-            return Mathf.Clamp(Value + (dt + extra) * PerSecond, 0f, max);
+            float max = Limit, v = Mathf.Clamp(Value, 0f, max);
+            for (double t = Time; t < now;)
+            {
+                // up to whenever the rate next changes
+                double next = now;
+                if (FastUntil > t && FastUntil < next) next = FastUntil;
+                if (GainUntil > t && GainUntil < next) next = GainUntil;
+                if (SurgeUntil > t && SurgeUntil < next) next = SurgeUntil;
+                v = Mathf.Clamp(v + RateAt(t) * (float)(next - t), 0f, max);
+                t = next;
+            }
+            return v;
         }
 
         public bool Fast(double now) => now < FastUntil;
 
-        /// <summary>A new mana amount from now on (keeps a running Magician boost, the flow and the cap).</summary>
-        public ManaState With(double now, float value) => new() { Value = value, Time = now, FastUntil = FastUntil, Flow = Flow, Cap = Cap };
+        /// <summary>A new mana amount from now on (keeps the running boosts, the flow and the cap).</summary>
+        public ManaState With(double now, float value) { var m = this; m.Value = value; m.Time = now; return m; }
 
         /// <summary>The same mana, going the given way from now on.</summary>
-        public ManaState WithFlow(double now, byte flow) => new() { Value = At(now), Time = now, FastUntil = FastUntil, Flow = flow, Cap = Cap };
+        public ManaState WithFlow(double now, byte flow) { var m = With(now, At(now)); m.Flow = flow; return m; }
 
         public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
         {
             s.SerializeValue(ref Value);
             s.SerializeValue(ref Time);
             s.SerializeValue(ref FastUntil);
+            s.SerializeValue(ref GainUntil);
+            s.SerializeValue(ref SurgeUntil);
             s.SerializeValue(ref Flow);
             s.SerializeValue(ref Cap);
         }
 
-        public bool Equals(ManaState o) => Value == o.Value && Time == o.Time && FastUntil == o.FastUntil && Flow == o.Flow && Cap == o.Cap;
+        public bool Equals(ManaState o) => Value == o.Value && Time == o.Time && FastUntil == o.FastUntil && GainUntil == o.GainUntil && SurgeUntil == o.SurgeUntil && Flow == o.Flow && Cap == o.Cap;
         public override bool Equals(object obj) => obj is ManaState o && Equals(o);
         public override int GetHashCode() => Value.GetHashCode() ^ Time.GetHashCode();
     }
@@ -187,11 +229,9 @@ namespace SuddenMageEncounter
     {
         /// <summary>The Hanged Man: upside down and floating from <see cref="HangFrom"/> until <see cref="HangUntil"/>.</summary>
         public double HangFrom, HangUntil;
-        /// <summary>Wheel of Fortune 5: metallic grey, nothing moves you, until then.</summary>
-        public double SteelUntil;
-        /// <summary>Wheel of Fortune 6: golden purple, nothing hurts you, until then.</summary>
+        /// <summary>Wheel of Fortune 6: golden purple, nothing touches you (the dash and its punch), until then.</summary>
         public double GoldUntil;
-        /// <summary>Wheel of Fortune 0: flashing red from <see cref="DoomFrom"/>; blows up at <see cref="DoomAt"/> (0 = not doomed).</summary>
+        /// <summary>Wheel of Fortune 0: glowing red from <see cref="DoomFrom"/>; blows up at <see cref="DoomAt"/> (0 = not doomed).</summary>
         public double DoomFrom, DoomAt;
         /// <summary>Icy Breath: half speed until then.</summary>
         public double SlowUntil;
@@ -209,8 +249,15 @@ namespace SuddenMageEncounter
         public double StrongFrom, StrongUntil;
         /// <summary>The Star: outlined through walls until then.</summary>
         public double LitUntil;
-        /// <summary>The Moon: filling over the caster from <see cref="MoonFrom"/>, full (and pulsing) at <see cref="MoonAt"/> (0 = none).</summary>
+        /// <summary>The Moon: over the caster from <see cref="MoonFrom"/>, gone at <see cref="MoonAt"/> (0 = none); how full it is.</summary>
         public double MoonFrom, MoonAt;
+        public float MoonFill;
+        /// <summary>Justice: the killer this player is after (object id), outlined through walls on their own screen (0 = nobody).</summary>
+        public ulong JusticeOn;
+        /// <summary>Too much Water of Life: swelling up, bursting then (0 = not).</summary>
+        public double BloatAt;
+        /// <summary>Wheel of Fortune 1: thrown into the sky, tumbling, until then at most (0 = not).</summary>
+        public double SpinUntil;
         /// <summary>The Sun: cast at <see cref="SunCast"/>; colours inverted from <see cref="SunFrom"/> until <see cref="SunUntil"/> (0 = none).</summary>
         public double SunCast, SunFrom, SunUntil;
         /// <summary>The World: crushed away from <see cref="WorldFrom"/>, standing at <see cref="WorldSpot"/> inside it from <see cref="WorldUntil"/> (0 = not taken).</summary>
@@ -226,11 +273,24 @@ namespace SuddenMageEncounter
         /// <summary>Mind Hex: moving as <see cref="MindBy"/> (object id) moves, silenced, from <see cref="MindFrom"/> until then (0 = not).</summary>
         public double MindFrom, MindUntil;
         public ulong MindBy;
+        /// <summary>Death: marked (for good, until they die). Struck again: doomed, vomiting bile from <see cref="BileFrom"/>, bursting at <see cref="BileAt"/> (0 = not).</summary>
+        public bool DeathMarked;
+        public double BileFrom, BileAt;
+        /// <summary>Smallify Hex: small (half size, half speed, knocked over by anyone walking into them) from <see cref="SmallFrom"/> until then (0 = not).</summary>
+        public double SmallFrom, SmallUntil;
+        public ulong SmallBy;
+        /// <summary>Fly Trap: inside the trap (pot id <see cref="EatenBy"/>) from <see cref="EatenFrom"/> until then (0 = not).</summary>
+        public int EatenBy;
+        public double EatenFrom, EatenUntil;
+        /// <summary>Ephemerate: gone (unseen, untouchable, through anything) from <see cref="EphemFrom"/> until then (0 = not).</summary>
+        public double EphemFrom, EphemUntil;
+        /// <summary>Submerge: a pool from <see cref="SubFrom"/> (diving in before it) until then (0 = not).</summary>
+        public double SubFrom, SubUntil;
 
         public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
         {
             s.SerializeValue(ref HangFrom); s.SerializeValue(ref HangUntil);
-            s.SerializeValue(ref SteelUntil); s.SerializeValue(ref GoldUntil);
+            s.SerializeValue(ref GoldUntil); s.SerializeValue(ref MoonFill); s.SerializeValue(ref JusticeOn); s.SerializeValue(ref BloatAt); s.SerializeValue(ref SpinUntil);
             s.SerializeValue(ref DoomFrom); s.SerializeValue(ref DoomAt);
             s.SerializeValue(ref SlowUntil); s.SerializeValue(ref InfectFrom);
             s.SerializeValue(ref GraspFrom); s.SerializeValue(ref GraspUntil);
@@ -243,24 +303,42 @@ namespace SuddenMageEncounter
             s.SerializeValue(ref StasisFrom); s.SerializeValue(ref StasisUntil);
             s.SerializeValue(ref ShatterFrom); s.SerializeValue(ref ShatterUntil);
             s.SerializeValue(ref MindFrom); s.SerializeValue(ref MindUntil); s.SerializeValue(ref MindBy);
+            s.SerializeValue(ref DeathMarked); s.SerializeValue(ref BileFrom); s.SerializeValue(ref BileAt);
+            s.SerializeValue(ref SmallFrom); s.SerializeValue(ref SmallUntil); s.SerializeValue(ref SmallBy);
+            s.SerializeValue(ref EatenBy); s.SerializeValue(ref EatenFrom); s.SerializeValue(ref EatenUntil);
+            s.SerializeValue(ref EphemFrom); s.SerializeValue(ref EphemUntil); s.SerializeValue(ref SubFrom); s.SerializeValue(ref SubUntil);
         }
 
         public bool Equals(BodyStatus o) =>
-            HangFrom == o.HangFrom && HangUntil == o.HangUntil && SteelUntil == o.SteelUntil && GoldUntil == o.GoldUntil &&
+            HangFrom == o.HangFrom && HangUntil == o.HangUntil && GoldUntil == o.GoldUntil &&
+            MoonFill == o.MoonFill && JusticeOn == o.JusticeOn && BloatAt == o.BloatAt && SpinUntil == o.SpinUntil &&
             DoomFrom == o.DoomFrom && DoomAt == o.DoomAt && SlowUntil == o.SlowUntil && InfectFrom == o.InfectFrom && GraspFrom == o.GraspFrom && GraspUntil == o.GraspUntil &&
             Undead == o.Undead && Master == o.Master && Horde == o.Horde && RiseFrom == o.RiseFrom &&
             StrongFrom == o.StrongFrom && StrongUntil == o.StrongUntil && LitUntil == o.LitUntil &&
             MoonFrom == o.MoonFrom && MoonAt == o.MoonAt && SunCast == o.SunCast && SunFrom == o.SunFrom && SunUntil == o.SunUntil &&
             WorldFrom == o.WorldFrom && WorldUntil == o.WorldUntil && WorldSpot == o.WorldSpot && WorldYaw == o.WorldYaw && WorldBy == o.WorldBy &&
-            StasisFrom == o.StasisFrom && StasisUntil == o.StasisUntil && ShatterFrom == o.ShatterFrom && ShatterUntil == o.ShatterUntil && MindFrom == o.MindFrom && MindUntil == o.MindUntil && MindBy == o.MindBy;
+            StasisFrom == o.StasisFrom && StasisUntil == o.StasisUntil && ShatterFrom == o.ShatterFrom && ShatterUntil == o.ShatterUntil && MindFrom == o.MindFrom && MindUntil == o.MindUntil && MindBy == o.MindBy &&
+            DeathMarked == o.DeathMarked && BileFrom == o.BileFrom && BileAt == o.BileAt &&
+            SmallFrom == o.SmallFrom && SmallUntil == o.SmallUntil && SmallBy == o.SmallBy && EatenBy == o.EatenBy && EatenFrom == o.EatenFrom && EatenUntil == o.EatenUntil &&
+            EphemFrom == o.EphemFrom && EphemUntil == o.EphemUntil && SubFrom == o.SubFrom && SubUntil == o.SubUntil;
         public override bool Equals(object obj) => obj is BodyStatus o && Equals(o);
         public override int GetHashCode() => HangUntil.GetHashCode() ^ Master.GetHashCode();
 
         public bool Hanging(double now) => now >= HangFrom && now < HangUntil;
-        public bool Steel(double now) => now < SteelUntil;
+
         public bool Gold(double now) => now < GoldUntil;
         public bool Doomed => DoomAt > 0;
         public bool Slowed(double now) => now < SlowUntil;
+        /// <summary>Doomed by Death: vomiting black bile until they burst.</summary>
+        public bool Biling(double now) => BileAt > 0 && now < BileAt;
+        /// <summary>Shrunk by Smallify Hex.</summary>
+        public bool Small(double now) => now < SmallUntil;
+        /// <summary>Inside a fly trap.</summary>
+        public bool Eaten(double now) => now < EatenUntil;
+        /// <summary>Gone with Ephemerate.</summary>
+        public bool Ephemeral(double now) => now >= EphemFrom && now < EphemUntil;
+        /// <summary>Under Submerge's pool (not just diving in).</summary>
+        public bool Under(double now) => now >= SubFrom && now < SubUntil;
         /// <summary>Held by Undying Grasp: no moving, no casting.</summary>
         public bool Grasped(double now) => now < GraspUntil;
         /// <summary>Frozen by Stasis Hex.</summary>
@@ -271,7 +349,9 @@ namespace SuddenMageEncounter
         public bool Mind(double now) => now < MindUntil;
         public bool Strong(double now) => now >= StrongFrom && now < StrongUntil;
         public bool Lit(double now) => now < LitUntil;
-        /// <summary>The Moon is over them (still filling).</summary>
+        /// <summary>Swelling up with too much Water of Life.</summary>
+        public bool Bloating => BloatAt > 0;
+        /// <summary>The Moon is over them (not full yet).</summary>
         public bool Moon(double now) => MoonAt > 0 && now >= MoonFrom && now < MoonAt;
         /// <summary>The Sun: their colours are inverted, and looking at them hurts.</summary>
         public bool Sun(double now) => now >= SunFrom && now < SunUntil;

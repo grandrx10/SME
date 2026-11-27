@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace SuddenMageEncounter
 {
-    /// <summary>The op stream's part for The Star, The Moon's pulse and The World. The server decides; every peer applies the same ops in order.</summary>
+    /// <summary>The op stream's part for The Star, The Moon and The World. The server decides; every peer applies the same ops in order.</summary>
     public partial class WorldNet
     {
         // ------------------------------------------------------------------ live effects (every peer)
@@ -15,11 +15,11 @@ namespace SuddenMageEncounter
             public bool launched; public Vector3 origin, dir, end; public double t; public double ended = -1;
             public bool Alive => ended < 0;
         }
-        /// <summary>The Star: five stars over <see cref="caster"/>'s head from <see cref="start"/>, sent off one by one.</summary>
+        /// <summary>The Star: stars over <see cref="caster"/>'s head from <see cref="start"/>, sent off one by one.</summary>
         public class StarFx
         {
             public int id; public ulong caster; public double start;
-            public readonly StarBit[] stars = new StarBit[SpellPlans.StarCount];
+            public StarBit[] stars;
             public StarsView view;
         }
         /// <summary>The World: its sphere swelling round <see cref="cell"/> from <see cref="start"/>; over once <see cref="broken"/>.</summary>
@@ -39,7 +39,7 @@ namespace SuddenMageEncounter
             if (!s.Alive) return s.end;
             if (s.launched) return s.origin + s.dir * Mathf.Min(SpellPlans.StarSpeed * Mathf.Max(0f, (float)(now - s.t)), SpellPlans.StarRange);
             var c = FindCombatant(fx.caster);
-            return c != null ? SpellPlans.StarHome(TarotVfx.Head(c), c.ViewYaw, k, (float)(now - fx.start)) : s.end;
+            return c != null ? SpellPlans.StarHome(TarotVfx.Head(c), c.ViewYaw, k, fx.stars.Length, (float)(now - fx.start)) : s.end;
         }
 
         /// <summary>The unbroken World a point is inside of, if any.</summary>
@@ -70,19 +70,19 @@ namespace SuddenMageEncounter
         public static bool RoomForWorld(Vector3 p) =>
             WorldAround(p) == null && WorldAround(p + Vector3.up * SpellPlans.WorldLift, SpellPlans.WorldRadius + 1f) == null;
 
-        enum Tarot3Op : byte { Stars = 106, StarLaunch = 107, StarEnd = 108, MoonPulse = 109, World = 110, WorldBreak = 111, Gather = 112, EraseColumns = 113 }
+        enum Tarot3Op : byte { Stars = 106, StarLaunch = 107, StarEnd = 108, MoonFull = 109, World = 110, WorldBreak = 111, Gather = 112 }
 
         static FastBufferWriter NewOp(Tarot3Op op, int size) => NewOp((Op)(byte)op, size);
 
         // ------------------------------------------------------------------ server API
 
-        public static int ServerStars(ulong caster, double start)
+        public static int ServerStars(ulong caster, double start, int count)
         {
             var i = Instance;
             if (i == null || !IsServer) return 0;
             int id = i._nextId++;
-            var w = NewOp(Tarot3Op.Stars, 32);
-            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(start);
+            var w = NewOp(Tarot3Op.Stars, 33);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(start); w.WriteValueSafe((byte)count);
             i.Broadcast(Finish(ref w));
             return id;
         }
@@ -107,16 +107,6 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        /// <summary>Judgement's beam takes the top off these columns (each an x and a z; y doesn't matter).</summary>
-        public static void ServerEraseColumns(List<Vector3Int> columns, int yMin, int yMax)
-        {
-            var i = Instance;
-            if (i == null || !IsServer || columns.Count == 0) return;
-            var w = NewOp(Tarot3Op.EraseColumns, 16 + columns.Count * 6);
-            WriteCells(ref w, columns);
-            w.WriteValueSafe((short)yMin); w.WriteValueSafe((short)yMax);
-            i.Broadcast(Finish(ref w));
-        }
 
         /// <summary>Power gathers in the caster's clasped hands (or raised right one) for <paramref name="seconds"/>, unless they're knocked out of it.</summary>
         public static void ServerGather(ulong caster, bool rightHand, double start, float seconds, bool black = false)
@@ -128,13 +118,13 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        /// <summary>The moon is full: the healing pulse spreads out from <paramref name="feet"/>.</summary>
-        public static void ServerMoonPulse(ulong caster, Vector3 feet, double start)
+        /// <summary>The moon is full: its caster is healed.</summary>
+        public static void ServerMoonFull(ulong caster)
         {
             var i = Instance;
             if (i == null || !IsServer) return;
-            var w = NewOp(Tarot3Op.MoonPulse, 40);
-            w.WriteValueSafe(caster); w.WriteValueSafe(feet); w.WriteValueSafe(start);
+            var w = NewOp(Tarot3Op.MoonFull, 12);
+            w.WriteValueSafe(caster);
             i.Broadcast(Finish(ref w));
         }
 
@@ -171,7 +161,8 @@ namespace SuddenMageEncounter
                 case Tarot3Op.Stars:
                 {
                     var fx = new StarFx();
-                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start);
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start); r.ReadValueSafe(out byte count);
+                    fx.stars = new StarBit[Mathf.Clamp(count, 1, SpellPlans.StarMax)];
                     for (int k = 0; k < fx.stars.Length; k++) fx.stars[k] = new StarBit();
                     Stars[fx.id] = fx;
                     if (!Debris.Suppressed) fx.view = StarsView.Create(fx);
@@ -200,14 +191,7 @@ namespace SuddenMageEncounter
                     }
                     return true;
                 }
-                case Tarot3Op.EraseColumns:
-                {
-                    var columns = ReadCells(ref r);
-                    r.ReadValueSafe(out short yMin); r.ReadValueSafe(out short yMax);
-                    foreach (var c in columns) world.EraseTop(c.x, c.z, yMin, yMax, removed);
-                    if (removed.Count > 0 && !Debris.Suppressed) VoidRise.Spawn(world, removed, TarotVfx.Mahogany);
-                    return true;
-                }
+
                 case Tarot3Op.Gather:
                 {
                     r.ReadValueSafe(out ulong caster); r.ReadValueSafe(out bool rightHand); r.ReadValueSafe(out double start); r.ReadValueSafe(out float seconds);
@@ -215,10 +199,10 @@ namespace SuddenMageEncounter
                     if (!Debris.Suppressed) TarotGather.Create(caster, rightHand, start, seconds, black);
                     return true;
                 }
-                case Tarot3Op.MoonPulse:
+                case Tarot3Op.MoonFull:
                 {
-                    r.ReadValueSafe(out ulong caster); r.ReadValueSafe(out Vector3 feet); r.ReadValueSafe(out double start);
-                    if (!Debris.Suppressed) MoonPulseView.Create(caster, feet, start);
+                    r.ReadValueSafe(out ulong caster);
+                    if (!Debris.Suppressed) MoonDisc.Full(caster);
                     return true;
                 }
                 case Tarot3Op.World:

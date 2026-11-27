@@ -28,7 +28,7 @@ namespace SuddenMageEncounter
         class RifleState { public PlayerController caster; public int slot, cost; public bool free; public double start, released = -1; }
         class GraspCastState { public PlayerController caster; public double at; }
         class GraspState { public PlayerController caster; public double start; public Vector3 dir; public List<SpellPlans.GraspSlot> slots; public readonly HashSet<Combatant> grabbed = new(); }
-        class HeldState { public Combatant victim; public double from, until; public Vector3 spot; public bool settled; }
+        class HeldState { public Combatant victim; public double from, until; public Vector3 spot; public bool settled; public float taken; }
 
         static readonly List<ShotState> ShotsS = new();
         static readonly List<PelletsState> PelletsS = new();
@@ -181,7 +181,7 @@ namespace SuddenMageEncounter
                     bool first = !Shielded(victim) && s.thrown.Add(victim);
                     Vector3 flat = new(b.dir.x, 0f, b.dir.z);
                     Vector3 knock = first ? (flat.sqrMagnitude > 0.01f ? flat.normalized : b.dir) * SpellPlans.RachKnock + Vector3.up * SpellPlans.RachKnockUp : Vector3.zero;
-                    Hit(victim, by, SpellPlans.RachDamage, hit.point, knock, first ? SpellPlans.RachRagdoll : 0f);
+                    Hit(victim, by, SpellPlans.RachDamage, hit.point, knock, first ? SpellPlans.RachRagdoll : 0f, from: hit.point - b.dir);
                 }
                 else if (w != null && VoxelWorld.IsVoxelCollider(hit.collider))
                 {
@@ -258,20 +258,20 @@ namespace SuddenMageEncounter
             if (!r.free && r.cost > 0) caster.Mana.Value = caster.Mana.Value.With(now, Mathf.Min(caster.Mana.Value.Limit, caster.ManaNow + r.cost));
         }
 
-        /// <summary>The caster's owner: the gun has charged up, it fires now, facing <paramref name="yaw"/>.</summary>
-        public static void SebastianShot(PlayerController caster, float yaw)
+        /// <summary>The caster's owner: the gun has charged up, it fires now, aimed this way.</summary>
+        public static void SebastianShot(PlayerController caster, float yaw, float pitch)
         {
             var r = RiflesS.Find(x => x.caster == caster);
-            if (r == null || r.released < 0 || WorldNet.Now < r.released + SpellPlans.SebWindup - 0.15 || float.IsNaN(yaw)) return;
-            ShootRifle(r, yaw);
+            if (r == null || r.released < 0 || WorldNet.Now < r.released + SpellPlans.SebWindup - 0.15 || float.IsNaN(yaw) || float.IsNaN(pitch)) return;
+            ShootRifle(r, yaw, pitch);
         }
 
-        static void ShootRifle(RifleState r, float yaw)
+        static void ShootRifle(RifleState r, float yaw, float pitch)
         {
             RiflesS.Remove(r);
             SpendRifle(r);
             r.caster.ServerRestartCooldown(CardId.Sebastian);
-            FireSebastian(r.caster, yaw);
+            FireSebastian(r.caster, yaw, Mathf.Clamp(pitch, -90f, 90f));
         }
 
         static void TickRifles(double now)
@@ -284,14 +284,14 @@ namespace SuddenMageEncounter
                 if (r.released < 0) lost |= me.Trapped || me.Grasped || me.Hexed; // silenced while charging
                 if (lost) { LoseRifle(me); continue; }
                 // the owner never said (lag): it goes where they're facing
-                if (r.released >= 0 && now > r.released + SpellPlans.SebWindup + 0.3) ShootRifle(r, me.ViewYaw);
+                if (r.released >= 0 && now > r.released + SpellPlans.SebWindup + 0.3) ShootRifle(r, me.ViewYaw, me.ViewPitch);
             }
         }
 
-        static void FireSebastian(PlayerController caster, float yaw)
+        static void FireSebastian(PlayerController caster, float yaw, float pitch)
         {
             var world = VoxelWorld.Current;
-            SpellPlans.SebastianRay(caster, yaw, out var from, out var dir);
+            SpellPlans.SebastianRay(caster, yaw, pitch, out var from, out var dir);
             var points = new List<Vector3> { from };
             var hurt = new HashSet<Combatant>();
             _sebCells.Clear();
@@ -393,7 +393,7 @@ namespace SuddenMageEncounter
                     {
                         if (!SpellPlans.GraspTouches(slot.middle, g.dir, c.FeetPosition)) continue;
                         g.grabbed.Add(c);
-                        Grasp(c, g.caster, now);
+                        if (!ShieldStops(c, g.caster, c.transform.position - g.dir * 2f, CardId.UndyingGrasp) && !ParryCatch(c, g.caster, c.FeetPosition)) Grasp(c, g.caster, now);
                         break;
                     }
                 }
@@ -432,7 +432,17 @@ namespace SuddenMageEncounter
             }
         }
 
-        /// <summary>The hands let go (ragdolled, dead, carried off): free to move and cast again.</summary>
+        /// <summary>Held by the hands and hurt: past <see cref="SpellPlans.GraspBreak"/> taken, they let go.</summary>
+        public static void GraspDamaged(Combatant c, float landed)
+        {
+            if (landed <= 0f) return;
+            var h = HeldsS.Find(x => x.victim == c);
+            if (h == null) return;
+            h.taken += landed;
+            if (h.taken >= SpellPlans.GraspBreak) FreeGrasp(c);
+        }
+
+        /// <summary>The hands let go (ragdolled, dead, carried off, hurt enough): free to move and cast again.</summary>
         public static void FreeGrasp(Combatant c)
         {
             HeldsS.RemoveAll(h => h.victim == null || h.victim == c);

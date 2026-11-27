@@ -137,7 +137,7 @@ namespace SuddenMageEncounter
                 outward.y = 0f;
                 outward = outward.sqrMagnitude > 0.01f ? outward.normalized : along;
                 Vector3 knock = (along + outward).normalized * SpellPlans.SwarmKnockOut + Vector3.up * SpellPlans.SwarmKnockUp;
-                Hit(c, s.caster, SpellPlans.SwarmDamage, p, knock, SpellPlans.SwarmRagdoll);
+                Hit(c, s.caster, SpellPlans.SwarmDamage, p, knock, SpellPlans.SwarmRagdoll, from: p);
                 // the rock is spent: it falls apart on them
                 WorldNet.ServerSwarmBreak(s.id, k, p, true);
                 return;

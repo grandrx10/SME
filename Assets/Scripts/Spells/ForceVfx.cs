@@ -387,7 +387,7 @@ namespace SuddenMageEncounter
             float t = (float)(now - _fx.start);
             float dt = Time.deltaTime;
             transform.position = WorldNet.FusePosition(_fx, now);
-            float r = SpellPlans.FuseRadiusAt(t);
+            float r = SpellPlans.FuseRadiusAt(t, _fx.over);
 
             if (_fx.Launched && !_launched)
             {

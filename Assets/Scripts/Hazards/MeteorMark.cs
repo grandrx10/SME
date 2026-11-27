@@ -45,7 +45,7 @@ namespace SuddenMageEncounter
             if (size <= 0f) { Destroy(gameObject); return; }
 
             // (the line's ink is the widest thing drawn: keep it inside the blast)
-            float r = (SpellPlans.MeteorBlast - 0.1f) * size;
+            float r = (SpellPlans.MeteorBlast * _fx.size - 0.1f) * size;
             Circle(_rim, r);
             _pts.Clear();
             for (int k = 0; k <= 3; k++) _pts.Add(At(90f + k * 120f, r * 0.62f)); // the sign for fire

@@ -45,7 +45,7 @@ namespace SuddenMageEncounter
         /// <summary>
         /// Makes the sphere of radius <paramref name="r"/> cells round <paramref name="c"/>: ground at and below its
         /// middle, air above, shelled <paramref name="shell"/> cells thick (ground below, glass above). Whatever was in the
-        /// way is gone. <paramref name="seconds"/>: the meshes follow the swelling sphere over this long.
+        /// way is gone, but for what's unbreakable. <paramref name="seconds"/>: the meshes follow the swelling sphere over this long.
         /// </summary>
         public void RaiseWorldSphere(Vector3Int c, int r, int shell, ushort body, ushort top, float seconds)
         {
@@ -75,7 +75,7 @@ namespace SuddenMageEncounter
                     ushort want = dy > 0 ? (d2 > in2 ? glass : (ushort)0) : d2 > in2 ? wall : dy == 0 ? top : body;
                     int i = VoxelChunk.Index(x, y, z);
                     ushort old = ch != null ? ch.Cells[i] : (ushort)0;
-                    if (old == want || dy <= 0 && IsIndestructible(old)) continue; // (bedrock below stays bedrock)
+                    if (old == want || IsIndestructible(old)) continue; // (what can't be broken stays)
                     if (ch == null) ch = GetOrCreateChunk(key);
                     ch.Cells[i] = want;
                     changed = true;

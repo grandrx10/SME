@@ -5,14 +5,15 @@ namespace SuddenMageEncounter
     /// <summary>
     /// Map hazard: water that starts rising <see cref="startAfter"/> seconds into the round and keeps going, at a steady
     /// pace, until there's a winner. You float in it; every second in it (added up over all your dips) hurts twice as
-    /// much as the last (1, 2, 4...: SpellServer.Hazards). Puts out fire like any other water.
+    /// much as the last (1, 2, 4...: SpellServer.Hazards). Puts out fire like any other water, and washes away ground that
+    /// spells have put there.
     /// The Box Collider's top is where the water starts (see <see cref="Liquid"/>).
     /// </summary>
     [AddComponentMenu("Sudden Mage Encounter/Rising Water")]
     public class RisingWater : Liquid
     {
         [Tooltip("Seconds after FIGHT that it starts rising.")]
-        public float startAfter = 180f;
+        public float startAfter = 0f;
         [Tooltip("The height it reaches after Rise Seconds (it keeps rising at that pace). Empty = the top of the arena.")]
         public Transform riseTo;
         [Tooltip("Seconds from its starting level to Rise To.")]
@@ -63,6 +64,16 @@ namespace SuddenMageEncounter
         {
             foreach (var l in All) if (l is RisingWater && l.Contains(p, pad)) return true;
             return false;
+        }
+
+        /// <summary>Server: washes away any ground spells have put in water.</summary>
+        public static void ServerWash()
+        {
+            var w = VoxelWorld.Current;
+            if (w == null || w.SummonedCount == 0 || !Any) return;
+            var cells = w.SummonedWhere(p => InAny(p, 0f));
+            cells.RemoveAll(c => w.IsIndestructible(w.Get(c)));
+            if (cells.Count > 0) WorldNet.ServerWash(cells, Vector3.up * 0.2f);
         }
 
         public static bool Any

@@ -125,6 +125,7 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- Skinwalker
+        public const float SkinShed = 1f;                    // Skinwalker held this long (away from any corpse): the skin comes off
         public const float SkinTime = 2f;                    // down on one knee over the corpse (knocked down meanwhile: nothing)
         public const float SkinMana = 10f;
         /// <summary>Its symbols: grey.</summary>

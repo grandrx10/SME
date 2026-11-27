@@ -78,7 +78,7 @@ namespace SuddenMageEncounter
         public static readonly Color Ink = new(0.09f, 0.12f, 0.2f, 1f);
         /// <summary>How much wider an outline strip is than the strip it outlines (metres, both sides together).</summary>
         public const float OutlineExtra = 0.06f;
-        static Material _hull, _underlay;
+        static Material _hull, _underlay, _underlayDepth;
 
         /// <summary>Inverted-hull outline for solid shapes.</summary>
         public static Material Hull => _hull ??= new Material(Shader.Find("SME/Outline") ?? Shader.Find("Universal Render Pipeline/Unlit")) { name = "Outline" };
@@ -94,6 +94,22 @@ namespace SuddenMageEncounter
                 _underlay.renderQueue = 2005; // the glow material draws at 2010, over it
                 return _underlay;
             }
+        }
+
+        /// <summary>
+        /// Gives a strip its material. Ink strips also get a second, invisible one, drawn once every strip is: it writes the
+        /// depth they left out, or else the sky (drawn after everything solid) paints over ink with nothing behind it.
+        /// </summary>
+        public static void SetStrip(Renderer r, Material m)
+        {
+            if (m != _underlay) { r.sharedMaterial = m; return; }
+            if (_underlayDepth == null)
+            {
+                _underlayDepth = Make("Glow Outline (depth)", 0f);
+                if (_underlayDepth.HasProperty("_ColorMask")) _underlayDepth.SetFloat("_ColorMask", 0f);
+                _underlayDepth.renderQueue = 2400; // after every glow, before the sky
+            }
+            r.sharedMaterials = new[] { m, _underlayDepth };
         }
 
         /// <summary>A glowing shape (no collider, no shadows), with a toon outline round it.</summary>
@@ -143,7 +159,7 @@ namespace SuddenMageEncounter
             t.numCapVertices = 2;
             t.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             t.receiveShadows = false;
-            t.sharedMaterial = mat;
+            SetStrip(t, mat);
             return t;
         }
 
@@ -483,7 +499,7 @@ namespace SuddenMageEncounter
             _outline.MarkDynamic();
             o.AddComponent<MeshFilter>().sharedMesh = _outline;
             var or = o.AddComponent<MeshRenderer>();
-            or.sharedMaterial = Glow.Underlay;
+            Glow.SetStrip(or, Glow.Underlay);
             or.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             or.receiveShadows = false;
             Glow.Tint(or, Glow.Ink);

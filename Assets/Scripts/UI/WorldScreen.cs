@@ -6,7 +6,7 @@ namespace SuddenMageEncounter
     /// <summary>
     /// The local player's screen while The World has them. Taken: they go on seeing where they are (their body warping
     /// away) as black closes in from above and below until the screen is shut; only then does it open, on THE WORLD (<see cref="WorldCinematic"/>) while the sphere is made, and opens again inside it.
-    /// Then, across the top: ONLY ONE MAY REMAIN for a few seconds, and FIGHT OR DIE once both are dying.
+    /// Then, across the top: the seconds left before it shatters.
     /// </summary>
     public class WorldScreen : MonoBehaviour
     {
@@ -71,19 +71,18 @@ namespace SuddenMageEncounter
             return Mathf.Max((1f - open) * (1f - open), close * close);
         }
 
-        /// <summary>The words across the top right now (and their size), or null.</summary>
+        /// <summary>The countdown across the top right now (and its size), or null.</summary>
         string Banner(PlayerController me, in BodyStatus st, double now)
         {
             float age = (float)(now - st.WorldUntil);
             if (age < 0f || WorldNet.WorldOf(me) == null) return null;
-            bool dying = age >= SpellPlans.WorldGrace;
-            if (!dying && age >= SpellPlans.WorldCallout) return null;
+            float left = SpellPlans.WorldLife - age;
+            if (left <= 0f) return null;
             Build();
-            float t = dying ? age - SpellPlans.WorldGrace : age;
-            float scale = t < 0.16f ? Mathf.Lerp(2f, 1f, t / 0.16f) : 1f;                              // punches in
-            if (dying) scale *= 1f + 0.05f * Mathf.Max(0f, Mathf.Sin(t * Mathf.PI * 2f));               // a beat a second, as the damage comes
-            else scale *= Mathf.Clamp01((SpellPlans.WorldCallout - t) / 0.2f);                          // shrinks away
-            _banner.text = dying ? "FIGHT OR DIE" : "ONLY ONE MAY REMAIN";
+            int secs = Mathf.CeilToInt(left);
+            float into = secs - left;                                                                    // 0 as each second starts
+            float scale = into < 0.16f ? Mathf.Lerp(1.5f, 1f, into / 0.16f) : 1f;                         // each one punches in
+            _banner.text = secs.ToString();
             _banner.rectTransform.localScale = Vector3.one * scale;
             return _banner.text;
         }
@@ -120,7 +119,7 @@ namespace SuddenMageEncounter
             }
             _top = Half("Top", true);
             _bottom = Half("Bottom", false);
-            _banner = UIFactory.Text("Banner", go.transform, "", 76, TextAnchor.MiddleCenter, new Color(0.95f, 0.1f, 0.07f), FontStyle.Bold);
+            _banner = UIFactory.Text("Banner", go.transform, "", 96, TextAnchor.MiddleCenter, new Color(0.95f, 0.1f, 0.07f), FontStyle.Bold);
             UIFactory.Place(_banner.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(0f, -110f), new Vector2(1600f, 110f));
             Ink(_banner, 4f);
         }

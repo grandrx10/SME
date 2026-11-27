@@ -242,7 +242,7 @@ namespace SuddenMageEncounter
             m.MarkDynamic();
             go.AddComponent<MeshFilter>().sharedMesh = m;
             var r = go.AddComponent<MeshRenderer>();
-            r.sharedMaterial = mat;
+            Glow.SetStrip(r, mat);
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             r.receiveShadows = false;
             Glow.Tint(r, c);

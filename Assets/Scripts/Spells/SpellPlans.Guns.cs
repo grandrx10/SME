@@ -21,7 +21,7 @@ namespace SuddenMageEncounter
         public const float RachDamage = 3f;                  // each
         public const float RachCone = 15f;                   // degrees across, edge to edge
         public const float RachSpeed = 55f, RachRange = Cards.MaxRange;
-        public const float PelletRadius = 0.09f;             // drawn and hit at this size
+        public const float PelletRadius = 0.18f;             // drawn and hit at this size
         public const float RachKnock = 12f, RachKnockUp = 4f, RachRagdoll = 1f; // the first pellet to hit someone; the rest only hurt
         public const float RecoilBack = 21f, RecoilUp = 4f, RecoilRagdoll = 1.1f; // the caster, straight back from the blast
 
@@ -33,8 +33,8 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- Sebastian
-        public const float SebCharge = 1f;                   // held this long before it will fire
-        public const float SebLength = 25f, SebRadius = 0.5f; // the shot: a round-ended cylinder
+        public const float SebCharge = 0.75f;                // held this long before it will fire
+        public const float SebLength = 75f, SebRadius = 0.5f; // the shot: a round-ended cylinder
         public const float SebDamage = 50f;
         public const float SebKnock = 26f, SebKnockUp = 7f, SebRagdoll = 1.8f; // thrown hard along the shot
         public const float SebWindup = 0.3f;                 // let go: the gun charges up this long, then fires (ragdolled meanwhile: it doesn't)
@@ -63,10 +63,10 @@ namespace SuddenMageEncounter
         public static Vector3 SebastianGrip(Vector3 hips, Quaternion aim, float stand) =>
             hips + Vector3.up * Mathf.Lerp(GunEye - KneelDrop, GunEye, stand) + aim * new Vector3(0.07f, -0.12f, 0.32f);
 
-        /// <summary>The line of the shot, straight out of the barrel as it's held down on one knee: always level.</summary>
-        public static void SebastianRay(Combatant c, float yaw, out Vector3 muzzle, out Vector3 dir)
+        /// <summary>The line of the shot, straight out of the barrel as it's held down on one knee.</summary>
+        public static void SebastianRay(Combatant c, float yaw, float pitch, out Vector3 muzzle, out Vector3 dir)
         {
-            var aim = Quaternion.Euler(0f, yaw, 0f);
+            var aim = Quaternion.Euler(pitch, yaw, 0f);
             dir = aim * Vector3.forward;
             muzzle = GrowPoint(c, SebastianGrip(c.transform.position, aim, 0f) + aim * GunModel.Muzzle(GunKind.Sebastian));
         }
@@ -120,7 +120,8 @@ namespace SuddenMageEncounter
         // ---------------------------------------------------------------- Undying Grasp
         public const float GraspCast = 0.5f;                 // down on one knee, turning with the camera (knocked down meanwhile: nothing)
         public const float GraspRise = 0.4f;                 // the hands shoot out; whoever is in reach meanwhile is grabbed
-        public const float GraspHold = 2.5f;
+        public const float GraspHold = 3f;
+        public const float GraspBreak = 30f;                 // damage taken while held that breaks free (ragdolled breaks free too)
         public const int GraspCount = 15;                    // hands along the line, 1 m apart: 15 m
         public const float GraspSpacing = 1f;
         public const float GraspSide = 0.28f;                // left and right of the line in turn

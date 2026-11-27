@@ -628,7 +628,7 @@ namespace SuddenMageEncounter
                 if (!erase && net != null)
                     foreach (var j in net.Judgments.Values)
                     {
-                        Vector3 o = _pos[i] - j.CenterAt(WorldNet.Now);
+                        Vector3 o = _pos[i] - j.center;
                         if (new Vector2(o.x, o.z).magnitude <= SpellPlans.JudgmentRadiusOf(j.kind)) { erase = true; break; }
                     }
                 if (!erase) continue;

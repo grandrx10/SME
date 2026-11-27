@@ -7,7 +7,7 @@ using UnityEngine.UI;
 namespace SuddenMageEncounter
 {
     /// <summary>Main menu, settings, pause menu, loadouts and the HUD — all built from code.</summary>
-    public class GameUI : MonoBehaviour
+    public partial class GameUI : MonoBehaviour
     {
         enum UiScreen { Menu, Game }
         static readonly Color MenuBackground = new(0.1f, 0.1f, 0.13f, 1f);
@@ -340,9 +340,10 @@ namespace SuddenMageEncounter
             else if (InputMap.Down(GameAction.PracticeDummy) && pc.IsAlive)
             {
                 Vector3 p = pc.Caster.AimPoint(false, out bool hit);
-                if (hit) pc.RequestPractice(PlayerController.PracticeAction.Summon, p);
+                if (hit) pc.RequestPractice(PlayerController.PracticeAction.Summon, p, _dummyKind);
                 else _noTargetT = 1.2f;
             }
+            else if (InputMap.DownRaw(GameAction.PracticeDummyType)) _dummyKind = (TestDummy.DummyKind)(((int)_dummyKind + 1) % TestDummy.DummyKinds);
             else if (InputMap.Down(GameAction.PracticeCorpse) && pc.IsAlive)
             {
                 // a dead body where you aim (to raise with Undead Servitude)
@@ -384,12 +385,13 @@ namespace SuddenMageEncounter
             _arcana.Title = title.rectTransform;
 
             var col = UIFactory.Rect("Buttons", _menu);
-            UIFactory.Place(col, new Vector2(0.5f, 0.42f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(360, 392));
+            UIFactory.Place(col, new Vector2(0.5f, 0.42f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(360, 468));
             UIFactory.VList(col, 16);
             var play = MenuButton(_arcana, col, "Play", "PLAY", () => SessionManager.Play(), 36, 72);
             ServerListButton((RectTransform)play.transform.parent);
             MenuButton(_arcana, col, "Loadout", "LOADOUT", () => _loadout.Open(), 30, 60);
             MenuButton(_arcana, col, "Shop", "SHOP", () => _shop.Open(), 30, 60);
+            MenuButton(_arcana, col, "PatchNotes", "PATCH NOTES", () => PatchNotes.Open(_canvas.transform), 30, 60);
             MenuButton(_arcana, col, "Settings", "SETTINGS", OpenSettings, 30, 60);
             MenuButton(_arcana, col, "Quit", "QUIT", AskQuit, 30, 60);
 
@@ -789,7 +791,7 @@ namespace SuddenMageEncounter
                 UIFactory.Stretch((RectTransform)b.transform);
                 _bindLabels[a] = UIFactory.Label(b);
             }
-            UIFactory.Size(UIFactory.Button("ResetBinds", controls, "Reset keys to default", () => { GameSettings.ResetBinds(); RefreshBinds(); }, 22), 40);
+            UIFactory.Size(UIFactory.Button("ResetBinds", controls, "Reset keys to default", () => { GameSettings.ResetBinds(); RefreshBinds(); _hudKeysDirty = true; }, 22), 40);
             RefreshBinds();
             foreach (var p in pages) StyleSettingsPage(p);
 
@@ -868,9 +870,11 @@ namespace SuddenMageEncounter
             GameAction.Ability3 => "Ability 3",
             GameAction.Ability4 => "Ability 4",
             GameAction.Ability5 => "Ability 5",
+            GameAction.Shield => "Arcane Shield",
             GameAction.Loadout => "Loadout",
             GameAction.PracticeReset => "Practice: Reset",
             GameAction.PracticeDummy => "Practice: Dummy",
+            GameAction.PracticeDummyType => "Practice: Dummy Type",
             GameAction.PracticeCorpse => "Practice: Corpse",
             GameAction.PracticeMap => "Practice: Next Map",
             GameAction.PracticeHazard => "Practice: Hazard",
@@ -975,6 +979,8 @@ namespace SuddenMageEncounter
             BuildHitMarker();
             BuildRings();
             BuildAbilities();
+            BuildShield();
+            BuildBounds();
 
             // round over
             var round = UIFactory.Rect("RoundOver", _hud);
@@ -1174,7 +1180,11 @@ namespace SuddenMageEncounter
 
         const float HintRow = 46f, HintGap = 8f;
         RectTransform _practiceHints;
-        const int HintCount = 7, HazardHint = 2;
+        const int HintCount = 8, HazardHint = 2, DummyHint = 3;
+        /// <summary>The dummy K drops (U goes to the next).</summary>
+        TestDummy.DummyKind _dummyKind;
+        static readonly string[] DummyWords = { "DUMMY", "DEFENSE DUMMY", "ATTACK DUMMY" };
+        static readonly Color[] DummyColors = { Color.white, new(0.5f, 0.75f, 1f), new(1f, 0.55f, 0.35f) };
         readonly Text[] _hintKeys = new Text[HintCount];
         readonly Text[] _hintWords = new Text[HintCount];
         Image _roundsCap;
@@ -1184,7 +1194,7 @@ namespace SuddenMageEncounter
         {
             _practiceHints = UIFactory.Rect("PracticeKeys", _hud);
             UIFactory.Place(_practiceHints, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-30, TopRightY), new Vector2(260, HintCount * HintRow + (HintCount - 1) * HintGap));
-            string[] words = { "RESET", "MAP", "HAZARD", "DUMMY", "CORPSE", "LEAVE", "ROUNDS" };
+            string[] words = { "RESET", "MAP", "HAZARD", "DUMMY", "SWAP DUMMY", "CORPSE", "LEAVE", "ROUNDS" };
             for (int i = 0; i < HintCount; i++)
             {
                 float y = -i * (HintRow + HintGap);
@@ -1218,15 +1228,18 @@ namespace SuddenMageEncounter
                 _hintKeys[0].text = GameSettings.Binds[GameAction.PracticeReset].ShortName;
                 _hintKeys[1].text = GameSettings.Binds[GameAction.PracticeMap].ShortName;
                 _hintKeys[HazardHint].text = GameSettings.Binds[GameAction.PracticeHazard].ShortName;
-                _hintKeys[3].text = GameSettings.Binds[GameAction.PracticeDummy].ShortName;
-                _hintKeys[4].text = GameSettings.Binds[GameAction.PracticeCorpse].ShortName;
-                _hintKeys[5].text = GameSettings.Binds[GameAction.PracticeLeave].ShortName;
-                _hintKeys[6].text = GameSettings.Binds[GameAction.PracticeRounds].ShortName;
+                _hintKeys[DummyHint].text = GameSettings.Binds[GameAction.PracticeDummy].ShortName;
+                _hintKeys[4].text = GameSettings.Binds[GameAction.PracticeDummyType].ShortName;
+                _hintKeys[5].text = GameSettings.Binds[GameAction.PracticeCorpse].ShortName;
+                _hintKeys[6].text = GameSettings.Binds[GameAction.PracticeLeave].ShortName;
+                _hintKeys[7].text = GameSettings.Binds[GameAction.PracticeRounds].ShortName;
                 // (the kill feed moves down out of the way: UpdateGold)
             }
             if (!on) return;
             // hazards: red while they're going
             _hintWords[HazardHint].color = Practice.HazardsOn(me.PracticeSlot.Value) ? HazardsGoing : Color.white;
+            _hintWords[DummyHint].text = DummyWords[(int)_dummyKind];
+            _hintWords[DummyHint].color = DummyColors[(int)_dummyKind];
             // join rounds: a green tick while the next round will pull you in, a dim cross while you stay here
             bool joins = me.JoinRounds.Value;
             _hintWords[HintCount - 1].text = joins ? "ROUNDS ✓" : "ROUNDS ✕";
@@ -1327,6 +1340,7 @@ namespace SuddenMageEncounter
             UpdateHits(dt);
             UpdateFeed();
             UpdateSongToast(dt);
+            UpdateBounds(pc, dt);
             if (pc == null || !pc.IsSpawned) return;
 
             // damage flash
@@ -1370,7 +1384,7 @@ namespace SuddenMageEncounter
                     }
                 }
                 var shownInfo = Cards.Get(card);
-                if (shownInfo != null) // (every frame: a Fool card is free, Temperance adds 1 to the others)
+                if (shownInfo != null) // (every frame: a Fool card is free)
                     b.costText.text = shownInfo.costType == CostType.Passive ? "P" : pc.Caster.CostIn(i).ToString();
                 if (_hudKeysDirty) b.key.text = GameSettings.Binds[GameSettings.AbilityAction(i)].ShortName;
                 bool empty = card == CardId.None;
@@ -1391,6 +1405,7 @@ namespace SuddenMageEncounter
                 float lift = pc.Caster.HoldingSlot == i ? 8f : 0f;
                 b.root.anchoredPosition = new Vector2(b.root.anchoredPosition.x, Mathf.Lerp(b.root.anchoredPosition.y, 70f + lift, 1f - Mathf.Exp(-20f * dt)));
             }
+            UpdateShield(pc, dt);
             _hudKeysDirty = false;
         }
 
@@ -1637,7 +1652,7 @@ namespace SuddenMageEncounter
         {
             var bg = UIFactory.Image("SongToast", _hud, new Color(0.04f, 0.05f, 0.07f, 0.85f));
             var r = bg.rectTransform;
-            UIFactory.Place(r, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-30, 30), new Vector2(460, 112));
+            UIFactory.Place(r, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-30, 240), new Vector2(460, 112)); // (above the shield's button)
             bg.raycastTarget = false;
             var stripe = UIFactory.Image("Stripe", r, UIFactory.Accent);
             stripe.raycastTarget = false;

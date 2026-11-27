@@ -58,7 +58,7 @@ namespace SuddenMageEncounter
 
             Motes(now);
             _grown = Mathf.MoveTowards(_grown, _fx.launched ? 1f : _arrived / (float)_total, dt * 6f);
-            float size = SpellPlans.FireballCore * Mathf.Pow(_grown, 1f / 3f) * (1f + 0.07f * Mathf.Sin(Time.time * 26f));
+            float size = SpellPlans.FireballCore * SpellPlans.NecroScale * Mathf.Pow(_grown, 1f / 3f) * (1f + 0.07f * Mathf.Sin(Time.time * 26f));
             _core.localScale = Vector3.one * (_grown > 0f ? size : 0f);
             // lumps running round its surface: it's never quite one ball
             for (int i = 0; i < _moons.Count; i++)

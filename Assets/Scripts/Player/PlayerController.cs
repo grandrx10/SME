@@ -11,7 +11,7 @@ namespace SuddenMageEncounter
     /// Health, death and the death ragdoll live in Combatant.
     /// </summary>
     [DefaultExecutionOrder(-50)]
-    public class PlayerController : Combatant
+    public partial class PlayerController : Combatant
     {
         public static PlayerController Local { get; private set; }
         public static readonly List<PlayerController> All = new();
@@ -59,16 +59,16 @@ namespace SuddenMageEncounter
             return c;
         }
 
-        /// <summary>How many Temperance cards this player brought (each: more mana and health, every other card costs 1 more).</summary>
+        /// <summary>How many Temperance cards this player brought (each: more mana, less health).</summary>
         public int Temperance => IsUndead ? 0 : Cards.TemperanceCount(IsSpawned ? Hand : EquippedCards.From(Loadouts.Selected));
 
-        /// <summary>What this card costs this player (Temperance puts 1 on every other card's mana cost).</summary>
-        public int CostOf(CardInfo info) => Cards.CostWith(info, Temperance);
+        /// <summary>What this card costs this player.</summary>
+        public int CostOf(CardInfo info) => info == null ? 0 : info.cost;
 
         /// <summary>The most mana this player can hold: 10, +3 per Temperance; the Undead only 5.</summary>
         public byte ManaCap => IsUndead ? SpellPlans.UndeadMana : (byte)(ManaState.Max + SpellPlans.TemperanceMana * Temperance);
 
-        public override float MaxHealth => IsUndead ? SpellPlans.UndeadHealth : maxHealth + SpellPlans.TemperanceHealth * Temperance;
+        public override float MaxHealth => IsUndead ? SpellPlans.UndeadHealth : maxHealth + Cards.HealthBonus(IsSpawned ? Hand : EquippedCards.From(Loadouts.Selected));
 
         /// <summary>Is this slot showing a free card rolled by The Fool?</summary>
         public bool IsFoolCard(int slot) => IsSpawned && Hand[slot] == CardId.TheFool && FoolCards.Value[slot] != CardId.None;
@@ -193,6 +193,8 @@ namespace SuddenMageEncounter
             if (GetComponent<SwordView>() == null) gameObject.AddComponent<SwordView>();
             if (GetComponent<HammerView>() == null) gameObject.AddComponent<HammerView>();
             if (GetComponent<GunView>() == null) gameObject.AddComponent<GunView>();
+            if (GetComponent<WolfgangView>() == null) gameObject.AddComponent<WolfgangView>();
+            if (GetComponent<SpeedDemonView>() == null) gameObject.AddComponent<SpeedDemonView>();
             if (GetComponent<BombHandsFx>() == null) gameObject.AddComponent<BombHandsFx>();
             Motor.enabled = false;
             Caster.enabled = false;
@@ -537,7 +539,9 @@ namespace SuddenMageEncounter
             else _serverLastCast[slot] = now;
             _serverCastingUntil = now + (SpellServer.CastTimeOverride >= 0f ? SpellServer.CastTimeOverride : Cards.CastTime(card));
             SpellServer.CastTimeOverride = -1f;
+            ServerLowerShield(false); // (its owner lowers it too)
             if (card == CardId.Skinwalker) SpellServer.SkinwalkBegan(this, slot);
+            if (card == CardId.Justice) SpellServer.JusticeBegan(this, free ? 0 : cost);
             if (card == CardId.Sebastian) SpellServer.SebastianBegan(this, slot, free ? 0 : cost, free);
             if (free && card == CardId.Sebastian) { } // a rolled Sebastian is used up when it fires (or is lost), not when the charge begins
             else if (free && IsFoolCard(slot) && card == CardId.WarpSpace && !secondPortal)
@@ -612,12 +616,22 @@ namespace SuddenMageEncounter
         void SebastianLostRpc() => SpellServer.SebastianLost(this);
 
         /// <summary>Owner: Sebastian has charged up: it fires now, this way.</summary>
-        public void RequestSebastianShot(float yaw) => SebastianShotRpc(yaw);
+        public void RequestSebastianShot(float yaw, float pitch) => SebastianShotRpc(yaw, pitch);
 
         [Rpc(SendTo.Server)]
-        void SebastianShotRpc(float yaw)
+        void SebastianShotRpc(float yaw, float pitch)
         {
-            if (IsAlive) SpellServer.SebastianShot(this, yaw);
+            if (IsAlive) SpellServer.SebastianShot(this, yaw, pitch);
+        }
+
+        /// <summary>Owner: held Skinwalker's button long enough, away from any corpse: the skin comes off.</summary>
+        public void RequestShedSkin() => ShedSkinRpc();
+
+        [Rpc(SendTo.Server)]
+        void ShedSkinRpc()
+        {
+            if (!IsAlive || !Skin.Value.On || Status.Value.Taken(WorldNet.Now)) return;
+            SpellServer.ShedSkin(this);
         }
 
         /// <summary>Server: this slot can be cast again straight away.</summary>
@@ -662,6 +676,12 @@ namespace SuddenMageEncounter
         [Rpc(SendTo.Owner)]
         void HitConfirmRpc(ulong victim, Vector3 where, float damage, bool killed) => LocalHitConfirmed?.Invoke(victim, where, damage, killed);
 
+        /// <summary>Server: this player struck someone with Death, or was struck by it: their screen darkens round the edges.</summary>
+        public void ServerDeathGloom() => DeathGloomRpc();
+
+        [Rpc(SendTo.Owner)]
+        void DeathGloomRpc() => DeathGloom.Show();
+
         // ---------------- knockback / crashes / falls ----------------
 
         float _serverRagdollUntil;
@@ -681,7 +701,7 @@ namespace SuddenMageEncounter
         void NoteKnockdown() { if (_combo.NoteKnockdown()) ServerComboBreak(); }
 
         /// <summary>Server, every frame: lying ragdolled too long within the window breaks the combo.</summary>
-        void TickComboBreak() { if (_combo.Tick(IsAlive, IsRagdolled && !LungingView && !HeldStill)) ServerComboBreak(); } // (a bite's own lunge doesn't count)
+        void TickComboBreak() { if (_combo.Tick(IsAlive, IsRagdolled && !LungingView && !HeldStill && !SpellServer.SkyFlung(this))) ServerComboBreak(); } // (a bite's own lunge, or the Wheel's throw, doesn't count)
 
         /// <summary>Server: thrown by the kick of our own shotgun. Interrupts nothing, but counts for combo breaks like any knockdown.</summary>
         public void ServerRecoil(Vector3 velocity, float ragdollSeconds)
@@ -691,6 +711,7 @@ namespace SuddenMageEncounter
             if (ServerUnstoppable) ragdollSeconds = 0f; // (that broke the combo, or one just did: thrown, on our feet)
             _serverRagdollUntil = Mathf.Max(_serverRagdollUntil, Time.time + ragdollSeconds);
             SpellServer.FreeGrasp(this);
+            SpellServer.DispelMagician(this);
             KnockRpc(velocity, ragdollSeconds);
         }
 
@@ -713,16 +734,17 @@ namespace SuddenMageEncounter
         {
             if (!IsServer) return;
             if (SpellServer.Bubbled(this) || SpellServer.Invulnerable(this)) return; // in your bubble, mid-warp, swift: nothing moves you
-            if (SpellServer.Unmovable(this)) return; // turned to steel by the Wheel, praying for The Tower, charging with The Chariot: nothing moves you
+            if (SpellServer.Unmovable(this)) return; // praying for The Tower, charging with The Chariot: nothing moves you
             if (SpellServer.Hanging(this)) return; // hanging from The Hanged Man's noose: nothing moves you
             if (ragdollSeconds > 0f && SpellServer.Shielded(this)) return; // inside your own barrier: nothing moves you
             if (SpellServer.StasisHolds(this)) return; // frozen by this very attack (a later one thaws them, and throws them)
             // combo break: knocked down too much lately, they get up and can't be knocked down for a while (still thrown)
-            if (ragdollSeconds > 0f && !ServerUnstoppable) NoteKnockdown();
+            if (ragdollSeconds > 0f && !ServerUnstoppable && !SpellServer.QuietKnock) NoteKnockdown();
             if (ServerUnstoppable) ragdollSeconds = 0f;
             _serverRagdollUntil = Mathf.Max(_serverRagdollUntil, Time.time + ragdollSeconds);
             if (ragdollSeconds > 0f) SpellServer.OnInterrupted(this, true);
             KnockRpc(velocity, ragdollSeconds);
+            if (ragdollSeconds > 0f) SpellServer.SmallKnockedDown(this); // Smallify: knocked over while small hurts
         }
 
         protected override void OnServerDamaged(float amount) => SpellServer.OnInterrupted(this, false);
@@ -745,6 +767,17 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Server: the siphon punch landed — stop the dash and swing.</summary>
+        /// <summary>Server: out of Submerge's pool: the owner pops up, spinning.</summary>
+        public void ServerEmerged() => EmergedRpc();
+
+        [Rpc(SendTo.Owner)]
+        void EmergedRpc()
+        {
+            if (Motor == null || Dead.Value) return;
+            Motor.Knock(Vector3.up * SpellPlans.SubEmergeHop, 0f);
+            if (Caster != null) Caster.PlayPose(SpellPose.SubEmerge);
+        }
+
         public void ServerSiphonPunched() => SiphonPunchRpc();
 
         [Rpc(SendTo.Owner)]
@@ -762,6 +795,15 @@ namespace SuddenMageEncounter
         {
             if (Motor != null) Motor.EndSiphon();
             if (Caster != null) Caster.PlayPose(SpellPose.SeveranceSlash);
+        }
+
+        /// <summary>Server: Parry deflected a blow — dash to <paramref name="to"/> (the hips) in <paramref name="seconds"/> and stab.</summary>
+        public void ServerParryDash(Vector3 to, float seconds) => ParryDashRpc(to, seconds);
+
+        [Rpc(SendTo.Owner)]
+        void ParryDashRpc(Vector3 to, float seconds)
+        {
+            if (Caster != null) Caster.ParryDash(to, seconds);
         }
 
         /// <summary>Server: Rising Hammer's rush ends — stop and swing the hammer up.</summary>
@@ -1105,17 +1147,33 @@ namespace SuddenMageEncounter
         }
 
         bool _barrierReported;
+        float _outsideFor;
+        /// <summary>Out of the arena for this long (s): shattered. Warned about it once it's been <see cref="OutsideWarn"/> (a new round's arena, loading round us before we're moved into it, isn't worth one).</summary>
+        public const float OutsideTime = 3f, OutsideWarn = 0.4f;
+        /// <summary>Owner: out of bounds, with this long left to get back in (below 0: not out).</summary>
+        public float OutOfBoundsLeft => IsAlive && !_barrierReported && _outsideFor >= OutsideWarn ? Mathf.Max(0f, OutsideTime - _outsideFor) : -1f;
 
         void CheckHazards()
         {
             if (_barrierReported) return;
             // inside a World: whatever its sphere swallowed (lava, the drop under the arena) can't reach us
-            if (Motor.Held || WorldNet.InsideWorld(transform.position)) return;
+            if (Motor.Held || WorldNet.InsideWorld(transform.position)) { _outsideFor = 0f; return; }
+            _outsideFor = ArenaLimits.Outside(transform.position) ? _outsideFor + Time.deltaTime : 0f;
             bool below = transform.position.y < Practice.KillYAt(transform.position);
-            if (below || KillVolume.AnyContains(transform.position) || KillVolume.AnyContains(FeetPosition + Vector3.up * 0.2f))
+            if (SkyWrap.Near(transform.position) is { } sky)
+            {
+                // off a side of Skyland's area: in at the opposite side (free)
+                if (sky.Across(transform.position, out var across)) { SkyAcross(across); return; }
+                // over it: the bottom wraps instead of the kill height
+                if (transform.position.y < sky.BottomY) { SkyWrapOwn(sky); return; }
+                below = false;
+            }
+            // (out of the arena altogether: in pieces, if they don't get back in)
+            bool tooLong = _outsideFor >= OutsideTime;
+            if (below || tooLong || KillVolume.AnyContains(transform.position) || KillVolume.AnyContains(FeetPosition + Vector3.up * 0.2f))
             {
                 _barrierReported = true;
-                BarrierRpc();
+                BarrierRpc(tooLong || below && _outsideFor > 0f); // (fell off outside the limits: in pieces too)
             }
             else if (TrainTrack.Hits(transform.position, out var train))
             {
@@ -1130,10 +1188,43 @@ namespace SuddenMageEncounter
             if (IsAlive) ServerKillByHazard(DeathCause.Barrier, transform.position, Vector3.ClampMagnitude(dir, 1f) * SpellPlans.TrainThrow + Vector3.up * SpellPlans.TrainLift);
         }
 
-        [Rpc(SendTo.Server)]
-        void BarrierRpc()
+        SkyWrap.Heat _skyHeat;
+        /// <summary>Owner: how full Skyland's fall bar is (0..1+), draining as it goes.</summary>
+        public float SkyHeat => _skyHeat.Now;
+
+        /// <summary>Owner: fell out of Skyland's bottom: back in over the top, still falling (or, if that fills the bar, in bits).</summary>
+        void SkyWrapOwn(SkyWrap sky)
         {
-            if (IsAlive) ServerKillByHazard(DeathCause.Barrier, transform.position);
+            if (_skyHeat.Add())
+            {
+                _barrierReported = true;
+                BarrierRpc(true);
+                return;
+            }
+            Motor.MoveTo(sky.TopAbove(transform.position), Motor.Yaw, Motor.Velocity); // (Moved: others snap)
+            WriteState();
+            SkyWrapRpc(true);
+        }
+
+        [Rpc(SendTo.Everyone)]
+        void SkyWrapRpc(bool fell)
+        {
+            SkyWrapWind.Play(this);
+            if (fell) HexBodyFx.SkyFall(this); // (everyone fills the bar beside us)
+        }
+
+        /// <summary>Owner: off a side of Skyland: in at the opposite side, same height, still moving. Doesn't fill the bar.</summary>
+        void SkyAcross(Vector3 to)
+        {
+            Motor.MoveTo(to, Motor.Yaw, Motor.Velocity);
+            WriteState();
+            SkyWrapRpc(false);
+        }
+
+        [Rpc(SendTo.Server)]
+        void BarrierRpc(bool shatter)
+        {
+            if (IsAlive) ServerKillByHazard(DeathCause.Barrier, transform.position, shatter: shatter);
         }
 
         // ---------------- rounds ----------------
@@ -1154,6 +1245,7 @@ namespace SuddenMageEncounter
             Status.Value = default; // a new round: nobody's Undead any more
             Skin.Value = default;   // and everyone in their own skin
             ServerRevive();
+            ServerRefillShield(true);
             // mana starts counting at manaFrom (before then it reads as this value: 0 during the countdown)
             Mana.Value = new ManaState { Value = Mathf.Min(mana, ManaCap), Time = manaFrom, Cap = ManaCap };
             FoolCards.Value = default;
@@ -1181,6 +1273,7 @@ namespace SuddenMageEncounter
                 MatchManager.ServerLoseShare(this);
             }
             ServerRevive();
+            ServerRefillShield(true);
             Mana.Value = new ManaState { Value = 0f, Time = WorldNet.Now, Cap = SpellPlans.UndeadMana };
             FoolCards.Value = default;
             TrappedBy.Value = 0;
@@ -1194,13 +1287,16 @@ namespace SuddenMageEncounter
         [Rpc(SendTo.Everyone)]
         void UndeadRiseRpc(Vector3 pos, float yaw)
         {
+            HexBodyFx.SkyClear(this);
             ClearLiveRagdoll();
             if (LastRagdoll) Destroy(LastRagdoll);
             if (IsOwner)
             {
-                BlindOverlay.Clear();
+                BlindOverlay.Clear(); DeathGloom.Clear();
                 _teleportCounter++;
                 _barrierReported = false;
+                _outsideFor = 0f;
+                _skyHeat.Clear();
                 Motor.Teleport(pos, yaw);
                 Motor.UnstoppableUntil = 0f;
                 Motor.enabled = true;
@@ -1228,7 +1324,7 @@ namespace SuddenMageEncounter
                 Skin.Value = default;
                 FoolCards.Value = default;
             }
-            float oldMax = maxHealth + SpellPlans.TemperanceHealth * Cards.TemperanceCount(prev);
+            float oldMax = maxHealth + Cards.HealthBonus(prev);
             if (!IsUndead && IsAlive && MaxHealth > oldMax) Health.Value = Mathf.Min(MaxHealth, Health.Value + (MaxHealth - oldMax));
             else if (IsAlive) Health.Value = Mathf.Min(Health.Value, MaxHealth);
             if (Mana.Value.Cap != ManaCap)
@@ -1236,8 +1332,20 @@ namespace SuddenMageEncounter
                 var m = Mana.Value;
                 double t = WorldNet.Now;
                 // (before mana starts flowing at the end of the countdown, the value is kept as it is)
-                if (t < m.Time) Mana.Value = new ManaState { Value = m.Value, Time = m.Time, FastUntil = m.FastUntil, Flow = m.Flow, Cap = ManaCap };
-                else Mana.Value = new ManaState { Value = Mathf.Min(m.At(t), ManaCap), Time = t, FastUntil = m.FastUntil, Flow = m.Flow, Cap = ManaCap };
+                if (t >= m.Time) m = m.With(t, Mathf.Min(m.At(t), ManaCap));
+                m.Cap = ManaCap;
+                Mana.Value = m;
+            }
+            // Speed Demon: less shield
+            byte shieldCap = SpellPlans.ShieldCapFor(this);
+            if (Shield.Value.Cap != shieldCap)
+            {
+                var sh = Shield.Value;
+                double t = WorldNet.Now;
+                sh.Value = Mathf.Min(sh.At(t), shieldCap > 0 ? shieldCap : SpellPlans.ShieldHealth);
+                sh.Time = t;
+                sh.Cap = shieldCap;
+                Shield.Value = sh;
             }
         }
 
@@ -1255,9 +1363,23 @@ namespace SuddenMageEncounter
             Skin.Value = skin;
             FoolCards.Value = default;
             Health.Value = MaxHealth;
-            var m = Mana.Value;
-            Mana.Value = new ManaState { Value = Mathf.Min(SpellPlans.SkinMana, ManaCap), Time = WorldNet.Now, FastUntil = m.FastUntil, Flow = m.Flow, Cap = ManaCap };
+            var m = Mana.Value.With(WorldNet.Now, Mathf.Min(SpellPlans.SkinMana, ManaCap));
+            m.Cap = ManaCap;
+            Mana.Value = m;
             for (int i = 0; i < _serverLastCast.Length; i++) _serverLastCast[i] = -10;
+        }
+
+        /// <summary>Server: the skin comes off: their own colour, face and moves again (health and mana stay as they are, within their own limits).</summary>
+        public void ServerShedSkin()
+        {
+            if (!IsServer || !IsAlive) return;
+            Skin.Value = default;
+            FoolCards.Value = default;
+            Health.Value = Mathf.Min(Health.Value, MaxHealth);
+            double now = WorldNet.Now;
+            var m = Mana.Value.With(now, Mathf.Min(ManaNow, ManaCap));
+            m.Cap = ManaCap;
+            Mana.Value = m;
         }
 
         void OnStatusChanged(BodyStatus prev, BodyStatus next)
@@ -1266,7 +1388,7 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>
-        /// Server: Wheel of Fortune rolled a 2: thrown straight up, ragdolled (crashing through what's above). Sent straight
+        /// Server: Wheel of Fortune rolled a 1 (or its blast landed): thrown, ragdolled (crashing through what's above). Sent straight
         /// to the owner (the card's own effect, so nothing that would stop a hit stops it).
         /// </summary>
         public void ServerFling(Vector3 velocity, float ragdollSeconds)
@@ -1282,17 +1404,22 @@ namespace SuddenMageEncounter
         {
             if (Dead.Value || Motor == null) return;
             Motor.StandUpNow(); // (out of anything holding it down first)
+            // (limp even while a combo break would keep them on their feet)
+            float unstoppable = Motor.UnstoppableUntil;
+            Motor.UnstoppableUntil = 0f;
             Motor.Knock(velocity, ragdollSeconds);
+            Motor.UnstoppableUntil = unstoppable;
         }
 
-        /// <summary>Owner: Wheel of Fortune rolled a 4: the Mana Siphon charge.</summary>
+        /// <summary>Owner: Wheel of Fortune rolled a 6: the Mana Siphon charge, twice as fast (off the ground first, if need be).</summary>
         public void ServerStartSiphon() => StartSiphonRpc();
 
         [Rpc(SendTo.Owner)]
         void StartSiphonRpc()
         {
             if (Motor == null || Dead.Value) return;
-            Motor.Siphon(SpellPlans.SiphonTime);
+            Motor.StandUpNow();
+            Motor.Siphon(SpellPlans.SiphonTime, SpellPlans.GoldSpeed);
             if (Caster != null) Caster.PlayPose(SpellPose.Siphon);
         }
 
@@ -1336,16 +1463,17 @@ namespace SuddenMageEncounter
         public enum PracticeAction : byte { Enter, Reset, Summon, Leave, Corpse, NextMap, Hazards }
 
         /// <summary>Owner: ask the server to enter / reset / leave your practice chamber, or drop a dummy at <paramref name="point"/>.</summary>
-        public void RequestPractice(PracticeAction action, Vector3 point = default) => PracticeRpc((byte)action, point);
+        /// <param name="kind">Which dummy (<see cref="TestDummy.DummyKind"/>).</param>
+        public void RequestPractice(PracticeAction action, Vector3 point = default, TestDummy.DummyKind kind = TestDummy.DummyKind.Plain) => PracticeRpc((byte)action, point, (byte)kind);
 
         [Rpc(SendTo.Server)]
-        void PracticeRpc(byte action, Vector3 point)
+        void PracticeRpc(byte action, Vector3 point, byte kind)
         {
             switch ((PracticeAction)action)
             {
                 case PracticeAction.Enter: Practice.ServerEnter(this); break;
                 case PracticeAction.Reset: Practice.ServerReset(this); break;
-                case PracticeAction.Summon: Practice.ServerSummon(this, point); break;
+                case PracticeAction.Summon: Practice.ServerSummon(this, point, false, (TestDummy.DummyKind)(kind % TestDummy.DummyKinds)); break;
                 case PracticeAction.Corpse: Practice.ServerSummon(this, point, true); break;
                 case PracticeAction.Leave: Practice.ServerLeave(this); break;
                 case PracticeAction.NextMap: Practice.ServerNextMap(this); break;
@@ -1371,7 +1499,7 @@ namespace SuddenMageEncounter
             if (LastRagdoll) Destroy(LastRagdoll);
             if (IsOwner)
             {
-                BlindOverlay.Clear();
+                BlindOverlay.Clear(); DeathGloom.Clear();
                 _teleportCounter++;
                 Caster.CancelAll();
                 Motor.Teleport(arenaPos, Motor.Yaw);
@@ -1394,13 +1522,16 @@ namespace SuddenMageEncounter
         [Rpc(SendTo.Everyone)]
         void RoundStartRpc(Vector3 pos, float yaw)
         {
+            HexBodyFx.SkyClear(this);
             ClearLiveRagdoll();
             if (LastRagdoll) Destroy(LastRagdoll);
             if (IsOwner)
             {
-                BlindOverlay.Clear();
+                BlindOverlay.Clear(); DeathGloom.Clear();
                 _teleportCounter++;
                 _barrierReported = false;
+                _outsideFor = 0f;
+                _skyHeat.Clear();
                 PushLoadout(); // cards picked between rounds come into play now
                 if (VoxelWorld.Current != null) VoxelWorld.Current.FinishBuild(); // about to stand on it
                 Motor.Teleport(pos, yaw);
@@ -1424,9 +1555,12 @@ namespace SuddenMageEncounter
             TrappedBy.Value = 0;
             PinnedBy.Value = 0;
             Mana.Value = new ManaState { Value = Mana.Value.At(WorldNet.Now), Time = WorldNet.Now, Cap = Mana.Value.Cap }; // the Magician's boost ends
-            var st = Status.Value; // floating, steel, gold, chilled, doomed: all over (being Undead stays until raised again)
-            st.HangUntil = st.SteelUntil = st.GoldUntil = st.SlowUntil = st.DoomAt = st.StrongUntil = st.GraspUntil = 0;
+            var st = Status.Value; // floating, gold, chilled, doomed: all over (being Undead stays until raised again)
+            st.HangUntil = st.GoldUntil = st.SlowUntil = st.DoomAt = st.StrongUntil = st.GraspUntil = st.BloatAt = st.SpinUntil = 0;
             st.LitUntil = st.MoonAt = st.SunUntil = st.WorldUntil = st.StasisUntil = st.ShatterUntil = st.MindUntil = 0;
+            st.JusticeOn = 0;
+            st.DeathMarked = false; st.BileFrom = st.BileAt = 0;
+            st.SmallUntil = st.EatenUntil = st.EphemUntil = st.SubUntil = 0;
             Status.Value = st;
             if (!InPractice) ServerGrantGold(Rewards.Death); // dying in a round still pays a little
             if (attackerClientId == OwnerClientId || attackerClientId == NoAttacker || InPractice) return;
@@ -1434,6 +1568,7 @@ namespace SuddenMageEncounter
             if (killer != null && !Teammates(killer, this)) // (nothing for killing a teammate)
             {
                 killer.Kills.Value++;
+                killer.ServerRefillShield(false);
                 killer.ServerGrantGold(Rewards.Kill);
             }
         }
@@ -1562,6 +1697,9 @@ namespace SuddenMageEncounter
         static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int ColorId = Shader.PropertyToID("_Color");
         MaterialPropertyBlock _mpb;
+
+        /// <summary>Their own colour again, over anything that painted the body (Death's black).</summary>
+        public void RefreshColor() => ApplyColor();
 
         void ApplyColor()
         {

@@ -11,7 +11,7 @@ namespace SuddenMageEncounter
     public static partial class SpellPlans
     {
         // ---------------------------------------------------------------- The Hermit
-        public const float HermitKneel = 0.3f;      // down on one knee before anything moves
+
         public const float HermitBuild = 0.3f;      // the walls rise and the roof comes down in this long
         public const int HouseInner = 8;            // the room: every cell within 8 of the middle (4.25 m across)
         public const int HouseWall = 3;             // walls 3 voxels (0.75 m) thick
@@ -31,6 +31,10 @@ namespace SuddenMageEncounter
         }
 
         static int HouseOuter => HouseInner + HouseWall;
+
+        /// <summary>Where the house goes: on the ground under the caster, standing on it or lying on it (or where their feet are, over a drop).</summary>
+        public static Vector3 HouseFeet(Combatant c) =>
+            Physics.Raycast(c.transform.position, Vector3.down, out var hit, 3f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore) ? hit.point : c.FeetPosition;
 
         /// <summary>
         /// A little house of ground round <paramref name="feet"/>: four walls with a door on the side you face, a
@@ -140,43 +144,57 @@ namespace SuddenMageEncounter
         public const float WheelBusy = WheelCast + WheelRoll + WheelShow;
         public const float DieSize = 0.6f;                   // the die's edge (m)
         public const float DieAbove = 2.1f;                  // its middle, above the hips
-        public const float WheelFling = 30f, WheelFlingRagdoll = 1.6f;   // 2: thrown straight up (it crashes through what's above)
-        public const float DieDamage = 30f;                  // 3: the die thrown like Rock Barrage's rock...
-        public static float DieRadius => DieSize * 0.5f;     // ...hitting at its own size
-        public const float SteelTime = 5f;                   // 5: nothing moves you
-        public const float GoldTime = 3f;                    // 6: nothing hurts you
-        public const float DoomTime = 5f;                    // 0: flashing red, then you blow up
-        public const float DoomNear = 2f, DoomNearDamage = 150f, DoomFar = 5f, DoomFarDamage = 40f;
-        public const float WheelSiphonScale = 2f;            // 4: Mana Siphon, with double the damage and the mana stolen
-        public const float WheelSinge = 3.3f;                // 1: the ground this far round the caster is singed
+        public const float WheelRare = 4f;                   // the chance of a 0, and of a 7 (%); 1 to 6 share the rest alike
+        public const float WheelAround = 15f;                // 2, 4, 5: things happen this far round the caster
+        // 0: blown up, along with everything near
+        public const float DoomTime = 0.3f, DoomRadius = 10f, DoomDamage = 80f;
+        public const float DoomKnock = 34f, DoomKnockUp = 14f, DoomRagdoll = 2f;
+        public const int DoomSteps = 5;                      // the ground goes in this many shells...
+        public const float DoomSpread = 0.2f;                // ...over this long (as the blast is drawn)
+        // 1: thrown into the sky, blowing up on landing
+        public const float SkyFling = 34f, SkyMaxTime = 12f; // (limp, tumbling over and over, until they land)
+        public const float SkySpin = 12f;                    // ...this fast (radians a second)
+        public const float SkyBlast = 10.5f, SkyKnock = 24f, SkyKnockUp = 11f, SkyBlastRagdoll = 1.6f;
+        public const int SkyBurns = 2;
+        public const float SkyCrater = 3f;                   // ground blown out where they come down (the rest of the blast only blackens it)
+        public const float SkySpread = 0.25f;                // (looks: the blast grows to its full size this fast)
+        // 3: every surface round them frosts over, one voxel deep, for good
+        public const float IceFloorRadius = 10f, IceFloorTime = 0.3f;
+        public const int IceFloorSteps = 4;
+        public const int SootUp = 12, SootDown = 20;         // (1: the ground to blacken is looked for this many cells over and under the blast)
+        public const int WheelCircles = 2, WheelTornados = 4, WheelMeteors = 12; // 2, 4, 5
+        public const float WheelMeteorEvery = 0.25f;
+        // 6: Mana Siphon's dash, twice as fast, untouchable; the punch throws
+        public const float GoldSpeed = 2f, GoldDamage = 30f, GoldKnock = 48f, GoldKnockUp = 14f, GoldRagdoll = 2.5f;
+        public const float GoldAfter = 0.4f;                 // still untouchable this long after the punch
 
         // ---------------------------------------------------------------- Justice
-        public const float JusticeClasp = 0.3f;              // hands clasped before the tether sprouts
-        public const float JusticeTime = 6f;                 // it holds this long...
-        public const float JusticeBreak = 12f;               // ...unless the two get further apart than this (or a wall comes between them)
-        public const float JusticePick = 2f;                 // the target: whoever is nearest the cursor, within this of it
+        public const float JusticeCast = 2f;                 // down on one knee over the corpse (knocked down meanwhile: nothing)
+        public const float JusticeGain = 0.5f, JusticeGainTime = 3f; // each time the killer is hurt: this much more mana a second, this long
+        public const float JusticeSurge = 10f, JusticeSurgeTime = 1f; // the killer killed (or the corpse was the caster's own kill): this much mana, over this long
+        public static readonly Color JusticeGlow = new(2.6f, 0.75f, 0.3f, 1f); // mahogany
 
         // ---------------------------------------------------------------- The Hanged Man
-        public const float HangedDrop = 0.3f;                // the noose comes down from the sky this long...
-        public const float HangedRise = 2.5f;                // ...then lifts you by the neck, this fast (m/s), until you let go
-        public const float HangedDamage = 10f;               // a second, while hanging...
-        public const float HangedTick = 0.5f;                // ...dealt this often
+        public const float HangedDrop = 0f;                  // the noose is there at once...
+        public const float HangedYank = 0.2f;                // ...then yanks you up by the neck this long...
+        public const float HangedLift = 10f;                 // ...this far, and lets go
+        public const float HangedRise = HangedLift / HangedYank; // (m/s while it's yanking)
         public const float HangedRopeUp = 40f;               // the rope reaches this far up (what's in its way breaks)
-        public const float HangedForever = 3600f;            // (hanging lasts until it's let go)
         public static readonly Color Rope = new(0.42f, 0.3f, 0.17f, 1f);
 
         // ---------------------------------------------------------------- Death
         public const float DeathDelay = 0.3f;                // the head tipped back
-        public const float DeathRadius = 4f;
+        public const float DeathRadius = 5f;
         public const float DeathGrow = 0.3f;                 // the aura spreads out to its full size this fast
-        public const float DeathDamage = 2f;                 // a second in it: 2, then 4, 8, 16... (back to 2 after leaving it)
-        /// <summary>Mana per second the Flame Thrower takes (no regeneration meanwhile).</summary>
+        public const float DeathDamage = 4f;                 // spread over each second in it: 4, then 6.6, 10.9... (all the time spent in it counts)
+        public const float DeathGrowth = 1.65f;              // ...times this each second
+        /// <summary>Mana per second the Flame Thrower takes (it still refills meanwhile).</summary>
         public const float ChannelDrain = 2f;
-        /// <summary>Mana per second Death's aura takes (no regeneration meanwhile; the same rate as The Lovers' tether).</summary>
+        /// <summary>Mana per second Death's aura takes (it still refills meanwhile; the same rate as The Lovers' tether).</summary>
         public const float DeathDrain = SpellPlans.LoversDrain;
 
         /// <summary>Damage a second for someone who has been in Death's aura for <paramref name="seconds"/>.</summary>
-        public static float DeathRate(float seconds) => DeathDamage * Mathf.Pow(2f, Mathf.Min(Mathf.Floor(seconds), 12f));
+        public static float DeathRate(float seconds) => DeathDamage * Mathf.Pow(DeathGrowth, Mathf.Min(Mathf.Floor(seconds), 12f));
 
         // ---------------------------------------------------------------- Strength
         public const float StrengthFlex = 0.3f;              // flexing...
@@ -184,13 +202,15 @@ namespace SuddenMageEncounter
         public const float StrengthSize = 2f;                // the body (not the head) twice the size,
         public const float StrengthJump = 2f;                // jumping twice as high, falling twice as fast,
         public const float StrengthDamage = 1.5f;            // and hitting half as hard again
+        public const float StrengthSpeed = 1.25f;            // (and quicker on their feet)
         public const float StrengthGrow = 0.25f;             // (growing in / shrinking back takes this long)
         public const float StrengthBump = 1.15f;             // walking into an enemy (this close, middle to middle): they're thrown...
         public const float StrengthKnock = 11f, StrengthKnockUp = 6f, StrengthRagdoll = 1f;
         public const float StrengthBumpEvery = 0.8f;         // ...the same one no more often than this
 
         // ---------------------------------------------------------------- Temperance (passive)
-        public const int TemperanceMana = 3, TemperanceHealth = 25;
+        public const int TemperanceMana = 3;                 // more maximum mana...
+        public const float TemperanceHealth = 10f;           // ...for this much less maximum health
 
         // ---------------------------------------------------------------- The Devil
         public const float DevilRaise = 0.2f;                // the right hand up
@@ -340,7 +360,16 @@ namespace SuddenMageEncounter
 
         // ---------------------------------------------------------------- Necromancy
         public const float ReviveTime = 1f;                  // crouched over the corpse
-        public const float ReviveReach = 2f;                 // the corpse must be this close
+        public const float ReviveReach = 2f;                 // the corpse must be this close...
+        public const float CorpseSink = 3f;                  // ...or this much further down (sunk into lava or water, at the foot of a drop)
+
+        /// <summary>A corpse near enough to work on from <paramref name="from"/> (with <paramref name="slack"/> for lag).</summary>
+        public static bool CorpseInReach(Vector3 corpse, Vector3 from, float slack)
+        {
+            Vector3 d = corpse - from;
+            float r = ReviveReach + slack;
+            return new Vector2(d.x, d.z).magnitude <= r && d.y <= r && d.y >= -(r + CorpseSink);
+        }
         public const float TeamDamage = 0.5f; // Team Deathmatch: damage done to a teammate
         public const float UndeadHealth = 30f;
         public const byte UndeadMana = 5;
@@ -370,7 +399,8 @@ namespace SuddenMageEncounter
         public const float FlameReach = 9.9f;                 // the cone: this long...
         public const float FlameAngle = 22f;                 // ...this wide each side of the aim (degrees)
         public const float FlameSinge = 0.1f;                // ground in it blackens, and this long after it burns away (layer by layer)
-        public const float FlameBurnEvery = 0.5f;            // a burn stack every half second someone's in it
+        public const float FlameStart = 0.3f;                // hands drawn back, then thrust out: only then does it spew
+        public const float FlameBurnEvery = 1f;              // a burn stack this often while someone's in it
         public const int FlameRays = 24;                     // rays cast through the cone each check
         public const float FlameCheck = 0.1f;               // (singed on one check, burnt through on the next)
 

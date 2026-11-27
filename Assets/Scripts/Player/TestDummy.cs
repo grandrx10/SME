@@ -9,11 +9,11 @@ namespace SuddenMageEncounter
     /// ground) at the start of every round. Dummies never decide who wins.
     /// Simulated on the server, replicated to everyone. Add one via Sudden Mage Encounter > Add Test Dummy.
     /// </summary>
-    public class TestDummy : Combatant
+    public partial class TestDummy : Combatant
     {
         const float Gravity = 20f, BallRadius0 = 0.35f, HipHeight0 = 0.95f;
         /// <summary>A Summon Horde zombie is three quarters of the size; everything else full size.</summary>
-        float Scale => IsSpawned && Status.Value.Horde ? SpellPlans.HordeScale : 1f;
+        float Scale => (IsSpawned && Status.Value.Horde ? SpellPlans.HordeScale : 1f) * SpellPlans.SmallScale(this);
         float BallRadius => BallRadius0 * Scale;
         float HipHeight => HipHeight0 * Scale;
 
@@ -27,7 +27,7 @@ namespace SuddenMageEncounter
         public override float ViewYaw => transform.eulerAngles.y;
         public override float ViewPitch => 0f;
         public override byte ViewFlags => (byte)((_grounded ? NetState.Grounded : 0) | (_netRagdoll.Value ? NetState.Ragdoll : 0));
-        public override string FeedName => IsUndead ? "Undead" : "Test Dummy";
+        public override string FeedName => IsUndead ? "Undead" : _kind.Value switch { DummyKind.Defense => "Defense Dummy", DummyKind.Attack => "Attack Dummy", _ => "Test Dummy" };
         public override float MaxHealth => !IsUndead ? maxHealth : Status.Value.Horde ? SpellPlans.HordeHealth : SpellPlans.UndeadHealth;
         public override bool InPracticeChamber => PracticeSlot != 0;
         /// <summary>One of the Undead: its master's team.</summary>
@@ -96,6 +96,7 @@ namespace SuddenMageEncounter
         {
             if (Dead.Value)
             {
+                _outsideFor = 0f;
                 if (_diedAt < 0f) _diedAt = Time.time;
                 else if (Time.time - _diedAt >= (_corpse.Value ? CorpseKeep : respawnDelay))
                 {
@@ -110,7 +111,7 @@ namespace SuddenMageEncounter
             // only once there's an arena to stand on (practice chamber dummies run even with no match going)
             if (!IsAlive || Arena.Current == null || (!MatchManager.Running && !InPracticeChamber)) return;
             if (MatchManager.BuildingArena && !InPracticeChamber) return; // the arena isn't up yet: wait to be reset into it
-            if (Rising(dt) || TakenAway() || Frozen()) return;
+            if (Rising(dt) || TakenAway() || Frozen() || EatenNow()) return;
             Vector3 pos = transform.position;
             int mask = Layers.EnvironmentMask;
             var master = SpellServer.MindMaster(this);
@@ -214,6 +215,19 @@ namespace SuddenMageEncounter
                 }
             }
 
+            // Skyland: off a side, in at the opposite one; out the bottom, in over the top (filling its bar: full, in bits)
+            bool skyOver = false;
+            if (driver == null && !WorldNet.InsideWorld(pos) && SkyWrap.Near(pos) is { } sky)
+            {
+                if (sky.Across(pos, out var across)) { pos = across; SkyWindRpc(false); }
+                else if (sky.Covers(pos) && pos.y < sky.BottomY)
+                {
+                    if (_skyHeat.Add()) ServerKillByHazard(DeathCause.Barrier, pos, shatter: true);
+                    else { pos = sky.TopAbove(pos); SkyWindRpc(true); }
+                }
+                skyOver = sky.Covers(pos);
+            }
+
             // through a linked portal: out of the other one
             // (the dummy's ball counts as in when it touches the opening, and comes out that far in front of the other one)
             if (WorldNet.PassPortal(transform.position, pos, BallRadius + 0.05f, 0f, out var portalIn, out var portalOut) && driver == null)
@@ -230,9 +244,12 @@ namespace SuddenMageEncounter
             if (_netRagdoll.Value != _ragdoll) _netRagdoll.Value = _ragdoll;
             if (_netLunge.Value != Lunging) _netLunge.Value = Lunging;
 
+            // (out of bounds: in pieces after as long as a player gets)
+            _outsideFor = !WorldNet.InsideWorld(pos) && ArenaLimits.Outside(pos) ? _outsideFor + dt : 0f;
+            bool tooLong = _outsideFor >= PlayerController.OutsideTime;
             // (feet + 0.2 as for players, so lava kills a dummy the moment it touches the surface)
-            if (!WorldNet.InsideWorld(pos) && (pos.y < Practice.KillYAt(pos) || KillVolume.AnyContains(pos) || KillVolume.AnyContains(pos + Vector3.down * (HipHeight - 0.2f))))
-                ServerKillByHazard(DeathCause.Barrier, pos);
+            if (!WorldNet.InsideWorld(pos) && (pos.y < Practice.KillYAt(pos) && !skyOver || tooLong || KillVolume.AnyContains(pos) || KillVolume.AnyContains(pos + Vector3.down * (HipHeight - 0.2f))))
+                ServerKillByHazard(DeathCause.Barrier, pos, shatter: tooLong || _outsideFor > 0f && pos.y < Practice.KillYAt(pos));
             else if (!WorldNet.InsideWorld(pos) && TrainTrack.Hits(pos, out var train))
                 ServerKillByHazard(DeathCause.Barrier, pos, train.normalized * SpellPlans.TrainThrow + Vector3.up * SpellPlans.TrainLift);
         }
@@ -317,7 +334,35 @@ namespace SuddenMageEncounter
             _jumpSeen = jumping;
         }
 
+        /// <summary>Server: just broke a combo (can't be knocked down).</summary>
+        public bool ServerUnstoppable => _combo.Unstoppable;
+
         double _takenAt;
+
+        /// <summary>Server: inside a fly trap: wherever its mouth is, still.</summary>
+        bool EatenNow()
+        {
+            var st = Status.Value;
+            double now = WorldNet.Now;
+            if (!st.Eaten(now)) return false;
+            if (WorldNet.PotMouth(st.EatenBy, now, out var mouth))
+            {
+                mouth += Vector3.down * SpellPlans.EatenDrop;
+                transform.position = mouth;
+                if (_netPos.Value != mouth) _netPos.Value = mouth;
+            }
+            _vel = Vector3.zero;
+            if (_netVel.Value != Vector3.zero) _netVel.Value = Vector3.zero;
+            // limp the whole time (everyone sees its ragdoll in the jaws), unless a combo break got it out
+            if (!_combo.Unstoppable)
+            {
+                _ragdoll = true;
+                _ragdollUntil = Mathf.Max(_ragdollUntil, Time.time + 0.3f);
+                _standUpAt = -1f;
+            }
+            if (_netRagdoll.Value != _ragdoll) _netRagdoll.Value = _ragdoll;
+            return true;
+        }
 
         /// <summary>Server: taken by The World: held still while crushed, then at its spot inside until it's ready.</summary>
         bool TakenAway()
@@ -436,7 +481,7 @@ namespace SuddenMageEncounter
         {
             if (!IsServer || !IsAlive || Status.Value.Taken(WorldNet.Now) || SpellServer.StasisHolds(this)) return;
             if (_carried) { _carried = false; _ragdollUntil = 0f; }
-            if (ragdollSeconds > 0f && !_combo.Unstoppable && _combo.NoteKnockdown()) ServerComboBreak();
+            if (ragdollSeconds > 0f && !_combo.Unstoppable && !SpellServer.QuietKnock && _combo.NoteKnockdown()) ServerComboBreak();
             if (_combo.Unstoppable) ragdollSeconds = 0f; // just broke a combo: still thrown, not knocked down
             if (ragdollSeconds > 0f) SpellServer.FreeGrasp(this); // knocked out of Undying Grasp
             else if (Grasped && !_ragdoll) return;                // (nothing less gets it out)
@@ -446,6 +491,7 @@ namespace SuddenMageEncounter
             {
                 _ragdoll = true;
                 _ragdollUntil = Time.time + ragdollSeconds;
+                SpellServer.SmallKnockedDown(this); // Smallify: knocked over while small hurts
             }
         }
 
@@ -470,6 +516,8 @@ namespace SuddenMageEncounter
 
         public void ServerReset()
         {
+            _outsideFor = 0f;
+            _skyHeat.Clear();
             Status.Value = default; // no longer Undead (MaxHealth goes back to normal first)
             _lunging = false;
             ServerRevive();
@@ -491,9 +539,19 @@ namespace SuddenMageEncounter
             ResetRpc(pos);
         }
 
+        SkyWrap.Heat _skyHeat;
+
+        [Rpc(SendTo.Everyone)]
+        void SkyWindRpc(bool fell)
+        {
+            SkyWrapWind.Play(this);
+            if (fell) HexBodyFx.SkyFall(this);
+        }
+
         [Rpc(SendTo.Everyone)]
         void ResetRpc(Vector3 pos)
         {
+            HexBodyFx.SkyClear(this);
             ClearLiveRagdoll();
             if (LastRagdoll) Destroy(LastRagdoll);
             transform.SetPositionAndRotation(pos, _homeRot);
@@ -669,6 +727,13 @@ namespace SuddenMageEncounter
         bool _lookUndead;
         MaterialPropertyBlock _mpb;
 
+        /// <summary>Its own colour again, over anything that painted the body (Death's black).</summary>
+        public void RefreshLook()
+        {
+            _lookUndead = !IsUndead;
+            UpdateUndeadLook();
+        }
+
         /// <summary>Every peer: the Undead are sickly green (a horde zombie also three quarters the size).</summary>
         void UpdateUndeadLook()
         {
@@ -697,7 +762,7 @@ namespace SuddenMageEncounter
         /// <summary>How long a practice corpse lies there before it goes.</summary>
         public const float CorpseKeep = 60f;
         readonly NetworkVariable<bool> _corpse = new();
-        float _dieAt = -1f;
+        float _dieAt = -1f, _outsideFor;
 
         /// <summary>Server: this dummy drops dead in a moment (once everyone knows its body is to stay).</summary>
         public void ServerMakeCorpse()

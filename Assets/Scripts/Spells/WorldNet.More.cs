@@ -6,7 +6,7 @@ using UnityEngine;
 namespace SuddenMageEncounter
 {
     /// <summary>
-    /// The op stream's part for The Hermit, Wheel of Fortune, Justice, Death, The Tower, the breaths (Flame Thrower, Icy
+    /// The op stream's part for The Hermit, Wheel of Fortune's die, Death, The Tower, the breaths (Flame Thrower, Icy
     /// Breath), the Grapple Hook and the Necromancy effects. The server decides; every peer applies the same ops in order.
     /// </summary>
     public partial class WorldNet
@@ -15,10 +15,7 @@ namespace SuddenMageEncounter
 
         /// <summary>A Wheel of Fortune die over <see cref="caster"/>'s head, rolled at <see cref="start"/>, landing on <see cref="result"/>.</summary>
         public class WheelFx { public int id; public ulong caster; public double start; public byte result; public WheelView view; }
-        /// <summary>The die thrown (a roll of 3): flies like a thrown rock from <see cref="origin"/> at <see cref="t"/>.</summary>
-        public class DieFx { public int id; public Vector3 origin, velocity, end; public double t, ended = -1; public DieView view; }
-        /// <summary>Justice: a tether from <see cref="caster"/> to <see cref="target"/>.</summary>
-        public class JusticeFx { public int id; public ulong caster, target; public double start, ended = -1; public Vector3 endPoint; public JusticeView view; }
+
         /// <summary>Death's aura round <see cref="caster"/>, formed at <see cref="start"/>.</summary>
         public class DeathFx { public int id; public ulong caster; public double start, ended = -1; public DeathView view; }
         /// <summary>The Tower: rising from <see cref="start"/>, turning (by <see cref="turnBy"/>) from <see cref="turnAt"/> s, then toppling along <see cref="fallDir"/>.</summary>
@@ -52,8 +49,7 @@ namespace SuddenMageEncounter
         }
 
         public readonly Dictionary<int, WheelFx> Wheels = new();
-        public readonly Dictionary<int, DieFx> Dice = new();
-        public readonly Dictionary<int, JusticeFx> Justices = new();
+
         public readonly Dictionary<int, DeathFx> DeathAuras = new();
         public readonly Dictionary<int, TowerFx> Towers = new();
         public readonly Dictionary<int, BreathFx> Breaths = new();
@@ -66,12 +62,6 @@ namespace SuddenMageEncounter
         /// <summary>(hook id, caster object id) — a hook let go.</summary>
         public static event Action<int, ulong> HookEnded;
 
-        /// <summary>Where a thrown die is (it flies like Rock Barrage's rock).</summary>
-        public static Vector3 DiePosition(DieFx d, double now)
-        {
-            float t = Mathf.Max(0f, (float)(now - d.t));
-            return d.origin + d.velocity * t + 0.5f * Vector3.down * SpellPlans.RockGravity * t * t;
-        }
 
         /// <summary>This player's breath still going, if any.</summary>
         public BreathFx ActiveBreath(ulong caster)
@@ -103,7 +93,7 @@ namespace SuddenMageEncounter
 
         enum MoreOp : byte
         {
-            Body = 85, Wheel = 86, DieThrow = 87, DieEnd = 88, Justice = 89, JusticeEnd = 90, DeathAura = 91, DeathAuraEnd = 92,
+            Body = 85, Wheel = 86, DeathAura = 91, DeathAuraEnd = 92,
             Tower = 93, TowerTurn = 94, TowerCarve = 95, TowerBreak = 96, Breath = 97, BreathEnd = 98,
             CellsSinge = 99, CellsBurn = 100, IceCoat = 101, Hook = 102, HookAttach = 103, HookEnd = 104, NecroFx = 105, IceThaw = 130,
         }
@@ -138,47 +128,6 @@ namespace SuddenMageEncounter
             w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(start); w.WriteValueSafe(result);
             i.Broadcast(Finish(ref w));
             return id;
-        }
-
-        public static int ServerDieThrow(Vector3 origin, Vector3 velocity)
-        {
-            var i = Instance;
-            if (i == null || !IsServer) return 0;
-            int id = i._nextId++;
-            var w = NewOp(MoreOp.DieThrow, 48);
-            w.WriteValueSafe(id); w.WriteValueSafe(origin); w.WriteValueSafe(velocity); w.WriteValueSafe(Now);
-            i.Broadcast(Finish(ref w));
-            return id;
-        }
-
-        /// <summary>The thrown die breaks at <paramref name="point"/>, knocking out <paramref name="r4"/> round <paramref name="cell"/>.</summary>
-        public static void ServerDieEnd(int id, Vector3 point, Vector3Int cell, int r4)
-        {
-            var i = Instance;
-            if (i == null || !IsServer) return;
-            var w = NewOp(MoreOp.DieEnd, 40);
-            w.WriteValueSafe(id); w.WriteValueSafe(point); WriteCell(ref w, cell); w.WriteValueSafe((byte)Mathf.Clamp(r4, 0, 255));
-            i.Broadcast(Finish(ref w));
-        }
-
-        public static int ServerJustice(ulong caster, ulong target, double start)
-        {
-            var i = Instance;
-            if (i == null || !IsServer) return 0;
-            int id = i._nextId++;
-            var w = NewOp(MoreOp.Justice, 40);
-            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(target); w.WriteValueSafe(start);
-            i.Broadcast(Finish(ref w));
-            return id;
-        }
-
-        public static void ServerJusticeEnd(int id, Vector3 point)
-        {
-            var i = Instance;
-            if (i == null || !IsServer) return;
-            var w = NewOp(MoreOp.JusticeEnd, 24);
-            w.WriteValueSafe(id); w.WriteValueSafe(point); w.WriteValueSafe(Now);
-            i.Broadcast(Finish(ref w));
         }
 
         public static int ServerDeathAura(ulong caster, double start)
@@ -338,7 +287,8 @@ namespace SuddenMageEncounter
         /// A Necromancy (or Devil) effect to show. <paramref name="kind"/>: 0 green symbols from <paramref name="a"/>'s
         /// hands and <paramref name="b"/>'s corpse while raising it; 1 the ground bursting at <paramref name="point"/> as a
         /// zombie climbs out; 2 The Devil's bleeding on <paramref name="a"/>; 3 a bite landing at <paramref name="point"/>;
-        /// 4 grey symbols from <paramref name="a"/> and <paramref name="b"/>'s corpse while its skin is taken; 5 it has been (the corpse is gone).
+        /// 4 grey symbols from <paramref name="a"/> and <paramref name="b"/>'s corpse while its skin is taken; 5 it has been (the corpse is gone; no
+        /// corpse: the skin came off); 6 mahogany symbols from both while Justice is cast; 7 it has been.
         /// </summary>
         public static void ServerNecroFx(byte kind, ulong a, ulong b, Vector3 point, double start)
         {
@@ -375,47 +325,6 @@ namespace SuddenMageEncounter
                     r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start); r.ReadValueSafe(out fx.result);
                     if (!Debris.Suppressed) fx.view = WheelView.Create(fx);
                     Wheels[fx.id] = fx;
-                    return true;
-                }
-                case MoreOp.DieThrow:
-                {
-                    var fx = new DieFx();
-                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.origin); r.ReadValueSafe(out fx.velocity); r.ReadValueSafe(out fx.t);
-                    if (!Debris.Suppressed) fx.view = DieView.Create(fx);
-                    Dice[fx.id] = fx;
-                    return true;
-                }
-                case MoreOp.DieEnd:
-                {
-                    r.ReadValueSafe(out int id); r.ReadValueSafe(out Vector3 point);
-                    var c = ReadCell(ref r);
-                    r.ReadValueSafe(out byte r4);
-                    if (Dice.TryGetValue(id, out var fx)) { fx.ended = Now; fx.end = point; }
-                    if (r4 > 0)
-                    {
-                        world.RemoveSphere(c, r4, removed, islands);
-                        Debris.Spawn(world, removed, point, 6f, Vector3.zero, 2);
-                    }
-                    if (!Debris.Suppressed)
-                    {
-                        SpellFx.Puff(point, new Color(0.55f, 0.45f, 0.35f), 1f);
-                        HierophantView.Spark(point, 1f);
-                        CameraRig.ShakeFrom(point, 0.25f, 0.2f);
-                    }
-                    return true;
-                }
-                case MoreOp.Justice:
-                {
-                    var fx = new JusticeFx();
-                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.target); r.ReadValueSafe(out fx.start);
-                    if (!Debris.Suppressed) fx.view = JusticeView.Create(fx);
-                    Justices[fx.id] = fx;
-                    return true;
-                }
-                case MoreOp.JusticeEnd:
-                {
-                    r.ReadValueSafe(out int id); r.ReadValueSafe(out Vector3 point); r.ReadValueSafe(out double t);
-                    if (Justices.TryGetValue(id, out var fx)) { fx.ended = t; fx.endPoint = point; }
                     return true;
                 }
                 case MoreOp.DeathAura:
@@ -584,6 +493,8 @@ namespace SuddenMageEncounter
                     else if (kind == 3) NecroVfx.Chomp(point);
                     else if (kind == 4) NecroVfx.Skinning(a, b, start);
                     else if (kind == 5) NecroVfx.Skinned(a, b);
+                    else if (kind == 6) NecroVfx.Judging(a, b, start);
+                    else if (kind == 7) NecroVfx.Judged(a, point);
                     return true;
                 }
             }
@@ -642,12 +553,7 @@ namespace SuddenMageEncounter
             foreach (var w in Wheels.Values) if (now - w.start > SpellPlans.WheelBusy + 2.0) _done.Add(w.id);
             foreach (var id in _done) Wheels.Remove(id);
             _done.Clear();
-            foreach (var d in Dice.Values) if (d.ended >= 0 && now - d.ended > 1.0 || now - d.t > 8.0) _done.Add(d.id);
-            foreach (var id in _done) Dice.Remove(id);
-            _done.Clear();
-            foreach (var j in Justices.Values) if (j.ended >= 0 && now - j.ended > 1.0 || now - j.start > SpellPlans.JusticeTime + 5.0) _done.Add(j.id);
-            foreach (var id in _done) Justices.Remove(id);
-            _done.Clear();
+
             foreach (var d in DeathAuras.Values) if (d.ended >= 0 && now - d.ended > 1.0) _done.Add(d.id);
             foreach (var id in _done) DeathAuras.Remove(id);
             _done.Clear();
@@ -680,13 +586,12 @@ namespace SuddenMageEncounter
         void ClearMore()
         {
             foreach (var w in Wheels.Values) if (w.view) Destroy(w.view.gameObject);
-            foreach (var d in Dice.Values) if (d.view) Destroy(d.view.gameObject);
-            foreach (var j in Justices.Values) if (j.view) Destroy(j.view.gameObject);
+
             foreach (var d in DeathAuras.Values) if (d.view) Destroy(d.view.gameObject);
             foreach (var t in Towers.Values) if (t.body) Destroy(t.body.gameObject);
             foreach (var b in Breaths.Values) if (b.view) Destroy(b.view.gameObject);
             foreach (var h in Hooks.Values) if (h.view) Destroy(h.view.gameObject);
-            Wheels.Clear(); Dice.Clear(); Justices.Clear(); DeathAuras.Clear(); Towers.Clear(); Breaths.Clear(); Hooks.Clear();
+            Wheels.Clear(); DeathAuras.Clear(); Towers.Clear(); Breaths.Clear(); Hooks.Clear();
         }
     }
 }

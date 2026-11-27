@@ -174,37 +174,12 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Arcane Judgment, Judgement: the circle it will draw (outer and inner ring), on the ground.</summary>
-        public void ShowJudgment(Vector3 center, float radius)
+        public void ShowJudgment(Vector3 center, float radius, bool tarot = false)
         {
             Begin();
-            var blue = new Color(0.55f, 0.75f, 1f, 1f);
+            var blue = tarot ? new Color(1f, 0.55f, 0.38f, 1f) : new Color(0.55f, 0.75f, 1f, 1f);
             AddRing(center + Vector3.up * 0.06f, radius, blue);
             AddRing(center + Vector3.up * 0.06f, radius * 0.66f, new Color(blue.r, blue.g, blue.b, 0.6f));
-            End();
-        }
-
-        /// <summary>Judgement: the circle where it starts, where it ends up, and the lane it slides along (with arrows pointing the way).</summary>
-        public void ShowSlidingJudgment(Vector3 center, Vector3 dir, float radius, float slide)
-        {
-            Begin();
-            var red = new Color(1f, 0.55f, 0.38f, 1f);
-            var faint = new Color(red.r, red.g, red.b, 0.6f);
-            Vector3 up = Vector3.up * 0.06f, end = center + dir * slide, mid = center + dir * (slide * 0.5f);
-            Vector3 right = Vector3.Cross(Vector3.up, dir);
-            AddRing(center + up, radius, red);
-            AddRing(center + up, radius * 0.66f, faint);
-            AddRing(end + up, radius, faint);
-            // its edges on the way, from the first circle to the last
-            var along = Quaternion.LookRotation(dir);
-            for (int s = -1; s <= 1; s += 2) AddBox(mid + up + right * (radius * s), along, new Vector3(0.06f, 0.02f, slide), red, 0.5f);
-            AddBox(mid + up, along, new Vector3(radius * 2f, 0.01f, slide), red, 0.05f);
-            // arrows down the middle
-            for (int k = 0; k < 2; k++)
-            {
-                Vector3 tip = center + dir * (slide * (0.62f + 0.38f * k)) + up;
-                for (int s = -1; s <= 1; s += 2)
-                    AddBox(tip - dir * 0.28f + right * (0.28f * s), along * Quaternion.Euler(0f, -45f * s, 0f), new Vector3(0.08f, 0.02f, 0.8f), red, 0.6f);
-            }
             End();
         }
 
@@ -218,6 +193,26 @@ namespace SuddenMageEncounter
             float len = (to - from).magnitude;
             Vector3 floorMid = from + dir * (len * 0.5f) + rot * Vector3.down * SpellPlans.GustHalfSize.y;
             AddBox(floorMid, rot, new Vector3(SpellPlans.GustHalfSize.x * 2f, 0.02f, len), Good, 0.05f);
+            End();
+        }
+
+        /// <summary>Bubble Bomb: a wire ball where it starts, another where it drifts to, and the way between.</summary>
+        public void ShowMine(Vector3 start, Vector3 end, float radius)
+        {
+            Begin();
+            var cam = Camera.main;
+            Vector3 right = cam != null ? cam.transform.right : Vector3.right, up = cam != null ? cam.transform.up : Vector3.up;
+            foreach (var c in new[] { start, end })
+            {
+                AddCircle(c, right, up, radius, Good);
+                AddCircle(c, Vector3.right, Vector3.forward, radius, new Color(1f, 1f, 1f, 0.6f));
+            }
+            Vector3 d = end - start;
+            if (d.magnitude > radius * 2f)
+            {
+                var rot = Quaternion.LookRotation(d.normalized);
+                AddBox((start + end) * 0.5f, rot, new Vector3(0.03f, 0.03f, d.magnitude - radius * 2f), Good, 0.1f);
+            }
             End();
         }
 
@@ -313,6 +308,56 @@ namespace SuddenMageEncounter
             Begin();
             AddBox(center, rot, size, Good, 0.22f);
             End();
+        }
+
+        /// <summary>Hammer Spin: the strip of ground it will zoom along, as wide as the hammer reaches, round at both ends.</summary>
+        public void ShowSpin(Vector3 feet, Vector3 end, bool ok)
+        {
+            Begin();
+            Color c = ok ? Good : new Color(1f, 1f, 1f, 0.45f);
+            Vector3 d = end - feet;
+            d.y = 0f;
+            float len = d.magnitude, R = SpellPlans.SpinRadius;
+            Vector3 lift = Vector3.up * 0.05f;
+            if (len > 0.05f)
+            {
+                var rot = Quaternion.LookRotation(d / len);
+                AddBox((feet + end) * 0.5f + lift, rot, new Vector3(R * 2f, 0.02f, len), c, ok ? 0.12f : 0.05f);
+            }
+            AddRing(feet + lift, R, c);
+            AddRing(end + lift, R, c);
+            End();
+        }
+
+        /// <summary>Heavenly Slash, posing in the air: the cut's outline along the aim, at its angle, narrow at you and widening out to 15 m.</summary>
+        public void ShowHeaven(Vector3 origin, Vector3 dir, float roll)
+        {
+            Begin();
+            var rot = SpellPlans.HeavenRotation(dir, roll);
+            Vector3 x = rot * Vector3.right, z = rot * Vector3.forward;
+            Vector3 far = origin + z * SpellPlans.HeavenRange;
+            float h0 = SpellPlans.HeavenHalf0, h1 = SpellPlans.HeavenHalf1;
+            AddLine(new[] { origin - x * h0, origin + x * h0, far + x * h1, far - x * h1, origin - x * h0 }, Good);
+            // a line across it every 10 m, so how far it reaches (and how wide it is there) reads at a glance
+            for (float d = 10f; d < SpellPlans.HeavenRange - 0.01f; d += 10f)
+            {
+                Vector3 at = origin + z * d;
+                float h = SpellPlans.HeavenHalf(d);
+                AddLine(new[] { at - x * h, at + x * h }, new Color(1f, 1f, 1f, 0.6f));
+            }
+            End();
+        }
+
+        /// <summary>An outline through these points.</summary>
+        void AddLine(Vector3[] pts, Color c)
+        {
+            if (_used >= _boxes.Count) _boxes.Add(MakeBox());
+            var box = _boxes[_used++];
+            box.root.SetActive(true);
+            box.fill.transform.localScale = Vector3.zero; // outline only
+            box.line.startColor = box.line.endColor = new Color(c.r, c.g, c.b, 0.9f * c.a);
+            box.line.positionCount = pts.Length;
+            box.line.SetPositions(pts);
         }
 
         void AddRing(Vector3 center, float radius, Color c) => AddCircle(center, Vector3.right, Vector3.forward, radius, c);

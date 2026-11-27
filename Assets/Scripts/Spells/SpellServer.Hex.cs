@@ -7,7 +7,7 @@ namespace SuddenMageEncounter
     /// Server rules for Necromatic Blast's landing and the Hex cards.
     ///  - A hex: 0.8 s pointing at someone within 6 m and in sight (knocked down meanwhile: nothing). Then a ball of symbols
     ///    goes to them whatever they do, and the hex is on them for 10 s. Several can be on one body.
-    ///  - Shatter: 50 damage taken sets it off: lifted and frozen in the air a moment, then 30 more, the ground round them
+    ///  - Shatter: 40 damage taken sets it off: lifted and frozen in the air a moment, then 20 more, the ground round them
     ///    blown out, thrown hard away from the attack that did it. The kill is the hex caster's, and the body's in pieces.
     ///  - Stasis: 40 damage taken sets it off: frozen where they are, in the pose they're in, for 4 s or until the next hit
     ///    (anything that moves people counts). Not stopped by a combo break or anything that can't be knocked about. Burning doesn't thaw them.
@@ -30,6 +30,7 @@ namespace SuddenMageEncounter
 
         static void ResetHex()
         {
+            _bumped.Clear();
             HexCasts.Clear();
             HexFlies.Clear();
             Shatters.Clear();
@@ -46,6 +47,7 @@ namespace SuddenMageEncounter
             if ((t.transform.position - caster.transform.position).magnitude > SpellPlans.HexRange + 1.5f) return false; // (some slack for lag)
             if (!SpellPlans.HexSight(caster.transform.position, t)) return false;
             if (kind == SpellPlans.MindHex && MindHexed(t)) return false;
+            if (kind == SpellPlans.SmallifyHex && Smallified(t)) return false; // not again until it's fully worn off
             HexCasts.RemoveAll(h => h.caster == caster);
             int id = WorldNet.ServerHexCast(caster.NetworkObjectId, t.NetworkObjectId, kind);
             HexCasts.Add(new HexCastState { id = id, caster = caster, target = t, kind = kind, start = now });
@@ -55,6 +57,10 @@ namespace SuddenMageEncounter
         /// <summary>Someone's Mind Hex is on this body, or has hold of it.</summary>
         public static bool MindHexed(Combatant c) =>
             c != null && c.IsSpawned && (c.MindHeld || c.Hexes.Value.Find(SpellPlans.MindHex, WorldNet.Now, out _));
+
+        /// <summary>Small, or someone's Smallify Hex is on this body: no other Smallify until it's worn off.</summary>
+        public static bool Smallified(Combatant c) =>
+            c != null && c.IsSpawned && (c.Status.Value.Small(WorldNet.Now) || c.Hexes.Value.Find(SpellPlans.SmallifyHex, WorldNet.Now, out _));
 
         /// <summary>Knocked down while pointing: no hex.</summary>
         static bool FizzleHex(PlayerController pc) => HexCasts.RemoveAll(h => h.caster == pc) > 0;
@@ -72,6 +78,7 @@ namespace SuddenMageEncounter
                 EndStasis(c);
                 EndShatterHold(c);
                 EndMind(c);
+                EndSmall(c);
             }
         }
 
@@ -96,6 +103,7 @@ namespace SuddenMageEncounter
                 HexFlies.RemoveAt(i);
                 if (f.target == null || !f.target.IsAlive) continue;
                 if (f.kind == SpellPlans.MindHex && MindHexed(f.target)) continue; // someone else's got there first
+                if (f.kind == SpellPlans.SmallifyHex && Smallified(f.target)) continue;
                 var marks = f.target.Hexes.Value;
                 marks.Add(new HexMark { Kind = f.kind, By = f.by, From = now, Until = now + SpellPlans.HexTime }, now);
                 f.target.Hexes.Value = marks;
@@ -108,6 +116,7 @@ namespace SuddenMageEncounter
             }
             ChainFrozen(now);
             TickMarks(now);
+            TickSmall(now);
         }
 
         static void TickMarks(double now)
@@ -128,25 +137,26 @@ namespace SuddenMageEncounter
                 var marks = c.Hexes.Value;
                 if (!marks.Any) continue;
                 bool changed = false;
-                PlayerController takenBy = null;
+                PlayerController takenBy = null, shrunkBy = null;
                 for (int i = 0; i < HexMarks.Max; i++)
                 {
                     var m = marks[i];
                     if (m.Kind == 0) continue;
                     if (!m.Live(now)) { marks[i] = default; changed = true; continue; }
-                    if (m.Kind != SpellPlans.MindHex) continue;
+                    if (m.Kind != SpellPlans.MindHex && m.Kind != SpellPlans.SmallifyHex) continue; // (these two fill while their caster is near)
                     var by = WorldNet.FindCaster(m.By);
                     if (by == null || !by.IsAlive) { marks[i] = default; changed = true; continue; }
                     if (!fill) continue;
                     float takes = SpellPlans.MindFillTime((by.transform.position - c.transform.position).magnitude);
                     if (takes <= 0f) continue;
                     m.Fill = Mathf.Min(1f, m.Fill + SpellPlans.MindStep / takes);
-                    if (m.Fill >= 0.9999f) { takenBy = by; marks[i] = default; }
+                    if (m.Fill >= 0.9999f) { if (m.Kind == SpellPlans.MindHex) takenBy = by; else shrunkBy = by; marks[i] = default; }
                     else marks[i] = m;
                     changed = true;
                 }
                 if (changed) c.Hexes.Value = marks;
-                if (takenBy != null) BeginMind(c, takenBy, now);
+                if (takenBy != null && !ParryCatch(c, takenBy, c.transform.position)) BeginMind(c, takenBy, now);
+                if (shrunkBy != null) BeginSmall(c, shrunkBy, now);
             }
         }
 
@@ -160,15 +170,16 @@ namespace SuddenMageEncounter
             var marks = victim.Hexes.Value;
             if (!marks.Any || landed <= 0f) return;
             bool changed = false, stasis = false;
+            ulong stasisBy = 0;
             for (int i = 0; i < HexMarks.Max; i++)
             {
                 var m = marks[i];
-                if (!m.Live(now) || m.Kind == SpellPlans.MindHex) continue;
+                if (!m.Live(now) || m.Kind == SpellPlans.MindHex || m.Kind == SpellPlans.SmallifyHex) continue;
                 changed = true;
                 m.Fill += landed / (m.Kind == SpellPlans.StasisHex ? SpellPlans.StasisNeeds : SpellPlans.ShatterNeeds);
                 if (m.Fill < 0.9999f) { marks[i] = m; continue; }
                 marks[i] = default;
-                if (m.Kind == SpellPlans.StasisHex) stasis = true;
+                if (m.Kind == SpellPlans.StasisHex) { stasis = true; stasisBy = m.By; }
                 else
                 {
                     // (two at once go off together)
@@ -182,7 +193,7 @@ namespace SuddenMageEncounter
                 }
             }
             if (changed) victim.Hexes.Value = marks;
-            if (stasis) BeginStasis(victim, now);
+            if (stasis && !ParryCatch(victim, WorldNet.FindCaster(stasisBy), victim.transform.position)) BeginStasis(victim, now);
         }
 
         /// <summary>Level, away from the attack: the way it knocks, or else straight away from whoever did it.</summary>
@@ -329,6 +340,64 @@ namespace SuddenMageEncounter
             var st = c.Status.Value;
             st.MindUntil = 0;
             c.Status.Value = st;
+        }
+
+        // ------------------------------------------------------------------ Smallify
+
+        static readonly Dictionary<Combatant, double> _bumped = new();
+
+        static void BeginSmall(Combatant c, PlayerController by, double now)
+        {
+            var st = c.Status.Value;
+            st.SmallFrom = now;
+            st.SmallUntil = now + SpellPlans.SmallTime;
+            st.SmallBy = by.NetworkObjectId;
+            c.Status.Value = st;
+            c.ServerCredit(by);
+            WorldNet.ServerHexProc(SpellPlans.SmallifyHex, c.NetworkObjectId);
+        }
+
+        /// <summary>Server: a body was just knocked down (ragdolled): small, it takes <see cref="SpellPlans.SmallKnockDamage"/> too (their kill who shrank it).</summary>
+        public static void SmallKnockedDown(Combatant c)
+        {
+            if (c == null || !c.IsSpawned || !c.IsAlive || !c.Status.Value.Small(WorldNet.Now)) return;
+            var by = WorldNet.FindCaster(c.Status.Value.SmallBy);
+            c.ServerApplyDamage(SpellPlans.SmallKnockDamage, by != null ? by.OwnerClientId : Combatant.NoAttacker, c.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
+        }
+
+        static void EndSmall(Combatant c)
+        {
+            if (c == null || !c.IsSpawned || c.Status.Value.SmallUntil <= 0) return;
+            var st = c.Status.Value;
+            st.SmallUntil = 0;
+            c.Status.Value = st;
+        }
+
+        /// <summary>Small: anyone walking into them knocks them over (now and then).</summary>
+        static void TickSmall(double now)
+        {
+            foreach (var c in Combatant.Registry.ToArray())
+            {
+                if (c == null || !c.IsAlive || !c.Status.Value.Small(now) || (c.ViewFlags & NetState.Ragdoll) != 0) continue;
+                if (_bumped.TryGetValue(c, out double at) && now < at + SpellPlans.SmallBumpEvery) continue;
+                foreach (var o in Combatant.Registry)
+                {
+                    if (o == null || o == c || !o.IsAlive || o.Status.Value.Eaten(now)) continue;
+                    Vector3 d = c.transform.position - o.transform.position;
+                    if (d.y < -1.6f || d.y > 1.2f || new Vector2(d.x, d.z).magnitude > SpellPlans.SmallBumpReach) continue;
+                    // walking into them: moving, and towards them
+                    Vector3 v = o.ViewVelocity;
+                    v.y = 0f;
+                    Vector3 flat = new(d.x, 0f, d.z);
+                    if (v.magnitude < 1.2f || flat.sqrMagnitude > 1e-4f && Vector3.Dot(v, flat) <= 0f) continue;
+                    _bumped[c] = now;
+                    Vector3 away = flat.sqrMagnitude > 1e-4f ? flat.normalized : v.normalized;
+                    c.ServerCredit(WorldNet.FindCaster(c.Status.Value.SmallBy));
+                    if (!StasisHolds(c)) c.ServerKnock(away * SpellPlans.SmallKnock + Vector3.up * SpellPlans.SmallKnockUp, SpellPlans.SmallRagdoll);
+                    break;
+                }
+            }
+            if (_bumped.Count > 64) _bumped.Clear();
         }
 
         /// <summary>Whoever has control of this body right now (null: nobody).</summary>

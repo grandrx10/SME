@@ -171,34 +171,80 @@ namespace SuddenMageEncounter
                 if (bar.size <= 0f) { Destroy(bar.root.gameObject); _bars[i] = null; continue; }
                 if (on) bar.shown = Mathf.MoveTowards(bar.shown, m.Fill, Time.deltaTime * Mathf.Max(0.6f, Mathf.Abs(m.Fill - bar.shown) * 8f));
                 if (cam == null) continue;
-
-                // upright at the body's left as it's seen from here, several side by side
-                Vector3 right = cam.transform.right;
-                right.y = 0f;
-                right = right.sqrMagnitude > 1e-4f ? right.normalized : Vector3.right;
-                Vector3 look = Vector3.Cross(right, Vector3.up); // the way the camera looks, level
-                float grow = SpellPlans.BodyGrow(_c) * _c.transform.localScale.y;
-                Vector3 at = Body - right * ((0.62f + 0.27f * shown) * grow) + Vector3.up * 0.1f;
-                bar.root.SetPositionAndRotation(at, Quaternion.LookRotation(look));
-                float s = bar.size * bar.size * (3f - 2f * bar.size) * grow;
-                bar.root.localScale = new Vector3(s, s, 1f);
-                float f = Mathf.Clamp01(bar.shown);
-                bar.fill.localScale = new Vector3(BarWidth, Mathf.Max(0.001f, BarHeight * f), 0.01f);
-                bar.fill.localPosition = new Vector3(0f, -BarHeight * 0.5f * (1f - f), -0.02f);
-                shown++;
+                Lay(bar, shown++, cam);
             }
+            SkyBar(seen && cam != null, shown, cam);
+        }
+
+        /// <summary>Upright at the body's left as it's seen from here, several side by side (<paramref name="slot"/> 0 nearest).</summary>
+        void Lay(Bar bar, int slot, Camera cam)
+        {
+            Vector3 right = cam.transform.right;
+            right.y = 0f;
+            right = right.sqrMagnitude > 1e-4f ? right.normalized : Vector3.right;
+            Vector3 look = Vector3.Cross(right, Vector3.up); // the way the camera looks, level
+            float grow = SpellPlans.BodyGrow(_c) * _c.transform.localScale.y;
+            Vector3 at = Body - right * ((0.62f + 0.27f * slot) * grow) + Vector3.up * 0.1f;
+            bar.root.SetPositionAndRotation(at, Quaternion.LookRotation(look));
+            float s = bar.size * bar.size * (3f - 2f * bar.size) * grow;
+            bar.root.localScale = new Vector3(s, s, 1f);
+            float f = Mathf.Clamp01(bar.shown);
+            bar.fill.localScale = new Vector3(BarWidth, Mathf.Max(0.001f, BarHeight * f), 0.01f);
+            bar.fill.localPosition = new Vector3(0f, -BarHeight * 0.5f * (1f - f), -0.02f);
+        }
+
+        // ---------------- Skyland's fall bar ----------------
+
+        Bar _sky;
+        SkyWrap.Heat _skyHeat;
+        static readonly Color SkyEmpty = new(0.2f, 0.21f, 0.26f, 1f);
+
+        /// <summary>Every client: <paramref name="c"/> fell out of Skyland's bottom (its bar fills a third).</summary>
+        public static void SkyFall(Combatant c)
+        {
+            if (c != null && c.TryGetComponent<HexBodyFx>(out var fx)) fx._skyHeat.Add();
+        }
+
+        /// <summary>Every client: a new round (or a reset dummy): the fall bar is empty.</summary>
+        public static void SkyClear(Combatant c)
+        {
+            if (c != null && c.TryGetComponent<HexBodyFx>(out var fx)) fx._skyHeat.Clear();
+        }
+
+        /// <summary>Drawn like a hex's bar, after them: white filling a dark bar, there while it has anything in it.</summary>
+        void SkyBar(bool seen, int slot, Camera cam)
+        {
+            float heat = _skyHeat.Now;
+            bool on = seen && heat > 0f;
+            if (_sky == null)
+            {
+                if (!on) return;
+                _sky = MakeBar(SkyEmpty, BarWhite);
+            }
+            _sky.size = Mathf.MoveTowards(_sky.size, on ? 1f : 0f, Time.deltaTime / (on ? 0.16f : 0.12f));
+            if (_sky.size <= 0f) { Destroy(_sky.root.gameObject); _sky = null; return; }
+            _sky.shown = Mathf.MoveTowards(_sky.shown, heat, Time.deltaTime * Mathf.Max(0.6f, Mathf.Abs(heat - _sky.shown) * 8f));
+            if (cam != null) Lay(_sky, slot, cam);
         }
 
         Bar MakeBar(byte kind, double from)
+        {
+            var bar = MakeBar(BarWhite, SpellPlans.HexFill(kind));
+            bar.kind = kind;
+            bar.from = from;
+            return bar;
+        }
+
+        static Bar MakeBar(Color empty, Color fillColour)
         {
             var root = new GameObject("HexBar") { layer = Layers.Fx }.transform;
             var ink = Glow.Piece(root, Glow.CubeMesh, Glow.Ink, "Ink", false);
             ink.localScale = new Vector3(BarWidth + BarInk, BarHeight + BarInk, 0.01f);
             ink.localPosition = new Vector3(0f, 0f, 0.02f);
-            var white = Glow.Piece(root, Glow.CubeMesh, BarWhite, "Empty", false);
+            var white = Glow.Piece(root, Glow.CubeMesh, empty, "Empty", false);
             white.localScale = new Vector3(BarWidth, BarHeight, 0.01f);
-            var fill = Glow.Piece(root, Glow.CubeMesh, SpellPlans.HexFill(kind), "Fill", false);
-            return new Bar { root = root, fill = fill, kind = kind, from = from };
+            var fill = Glow.Piece(root, Glow.CubeMesh, fillColour, "Fill", false);
+            return new Bar { root = root, fill = fill };
         }
 
         // ---------------- Stasis ----------------
@@ -355,6 +401,7 @@ namespace SuddenMageEncounter
         void OnDestroy()
         {
             foreach (var b in _bars) if (b != null && b.root != null) Destroy(b.root.gameObject);
+            if (_sky != null && _sky.root != null) Destroy(_sky.root.gameObject);
             ClearCircles();
             if (_chain != null) Destroy(_chain.gameObject);
         }

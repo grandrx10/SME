@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace SuddenMageEncounter
 {
-    public enum GunKind : byte { Rachmaninoff, Sebastian }
+    public enum GunKind : byte { Rachmaninoff, Sebastian, Gun } // (Gun: Wolfgang's pistols, Resources/VFX/Gun)
 
     // ====================================================================== the guns
 
@@ -15,10 +15,10 @@ namespace SuddenMageEncounter
     /// </summary>
     public static class GunModel
     {
-        static readonly GameObject[] Templates = new GameObject[2];
-        static readonly bool[] Measured = new bool[2];
-        static readonly Vector3[] Muzzles = { new(0f, 0.075f, 0.6f), new(0f, 0.075f, 0.6f) };
-        static readonly Vector3[] Supports = { new(0f, 0.034f, 0.307f), new(0f, 0.034f, 0.307f) };
+        static readonly GameObject[] Templates = new GameObject[3];
+        static readonly bool[] Measured = new bool[3];
+        static readonly Vector3[] Muzzles = { new(0f, 0.075f, 0.6f), new(0f, 0.075f, 0.6f), new(0f, 0.075f, 0.32f) };
+        static readonly Vector3[] Supports = { new(0f, 0.034f, 0.307f), new(0f, 0.034f, 0.307f), new(0f, 0f, 0.1f) };
 
         /// <summary>The prefabs' barrels point along +X.</summary>
         static readonly Quaternion Turn = Quaternion.Euler(0f, -90f, 0f);
@@ -57,6 +57,16 @@ namespace SuddenMageEncounter
             if (support != null) Supports[i] = InGun(root, trigger, support);
         }
 
+        /// <summary>Is this part of the prefab on its slide?</summary>
+        static bool UnderSlide(Transform t, Transform root)
+        {
+            for (; t != null && t != root; t = t.parent) if (t.name == "Slide") return true;
+            return false;
+        }
+
+        /// <summary>A spawned gun's slide (it slides back along -Z as it fires), if it has one.</summary>
+        public static Transform Slide(GameObject gun) => gun != null ? gun.transform.Find("Slide") : null;
+
         public static GameObject Spawn(GunKind k)
         {
             var go = Object.Instantiate(Template(k));
@@ -89,11 +99,14 @@ namespace SuddenMageEncounter
             var trig = Deep(root, "TriggerPoint");
             Vector3 trigger = trig != null ? root.InverseTransformPoint(trig.position) : Vector3.zero;
             Matrix4x4 toGun = Matrix4x4.TRS(Vector3.zero, Turn, Vector3.one * SpellPlans.GunScale) * Matrix4x4.Translate(-trigger) * root.worldToLocalMatrix;
+            // a pistol's slide (the parts under "Slide") goes on a child of its own, so it can be worked as it fires
+            var slide = new GameObject("Slide") { layer = Layers.Fx }.transform;
+            slide.SetParent(t.transform, false);
             foreach (var mf in src.GetComponentsInChildren<MeshFilter>(true))
             {
                 if (mf.sharedMesh == null) continue;
                 var mr = mf.GetComponent<MeshRenderer>();
-                SwordModel.Part(t.transform, Object.Instantiate(mf.sharedMesh), mr != null ? mr.sharedMaterials : null, toGun * mf.transform.localToWorldMatrix);
+                SwordModel.Part(UnderSlide(mf.transform, root) ? slide : t.transform, Object.Instantiate(mf.sharedMesh), mr != null ? mr.sharedMaterials : null, toGun * mf.transform.localToWorldMatrix);
             }
             Object.Destroy(src);
             return t;
@@ -106,7 +119,7 @@ namespace SuddenMageEncounter
     /// The gun gestures, shared by the arms (ProceduralAnimator puts both hands on it) and the gun (GunView), so hands
     /// and gun always agree. Unlike the other gestures they follow the aim up and down.
     ///  - ShotgunAim: raised from low to the shoulder, fired (<see cref="SpellPlans.RachDelay"/>), kicking back.
-    ///  - RifleKneel: raised to the eye, down on one knee, always level.
+    ///  - RifleKneel: raised to the eye, down on one knee.
     ///  - RifleFire: trembles as it charges up (<see cref="SpellPlans.SebWindup"/>), kicks, then comes up with the body.
     /// </summary>
     public static class GunMotion
@@ -124,8 +137,7 @@ namespace SuddenMageEncounter
         /// <summary>Where the trigger is and the way the gun points, on the body at its usual size.</summary>
         public static void Hold(Combatant c, SpellPose pose, float t, out Vector3 trigger, out Quaternion rot)
         {
-            // (Sebastian only shoots level)
-            var aim = Quaternion.Euler(pose == SpellPose.ShotgunAim ? c.ViewPitch : 0f, c.ViewYaw, 0f);
+            var aim = Quaternion.Euler(c.ViewPitch, c.ViewYaw, 0f);
             Vector3 hips = c.transform.position;
             float kick = 0f;
             if (pose == SpellPose.ShotgunAim)
@@ -271,7 +283,7 @@ namespace SuddenMageEncounter
                 _charged = false;
                 return;
             }
-            SpellPlans.SebastianRay(_c, _c.ViewYaw, out var muzzle, out var dir);
+            SpellPlans.SebastianRay(_c, _c.ViewYaw, _c.ViewPitch, out var muzzle, out var dir);
             bool charged = winding || t >= SpellPlans.SebCharge;
             if (_c.IsOwner) // the line is the caster's alone
             {

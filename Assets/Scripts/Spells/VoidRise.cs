@@ -22,7 +22,8 @@ namespace SuddenMageEncounter
         public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed) => Spawn(w, removed, Glow.Arcane);
 
         /// <param name="rim">The colour the clumps' edges glow.</param>
-        public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed, Color rim)
+        /// <param name="most">No more clumps than this (the rest are simply gone).</param>
+        public static void Spawn(VoxelWorld w, List<VoxelWorld.RemovedCell> removed, Color rim, int most = int.MaxValue)
         {
             Groups.Clear();
             foreach (var rc in removed)
@@ -32,7 +33,13 @@ namespace SuddenMageEncounter
                 if (!Groups.TryGetValue(key, out var list)) Groups[key] = list = new List<Vector3Int>();
                 list.Add(c);
             }
-            foreach (var g in Groups.Values) Make(w, g, rim);
+            int left = Groups.Count, room = Mathf.Min(most, left);
+            foreach (var g in Groups.Values)
+            {
+                // (an even pick of them)
+                if (Random.value * left < room) { Make(w, g, rim); room--; }
+                left--;
+            }
         }
 
         static void Make(VoxelWorld w, List<Vector3Int> cells, Color rimColour)

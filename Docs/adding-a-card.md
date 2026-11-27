@@ -32,13 +32,14 @@ New code goes in partial files of its own (`SpellPlans.X.cs`, `SpellServer.X.cs`
 6. **`Spells/AbilityCaster.cs`**: `TryCast` case (local checks, `SetPose`, `Motor.Root/FaceLock/...`); the `gestures end on their own` switch; if held: the pose in `Press` and a case in `ShowIndicator` (shapes in `SpellIndicator.cs`). Owner-timed second step: a `_xAt` timer ticked in `Update`, reset in `CancelAll`, added to the `knocked && (Casting || …)` line.
 7. **`Player/PlayerController.cs`**: owner → server RPCs (`RequestX` + `[Rpc(SendTo.Server)]`).
 8. **`Spells/SpellServer.cs`**: the `Cast` switch, `Reset`, `Tick`; `OnInterrupted` (hit/ragdolled) or `Fizzle` (knocked out of the cast). Practice reset: `ServerClearPractice` in `SpellServer.Arcana.cs`. Blocks other cards while running: `BusyChanneling`.
-9. **`Spells/WorldNet.X.cs`**: an op enum continuing the numbers (grep `enum .*Op : byte`; used up to 132), `ServerX(...)` writers, `ApplyX`. Hook `ApplyX`, `AnimateX`, `ClearX` (and `ClearXIn(minX, maxX)`) into `WorldNet.cs` beside the existing ones.
+9. **`Spells/WorldNet.X.cs`**: an op enum continuing the numbers (grep `enum .*Op : byte`; used up to 149; 150 is taken), `ServerX(...)` writers, `ApplyX`. Hook `ApplyX`, `AnimateX`, `ClearX` (and `ClearXIn(minX, maxX)`) into `WorldNet.cs` beside the existing ones.
 10. **Looks**: skip them when `Debris.Suppressed` (a late joiner replaying the log). A per-body view: `AddComponent` in `Combatant.Awake` (everyone) or `PlayerController.Awake` (players).
 11. `Tools/check.ps1`; then add only what isn't obvious from the code to `Docs/cards.md`.
 
 ## Server rules to respect
 
 - Hurt/throw through `Hit(victim, attacker, damage, point, knock, ragdoll)`. Skip `Folded(c)`, `Shielded(c)` (barrier, bubble, untouchable), `Combatant.Allies(a, b)`; movement also skips `Unmovable(c)`, `Hanging(c)`. Taking someone's control without damage: `c.ServerCredit(caster)`.
+- The arcane shield blocks whatever goes through `Hit` / `Burn(c, by, from)`: pass `from` when the knock doesn't point away from the source (or there's none), `card` when there's no damage (costs it 8 x mana); burns before the throw. Grabs ask `ShieldStops`. `Hit` returns true if it was blocked. A direct `ServerApplyDamage` goes past it.
 - Projectiles, every frame: `BarrierBlocks`, `BubbleBlocking` + `HurtBubble`, `SweepBall`, then end. Add a `ReflectX` beside `ReflectStars` (The Hierophant) and add it to `HitBombs`.
 - Flame explosions call `FlameSetsOff`; water must count in `InWater`; fire near ice: `MeltIceNear`.
 - Frozen or controlled by a hex: `Combatant.Hexed` (no casting), checked wherever `Trapped` / `Grasped` are. Anything that moves a body without `ServerKnock` asks `StasisHolds(c)` first.

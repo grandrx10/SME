@@ -44,7 +44,7 @@ Server-authoritative: the server decides, peers apply the same ops in order; deb
 ## Visual style: cartoony, everything outlined (the user is strict)
 
 - **Glow + bloom, not particles**: flat unlit HDR colour (`SME/Glow`, well above 1). Helpers in `Spells/ArcaneVfx.cs`.
-- **Dark ink outline on every shape**: solids get the inverted hull (`Glow.Piece` adds it), strips and lines a wider ink copy under them (`Glow.Underlay`, `ToonLine`). Colour `Glow.Ink`.
+- **Dark ink outline on every shape**: solids get the inverted hull (`Glow.Piece` adds it), strips and lines a wider ink copy under them (`Glow.Underlay` through `Glow.SetStrip`, or the sky covers it, `ToonLine`). Colour `Glow.Ink`.
 - **Shrink, don't fade.** Punchy bursts, camera shake (`CameraRig.ShakeFrom`). Only held weapons fade (dithered, `SME/ToonFade`).
 - Wind: inked swooshes (`ToonWind.cs`), never dusty smoke. Fire: outlined flame tongues (`FireVfx.cs`). Arcane: deep blue, runes.
 - **Colours**: Flame red, Arcane blue, Lightning yellow, Wind grey, Ground light brown, Tarot mahogany (Emperor gold), Water aqua (healing green), Weapon steel white (slashes hot white), Necromancy sickly green, Hex purple (Shatter white, Stasis turquoise, Mind purple).

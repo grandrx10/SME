@@ -13,12 +13,15 @@ namespace SuddenMageEncounter
         static readonly List<WarpState> WarpsS = new();
         static readonly List<PortalState> PortalsS = new();
         static readonly List<SwiftState> SwiftsS = new();
+        /// <summary>When each caster's last Arcane Swiftness ended: not again until <see cref="SpellPlans.SwiftRest"/> after.</summary>
+        static readonly Dictionary<PlayerController, double> SwiftEnded = new();
 
         static void ResetArcane()
         {
             WarpsS.Clear();
             PortalsS.Clear();
             SwiftsS.Clear();
+            SwiftEnded.Clear();
         }
 
         static double PortalEnd(PortalState p) => (p.linkStart >= 0 ? p.linkStart : p.start) + SpellPlans.PortalLife;
@@ -63,6 +66,7 @@ namespace SuddenMageEncounter
                 case CardId.ArcaneSwiftness:
                 {
                     if (SwiftsS.Exists(s => s.caster == caster)) return false;
+                    if (SwiftEnded.TryGetValue(caster, out double ended) && now < ended + SpellPlans.SwiftRest - 0.15) return false;
                     Combatant.DamageScale ??= ScaleDamage;
                     WorldNet.ServerSwift(caster.NetworkObjectId);
                     SwiftsS.Add(new SwiftState { caster = caster, start = now, lastPos = caster.transform.position, heading = caster.transform.forward });
@@ -110,7 +114,7 @@ namespace SuddenMageEncounter
                     if (s.caster != null) WorldNet.ServerSwiftEnd(s.caster.NetworkObjectId, true);
                     continue;
                 }
-                if (now > s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime) { SwiftsS.RemoveAt(i); continue; }
+                if (now > s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime) { SwiftsS.RemoveAt(i); SwiftEnded[s.caster] = now; continue; }
                 if (now >= s.start + SpellPlans.SwiftPrep) SwiftBump(s);
             }
         }
@@ -136,7 +140,7 @@ namespace SuddenMageEncounter
                 rel.y = 0f;
                 Vector3 away = rel.sqrMagnitude > 1e-4f ? rel.normalized : s.heading;
                 Vector3 dir = (s.heading + away * 0.5f).normalized;
-                Hit(c, s.caster, 0f, c.transform.position, dir * SpellPlans.DashKnockForward + Vector3.up * SpellPlans.DashKnockUp, 1f);
+                Hit(c, s.caster, 0f, c.transform.position, dir * SpellPlans.DashKnockForward + Vector3.up * SpellPlans.DashKnockUp, 1f, from: pos, card: CardId.ArcaneSwiftness);
             }
         }
 
@@ -161,6 +165,7 @@ namespace SuddenMageEncounter
                 var s = SwiftsS[i];
                 if (s.caster != pc || now >= s.start + SpellPlans.SwiftPrep) continue;
                 SwiftsS.RemoveAt(i);
+                SwiftEnded[pc] = now;
                 WorldNet.ServerSwiftEnd(pc.NetworkObjectId, true);
             }
         }
@@ -171,6 +176,7 @@ namespace SuddenMageEncounter
             if (c == null) return false;
             double now = WorldNet.Now;
             if (c.IsSpawned && c.Status.Value.Taken(now)) return true; // crushed away by The World
+            if (c.IsSpawned && (c.Status.Value.Ephemeral(now) || c.Status.Value.Under(now))) return true; // gone with Ephemerate; under Submerge's pool
             foreach (var w in WarpsS)
                 if (w.caster == c && now >= w.start + SpellPlans.WarpCharge && now < w.start + SpellPlans.WarpArrive) return true;
             return false;
@@ -183,7 +189,9 @@ namespace SuddenMageEncounter
             if (Folded(c)) return true;
             if (Flowing(c, WorldNet.Now)) return true;  // mid Flowing Cut
             if (Fusing(c)) return true;                 // forming the purple ball
+            if (ParryDashing(c)) return true;           // Parry's dash back
             double now = WorldNet.Now;
+            if (c.IsSpawned && c.Status.Value.Gold(now)) return true; // Wheel of Fortune's 6
             foreach (var s in SwiftsS)
                 if (s.caster == c && now >= s.start + SpellPlans.SwiftPrep && now <= s.start + SpellPlans.SwiftPrep + SpellPlans.SwiftTime + 0.1) return true;
             return false;

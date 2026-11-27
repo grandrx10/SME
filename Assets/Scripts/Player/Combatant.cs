@@ -12,7 +12,7 @@ namespace SuddenMageEncounter
     /// Anything with the player model that can be hurt: health, hitboxes, death, ragdoll.
     /// Players (PlayerController) and test dummies (TestDummy) derive from this.
     /// </summary>
-    public abstract class Combatant : NetworkBehaviour
+    public abstract partial class Combatant : NetworkBehaviour
     {
         [Header("References")]
         public Transform model;
@@ -53,10 +53,26 @@ namespace SuddenMageEncounter
         public bool HeldStill => InStasis || Shattering;
         /// <summary>Under the control of whoever Mind Hexed it: moves as they move, can't cast.</summary>
         public bool MindHeld => IsSpawned && Status.Value.Mind(WorldNet.Now);
-        /// <summary>A hex has hold of it: can't cast.</summary>
-        public bool Hexed => HeldStill || MindHeld;
-        /// <summary>Whose side this body is on: its own, or (one of the Undead) its master's.</summary>
-        public ulong Team => IsSpawned && Status.Value.Undead ? Status.Value.Master : NetworkObjectId;
+        /// <summary>Inside someone's fly trap: can't move or cast.</summary>
+        public bool Eaten => IsSpawned && Status.Value.Eaten(WorldNet.Now);
+        /// <summary>A hex (or a fly trap) has hold of it: can't cast.</summary>
+        public bool Hexed => HeldStill || MindHeld || Eaten;
+        /// <summary>Whose side this body is on: its own, or (one of the Undead) its master's (whose own master's, if they've been raised too).</summary>
+        public ulong Team
+        {
+            get
+            {
+                if (!IsSpawned || !Status.Value.Undead) return NetworkObjectId;
+                ulong team = Status.Value.Master;
+                for (int i = 0; i < 4 && team != NetworkObjectId; i++)
+                {
+                    var m = WorldNet.FindCombatant(team);
+                    if (m == null || !m.IsSpawned || !m.Status.Value.Undead || m.Status.Value.Master == team) break;
+                    team = m.Status.Value.Master;
+                }
+                return team;
+            }
+        }
 
         /// <summary>Two different bodies on the same side (a necromancer and their Undead): they can't hurt or throw each other.</summary>
         public static bool Allies(Combatant a, Combatant b) => a != null && b != null && a != b && a.IsSpawned && b.IsSpawned && a.Team == b.Team;
@@ -70,10 +86,18 @@ namespace SuddenMageEncounter
         /// </summary>
         public static bool Teammates(Combatant a, Combatant b) => a != null && b != null && a != b && a.MatchTeam != 0 && a.MatchTeam == b.MatchTeam;
 
+        /// <summary>One of the Undead, raised onto someone's side, and one of its master's teammates (Team Deathmatch): it can't hurt them.</summary>
+        public static bool RaisedAgainst(Combatant attacker, Combatant victim) =>
+            attacker != null && attacker.IsUndead && attacker.Status.Value.Master != attacker.NetworkObjectId && Teammates(attacker, victim);
+
+        /// <summary>Server: how many Waters of Life this body has drunk this life.</summary>
+        public int Drunk;
+        /// <summary>Server: who killed it (while it's dead; null: nobody, or they've left).</summary>
+        public PlayerController Killer;
+
         /// <summary>Server: (victim, attacker client id, damage that landed) after every hit.</summary>
         public static System.Action<Combatant, ulong, float> Damaged;
-        /// <summary>Server: (who, amount, over seconds) whenever healing is given.</summary>
-        public static System.Action<Combatant, float, float> Healed;
+
         /// <summary>Server: (victim, attacker client id, what did it) when a body dies.</summary>
         public static System.Action<Combatant, ulong, DeathCause> Killed;
 
@@ -105,9 +129,13 @@ namespace SuddenMageEncounter
             if (GetComponent<BurnFx>() == null) gameObject.AddComponent<BurnFx>();
             if (GetComponent<TarotBodyFx>() == null) gameObject.AddComponent<TarotBodyFx>();
             if (GetComponent<StatusBodyFx>() == null) gameObject.AddComponent<StatusBodyFx>();
+            if (GetComponent<DeathBodyFx>() == null) gameObject.AddComponent<DeathBodyFx>();
+            if (GetComponent<EatenBodyFx>() == null) gameObject.AddComponent<EatenBodyFx>();
+            if (GetComponent<GaleBodyFx>() == null) gameObject.AddComponent<GaleBodyFx>();
             if (GetComponent<Tarot3BodyFx>() == null) gameObject.AddComponent<Tarot3BodyFx>();
             if (GetComponent<GraspBodyFx>() == null) gameObject.AddComponent<GraspBodyFx>();
             if (GetComponent<HexBodyFx>() == null) gameObject.AddComponent<HexBodyFx>();
+            if (GetComponent<ShieldView>() == null) gameObject.AddComponent<ShieldView>();
             if (model == null) model = transform.Find("PlayerModel");
             Bones = Rig.MapBones(model);
             _renderers = _bodyRenderers = model.GetComponentsInChildren<Renderer>(true);
@@ -136,18 +164,27 @@ namespace SuddenMageEncounter
         /// <param name="cutNormal">Non-zero: if this hit kills, the body is cut in half along the plane through <paramref name="point"/> with this normal (Blade).</param>
         /// <param name="bore">Non-zero: if this hit kills, a round tunnel (radius: its length) along this axis through <paramref name="point"/> is missing from the body (the fused ball).</param>
         /// <param name="shatter">If this hit kills, the body breaks into many pieces (Shatter Hex).</param>
-        public void ServerApplyDamage(float dmg, ulong attacker, Vector3 point, Vector3 dir, int segment, float impulse, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default, bool shatter = false)
+        /// <param name="guarded">It comes at the side they're holding the arcane shield out to: that takes it first.</param>
+        /// <param name="by">Who struck (for the shield).</param>
+        /// <returns>The shield took all of it.</returns>
+        public bool ServerApplyDamage(float dmg, ulong attacker, Vector3 point, Vector3 dir, int segment, float impulse, DeathCause cause, Vector3 cutNormal = default, Vector3 bore = default, bool shatter = false, bool guarded = false, Combatant by = null)
         {
-            if (!IsServer || Dead.Value || dmg <= 0f) return;
+            if (!IsServer || Dead.Value || dmg <= 0f) return false;
             var source = PlayerController.ServerFind(attacker);
+            if (RaisedAgainst(source, this)) return false; // (an Undead never hurts its master's teammates)
             if (Teammates(source, this)) dmg *= SpellPlans.TeamDamage; // friendly fire
             if (DamageScale != null) dmg = DamageScale(this, attacker, dmg); // Empress / Emperor
-            if (dmg <= 0f) return;
+            if (dmg <= 0f) return false;
+            if (guarded)
+            {
+                dmg = ServerAbsorb(dmg, by);
+                if (dmg <= 0f) return true;
+            }
             if (source != null && source != this) _lastAttacker = attacker;
             float before = Health.Value;
             Health.Value = Mathf.Max(0f, Health.Value - dmg);
             OnServerDamaged(dmg);
-            Damaged?.Invoke(this, attacker, before - Health.Value); // Justice: shared with whoever's tethered
+            Damaged?.Invoke(this, attacker, before - Health.Value); // Justice, The Moon
             // tell whoever did it (damage number + hit marker on their screen): the hit's own damage, not just the
             // health that happened to be left (a 15-damage rock finishing someone on 1 HP showed "1")
             if (source != null && source != this)
@@ -158,16 +195,22 @@ namespace SuddenMageEncounter
                 ulong credit = cause == DeathCause.Spell && source != null && source != this ? attacker : _lastAttacker;
                 ServerDie(credit, point, dir * impulse, segment, cause, cutNormal, bore, shatter);
             }
-            else if (!Dead.Value) SpellServer.HexDamaged(this, attacker, before - Health.Value, dir);
+            else if (!Dead.Value)
+            {
+                SpellServer.HexDamaged(this, attacker, before - Health.Value, dir);
+                SpellServer.GraspDamaged(this, before - Health.Value);
+            }
+            return false;
         }
 
         /// <summary>Server: instant elimination from the level (kill barrier, falling out of the arena).</summary>
         /// <param name="impulse">How the body is thrown (a train).</param>
-        public void ServerKillByHazard(DeathCause cause, Vector3 point, Vector3 impulse = default)
+        /// <param name="shatter">It breaks into many pieces (too much Water of Life).</param>
+        public void ServerKillByHazard(DeathCause cause, Vector3 point, Vector3 impulse = default, bool shatter = false)
         {
             if (!IsServer || Dead.Value) return;
             Health.Value = 0f;
-            ServerDie(_lastAttacker, point, impulse, -1, cause);
+            ServerDie(_lastAttacker, point, impulse, -1, cause, shatter: shatter);
         }
 
         /// <summary>Server: scales damage before it lands (victim, attacker client id, damage) → damage.</summary>
@@ -179,10 +222,10 @@ namespace SuddenMageEncounter
         float _burnOwed;
 
         /// <summary>Server: set alight — another 15 damage over 5 seconds, on top of any burns already going.</summary>
-        public void ServerBurn(ulong attacker)
+        public void ServerBurn(ulong attacker, float share = 1f)
         {
             if (!IsServer || Dead.Value || SpellServer.Invulnerable(this)) return;
-            _burns.Add((WorldNet.Now + SpellPlans.BurnTime, attacker));
+            _burns.Add((WorldNet.Now + SpellPlans.BurnTime * share, attacker)); // (the arcane shield took some of it: shorter)
             BurnStacks.Value = (byte)Mathf.Min(255, _burns.Count);
         }
 
@@ -232,7 +275,6 @@ namespace SuddenMageEncounter
             if (!IsServer || Dead.Value || amount <= 0f) return;
             seconds = Mathf.Max(0.01f, seconds);
             _heals.Add((WorldNet.Now + seconds, amount / seconds));
-            Healed?.Invoke(this, amount, seconds); // Justice: passed on to whoever's tethered to this body
         }
 
         /// <summary>Server, every frame: healing trickles in (in small steps) until it runs out.</summary>
@@ -280,6 +322,8 @@ namespace SuddenMageEncounter
         {
             Dead.Value = true;
             Hexes.Value = default;
+            Killer = attacker != NoAttacker ? PlayerController.ServerFind(attacker) : null;
+            Drunk = 0;
             ClearBurns();
             OnServerKilled(attacker);
             Killed?.Invoke(this, attacker, cause);
@@ -295,6 +339,8 @@ namespace SuddenMageEncounter
             Health.Value = MaxHealth;
             Dead.Value = false;
             Hexes.Value = default;
+            Killer = null;
+            Drunk = 0;
             _lastAttacker = NoAttacker;
             ClearBurns();
             _heals.Clear();

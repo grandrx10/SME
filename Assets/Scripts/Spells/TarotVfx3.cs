@@ -18,9 +18,9 @@ namespace SuddenMageEncounter
         static Mesh _mesh;
 
         WorldNet.StarFx _fx;
-        readonly Transform[] _stars = new Transform[SpellPlans.StarCount];
-        readonly TrailRenderer[] _trails = new TrailRenderer[SpellPlans.StarCount];
-        readonly float[] _gone = new float[SpellPlans.StarCount];
+        Transform[] _stars;
+        TrailRenderer[] _trails;
+        float[] _gone;
 
         /// <summary>A five-pointed star facing +Z, its points 1 from the middle, a third as thick.</summary>
         static Mesh StarMesh
@@ -73,6 +73,9 @@ namespace SuddenMageEncounter
             var go = new GameObject("TheStar") { layer = Layers.Fx };
             var v = go.AddComponent<StarsView>();
             v._fx = fx;
+            v._stars = new Transform[fx.stars.Length];
+            v._trails = new TrailRenderer[fx.stars.Length];
+            v._gone = new float[fx.stars.Length];
             for (int k = 0; k < v._stars.Length; k++)
             {
                 v._stars[k] = Glow.Piece(go.transform, StarMesh, StarColor, "Star");
@@ -141,7 +144,7 @@ namespace SuddenMageEncounter
 
         void OnDestroy()
         {
-            foreach (var t in _trails) if (t != null) Glow.DropTrail(t);
+            if (_trails != null) foreach (var t in _trails) if (t != null) Glow.DropTrail(t);
         }
     }
 
@@ -183,90 +186,6 @@ namespace SuddenMageEncounter
         }
     }
 
-    // ====================================================================== The Moon's pulse
-
-    /// <summary>A light green ring spreading over the ground from the caster to the pulse's full reach, with a second one at chest height; plus signs rise off whoever it touches.</summary>
-    public class MoonPulseView : MonoBehaviour
-    {
-        ulong _caster;
-        Vector3 _feet;
-        double _start;
-        readonly RuneDrawing[] _rings = new RuneDrawing[2];
-        readonly HashSet<Combatant> _touched = new();
-
-        public static void Create(ulong caster, Vector3 feet, double start)
-        {
-            var go = new GameObject("MoonPulse") { layer = Layers.Fx };
-            go.transform.position = feet;
-            var v = go.AddComponent<MoonPulseView>();
-            v._caster = caster;
-            v._feet = feet;
-            v._start = start;
-            for (int i = 0; i < v._rings.Length; i++)
-            {
-                var r = new GameObject("Ring") { layer = Layers.Fx };
-                r.transform.SetParent(go.transform, false);
-                r.transform.localPosition = Vector3.up * (i == 0 ? 0.08f : 1.1f);
-                v._rings[i] = new RuneDrawing(r);
-                var strokes = new List<List<Vector2>> { TarotVfx.Ring(1f, 0f, 72) };
-                if (i == 0)
-                {
-                    // runes riding just inside the ring on the ground
-                    const int n = 10;
-                    for (int k = 0; k < n; k++)
-                    {
-                        float a = k / (float)n * Mathf.PI * 2f;
-                        Vector2 radial = new(Mathf.Cos(a), Mathf.Sin(a)), tangent = new(-radial.y, radial.x);
-                        foreach (var line in RuneGlyphs.Rune(k))
-                        {
-                            var l = new List<Vector2>(line.Count);
-                            foreach (var p in line) l.Add(radial * 0.86f + (tangent * -p.x + radial * p.y) * 0.08f);
-                            strokes.Add(l);
-                        }
-                    }
-                }
-                v._rings[i].AddRune(strokes, SpellPlans.MoonRadius * 2f, i == 0 ? 0.16f : 0.1f);
-                v._rings[i].Progress = 1f;
-                v._rings[i].SetColour(SpellPlans.MoonGreen);
-                r.transform.localScale = Vector3.zero;
-            }
-            EnergyBurst.Create(feet + Vector3.up * 1.1f, new EnergyBurst.Settings
-            {
-                flashSize = 1.4f, flashTime = 0.2f, sparkCount = 14, sparkSize = 0.3f, sparkSpeed = new Vector2(4f, 9f), sparkLife = 0.4f, colour = SpellPlans.MoonGreen,
-            });
-            CameraRig.ShakeFrom(feet, 0.12f, 0.2f);
-            v.LateUpdate();
-        }
-
-        void LateUpdate()
-        {
-            float t = (float)(WorldNet.Now - _start);
-            float r = SpellPlans.MoonRadiusAt(t), share = r / SpellPlans.MoonRadius;
-            // at its full reach the line thins out to nothing
-            float end = Mathf.Clamp01((t - SpellPlans.MoonSpread) / 0.25f);
-            if (end >= 1f) { Destroy(gameObject); return; }
-            for (int i = 0; i < _rings.Length; i++)
-            {
-                _rings[i].Host.localScale = Vector3.one * Mathf.Max(0.001f, share);
-                _rings[i].Host.localRotation = Quaternion.Euler(0f, t * (i == 0 ? 90f : -60f), 0f);
-                _rings[i].Progress = 1f - end;
-            }
-            foreach (var c in Combatant.Registry)
-            {
-                if (c == null || !c.IsAlive || _touched.Contains(c)) continue;
-                Vector3 d = c.FeetPosition - _feet;
-                if (c.NetworkObjectId != _caster && (Mathf.Abs(d.y) > SpellPlans.MoonReachUp || new Vector2(d.x, d.z).magnitude > r)) continue;
-                _touched.Add(c);
-                HealView.Create(c.NetworkObjectId, 0.8f);
-            }
-        }
-
-        void OnDestroy()
-        {
-            foreach (var r in _rings) r?.Release();
-        }
-    }
-
     // ====================================================================== on a body: the moon, the sun, taken by The World
 
     /// <summary>
@@ -297,7 +216,7 @@ namespace SuddenMageEncounter
                 if (moon)
                 {
                     _moon.transform.position = TarotVfx.Head(_c) + Vector3.up * 0.75f;
-                    _moon.Fill = Mathf.Clamp01((float)(now - st.MoonFrom) / SpellPlans.MoonFill);
+                    _moon.Fill = st.MoonFill;
                 }
                 else { _moon.Go(); _moon = null; }
             }
@@ -352,14 +271,6 @@ namespace SuddenMageEncounter
                 if (runes != null) runes.Burst(24);
                 CameraRig.ShakeFrom(here, 0.2f, 0.2f);
             }
-
-            // too long in The World: dying, black symbols coming off the body
-            bool dying = alive && st.WorldUntil > 0 && now >= st.WorldUntil + SpellPlans.WorldGrace && WorldNet.WorldOf(_c) != null;
-            if (dying && _dying == null)
-                _dying = RuneSpew.Create(() => _c.RagdollFocus != null ? _c.RagdollFocus.position : _c.transform.position,
-                    () => this != null && _dyingNow, 3600f, Color.black, 22f, new Vector3(0.4f, 0.8f, 0.4f));
-            _dyingNow = dying;
-            if (!dying) _dying = null;
         }
 
         static void BlackBurst(Vector3 p, float scale) => EnergyBurst.Create(p, new EnergyBurst.Settings
@@ -371,8 +282,6 @@ namespace SuddenMageEncounter
         double _goneFor;
         Vector3 _warpAt;
         RuneSpew _warpRunes;
-        RuneSpew _dying;
-        bool _dyingNow;
 
         void OnDestroy()
         {
@@ -386,6 +295,20 @@ namespace SuddenMageEncounter
     {
         static readonly Color Dark = new(0.16f, 0.05f, 0.035f, 1f), Lit = new(2.5f, 1.9f, 1.35f, 1f);
         public float Fill;
+        float _shown;
+
+        /// <summary>The moon over someone is full: light green, and plus signs rise off them.</summary>
+        public static void Full(ulong caster)
+        {
+            var c = WorldNet.FindCombatant(caster);
+            if (c == null) return;
+            EnergyBurst.Create(TarotVfx.Head(c) + Vector3.up * 0.75f, new EnergyBurst.Settings
+            {
+                flashSize = 1.4f, flashTime = 0.2f, sparkCount = 14, sparkSize = 0.3f, sparkSpeed = new Vector2(4f, 9f), sparkLife = 0.4f, colour = SpellPlans.MoonGreen,
+            });
+            HealView.Create(caster, 0.8f);
+        }
+
         Mesh _disc, _lit;
         Transform _body;
         MeshRenderer _litR;
@@ -481,9 +404,10 @@ namespace SuddenMageEncounter
             }
             else
             {
-                Shape(Fill);
+                _shown = Mathf.MoveTowards(_shown, Fill, Time.deltaTime * 1.5f);
+                Shape(_shown);
                 // brightening and throbbing as it nears full; pale green at the very end
-                float near = Mathf.InverseLerp(0.75f, 1f, Fill);
+                float near = Mathf.InverseLerp(0.75f, 1f, _shown);
                 s *= 1f + 0.06f * near * Mathf.Sin(_age * 30f);
                 Glow.Tint(_litR, Color.Lerp(Lit, SpellPlans.MoonGreen, near));
             }

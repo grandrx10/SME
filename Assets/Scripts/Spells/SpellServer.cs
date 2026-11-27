@@ -31,6 +31,7 @@ namespace SuddenMageEncounter
         class GustState
         {
             public int id; public PlayerController caster; public Vector3 origin, dir; public double start; public readonly HashSet<Combatant> hit = new();
+            public CardId card = CardId.Shove;
             public float life = SpellPlans.GustLife;                 // how long it blows (Tug: until it reaches the caster)
             public float knock = SpellPlans.GustKnockForward, up = SpellPlans.GustKnockUp, ragdoll = SpellPlans.GustRagdoll;
         }
@@ -39,12 +40,13 @@ namespace SuddenMageEncounter
             public int id; public PlayerController caster; public Vector3 origin, dir; public double start;
             public readonly Dictionary<Combatant, double> captured = new(), lastLump = new();
             public readonly HashSet<Combatant> flung = new(); // thrown out already (never caught again by this one)
+            public bool all; // sweeps up its caster too (Wheel of Fortune's)
             public double nextGouge;
         }
         class DashState { public PlayerController caster; public Vector3 dir; public double until; public readonly HashSet<Combatant> hit = new(); }
         class VolleyState { public int id; public PlayerController caster; public ulong target; public double start; public bool launched; public readonly HashSet<(int, int)> redirected = new(); }
         class BarrierState { public PlayerController caster; public double start; public readonly HashSet<Combatant> hit = new(); }
-        class SiphonState { public PlayerController caster; public double start; public float mult = 1f; }
+        class SiphonState { public PlayerController caster; public double start; public bool gold; /* Wheel of Fortune's 6 */ }
 
         static readonly List<PendingWall> Walls = new();
         static readonly List<PendingFold> Folds = new();
@@ -68,6 +70,7 @@ namespace SuddenMageEncounter
             Volleys.Clear();
             Barriers.Clear();
             Siphons.Clear();
+            ResetShields();
             ResetFlame();
             ResetWater();
             ResetArcane();
@@ -83,6 +86,9 @@ namespace SuddenMageEncounter
             ResetGuns();
             ResetBombs();
             ResetHex();
+            ResetBotany();
+            ResetGale();
+            ResetArms();
             ResetHazards();
         }
 
@@ -180,7 +186,9 @@ namespace SuddenMageEncounter
                     if (c == null || c == g.caster || !c.IsAlive || g.hit.Contains(c)) continue;
                     if (!Inside(c.transform.position, 0.45f) && !Inside(c.transform.position + Vector3.up * 0.7f, 0.45f)) continue;
                     g.hit.Add(c);
-                    Hit(c, g.caster, 0f, c.transform.position, g.dir * g.knock + Vector3.up * g.up, g.ragdoll);
+                    // (a Tug: stopped by a shield held out towards whoever is pulling)
+                    Hit(c, g.caster, 0f, c.transform.position, g.dir * g.knock + Vector3.up * g.up, g.ragdoll,
+                        from: g.card == CardId.Tug ? g.caster.transform.position : null, card: g.card);
                 }
 
                 // summoned ground: blown loose and sent flying
@@ -275,13 +283,16 @@ namespace SuddenMageEncounter
                 // sweep up anyone in its path
                 foreach (var c in Combatant.Registry.ToArray())
                 {
-                    if (c == null || c == t.caster || !c.IsAlive || t.captured.ContainsKey(c) || Shielded(c)) continue;
+                    if (c == null || c == t.caster && !t.all || !c.IsAlive || t.captured.ContainsKey(c) || Shielded(c)) continue;
                     Vector3 rel = c.transform.position - b;
                     if (rel.y < -1.5f || rel.y > SpellPlans.TornadoHeight || new Vector2(rel.x, rel.z).magnitude > SpellPlans.TornadoRadius) continue;
+                    if (ParryCatch(c, t.caster, c.transform.position)) continue; // Parry: not swept up
                     t.captured[c] = now;
                     t.lastLump[c] = now;
                     float phase = Mathf.Atan2(rel.z, rel.x);
-                    c.ServerApplyDamage(SpellPlans.TornadoDamage, t.caster != null ? t.caster.OwnerClientId : Combatant.NoAttacker, c.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
+                    // an arcane shield held towards it soaks up its damage first; they're still swept up and thrown
+                    bool guard = Guards(c, t.caster, b + Vector3.up * 1f);
+                    c.ServerApplyDamage(SpellPlans.TornadoDamage, t.caster != null ? t.caster.OwnerClientId : Combatant.NoAttacker, c.transform.position, Vector3.up, -1, 0f, DeathCause.Spell, guarded: guard, by: t.caster);
                     if (c.IsAlive) c.ServerCarry(t.origin, t.dir, t.start, now, phase);
                 }
                 // held a second at most, or held back by a wall (never dragged through one): flung out
@@ -330,7 +341,7 @@ namespace SuddenMageEncounter
                     if (c == null || c == d.caster || !c.IsAlive || d.hit.Contains(c)) continue;
                     if ((c.transform.position - d.caster.transform.position).magnitude > 1.4f) continue;
                     d.hit.Add(c);
-                    Hit(c, d.caster, 0f, c.transform.position, d.dir * SpellPlans.DashKnockForward + Vector3.up * SpellPlans.DashKnockUp, 1f);
+                    Hit(c, d.caster, 0f, c.transform.position, d.dir * SpellPlans.DashKnockForward + Vector3.up * SpellPlans.DashKnockUp, 1f, from: d.caster.transform.position, card: CardId.NomadicDash);
                 }
             }
         }
@@ -400,7 +411,7 @@ namespace SuddenMageEncounter
                     if (victim != null)
                     {
                         var attacker = WorldNet.FindCaster(ms.owner);
-                        Hit(victim, attacker, SpellPlans.MissileDamage, hit.point, ms.dir * 6f + Vector3.up * 3f, 0.6f);
+                        Hit(victim, attacker, SpellPlans.MissileDamage, hit.point, ms.dir * 6f + Vector3.up * 3f, 0.6f, from: hit.point - ms.dir);
                     }
                     // a tiny explosion: blows out whatever voxels are right there (a person's feet, a wall, the floor)
                     var w = VoxelWorld.Current;
@@ -443,6 +454,7 @@ namespace SuddenMageEncounter
         {
             for (int i = Siphons.Count - 1; i >= 0; i--)
             {
+                if (i >= Siphons.Count) continue; // (someone struck by the last one was charging too)
                 var s = Siphons[i];
                 var me = s.caster;
                 float t = (float)(now - s.start);
@@ -465,6 +477,24 @@ namespace SuddenMageEncounter
                     struck.Add(o);
                 }
                 if (struck.Count == 0) continue;
+                if (s.gold)
+                {
+                    // the golden one: no mana taken, thrown as hard as anything can be
+                    foreach (var o in struck)
+                    {
+                        Vector3 off = o.transform.position - me.transform.position;
+                        off.y = 0f;
+                        off = off.sqrMagnitude > 0.01f ? off.normalized : fwd;
+                        Hit(o, me, SpellPlans.GoldDamage, o.transform.position, off * SpellPlans.GoldKnock + Vector3.up * SpellPlans.GoldKnockUp, SpellPlans.GoldRagdoll);
+                        WorldNet.ServerWheelBlast(3, o.transform.position + Vector3.up * 0.3f, 0f);
+                    }
+                    var gst = me.Status.Value;
+                    gst.GoldUntil = now + SpellPlans.GoldAfter;
+                    me.Status.Value = gst;
+                    me.ServerSiphonPunched();
+                    Siphons.Remove(s);
+                    continue;
+                }
 
                 // the punch lands
                 float gained = 0f;
@@ -473,19 +503,19 @@ namespace SuddenMageEncounter
                     if (o is PlayerController victim && !Invulnerable(victim))
                     {
                         float m = victim.ManaNow;
-                        float take = Mathf.Min(SpellPlans.SiphonDrain * s.mult, m);
+                        float take = Mathf.Min(SpellPlans.SiphonDrain, m);
                         victim.Mana.Value = victim.Mana.Value.With(now, m - take);
                         gained += take;
                     }
-                    else if (o is TestDummy dummy) gained += dummy.ServerDrainMana(SpellPlans.SiphonDrain * s.mult); // refills to 5 on its own
+                    else if (o is TestDummy dummy) gained += dummy.ServerDrainMana(SpellPlans.SiphonDrain); // refills to 5 on its own
                     Vector3 away = o.transform.position - me.transform.position;
                     away.y = 0f;
                     away = away.sqrMagnitude > 0.01f ? away.normalized : fwd;
-                    Hit(o, me, SpellPlans.SiphonDamage * s.mult, o.transform.position, away * 11f + Vector3.up * 7f, 1f);
+                    Hit(o, me, SpellPlans.SiphonDamage, o.transform.position, away * 11f + Vector3.up * 7f, 1f);
                 }
                 if (gained > 0f) me.Mana.Value = me.Mana.Value.With(now, Mathf.Min(me.Mana.Value.Limit, me.ManaNow + gained));
                 me.ServerSiphonPunched();
-                Siphons.RemoveAt(i);
+                Siphons.Remove(s);
             }
         }
 
@@ -493,12 +523,14 @@ namespace SuddenMageEncounter
 
         class FireballState
         {
-            public int id; public PlayerController caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust;
+            public int id; public Combatant caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust;
             /// <summary>Necromatic Blast's ball: flies (and is turned, caught, blocked, sent through portals) as a fireball, but isn't fire.</summary>
             public bool necro;
             /// <summary>A map hazard's meteor: a big fireball nobody threw (SpellServer.Hazards).</summary>
             public bool meteor;
-            public float Radius => meteor ? SpellPlans.MeteorRadius : SpellPlans.FireballRadius;
+            /// <summary>A meteor's size (and its blast's), against an ordinary one's.</summary>
+            public float size = 1f;
+            public float Radius => meteor ? SpellPlans.MeteorRadius * size : necro ? SpellPlans.NecroRadius : SpellPlans.FireballRadius;
             public float Charge => necro ? SpellPlans.NecroCharge : SpellPlans.FireballCharge;
             public float Speed => necro ? SpellPlans.NecroSpeed : meteor ? SpellPlans.MeteorSpeed : SpellPlans.FireballSpeed;
             public float Range => necro ? Cards.MaxRange : meteor ? 120f : SpellPlans.FireballRange;
@@ -511,15 +543,14 @@ namespace SuddenMageEncounter
             public readonly HashSet<Combatant> hit = new();
             public readonly HashSet<int> lit = new();
         }
-        class EscapeState { public PlayerController caster; public double at; }
+        class EscapeState { public PlayerController caster; public double at; public float held, yaw; public Vector3 spot; }
         class JudgmentState
         {
-            public int id; public byte kind; public PlayerController caster; public Vector3 center, dir; public double start, nextLayer;
+            public int id; public byte kind; public PlayerController caster; public Vector3 center; public double start, nextLayer;
             public readonly Dictionary<Combatant, float> owed = new();
-            public readonly Dictionary<Vector2Int, double> columns = new(); // Judgement: when each column the beam has touched loses its next layer
-            public Vector3 CenterAt(double now) => SpellPlans.JudgmentCenterAt(kind, center, dir, (float)(now - start));
+            public bool loose;  // Wheel of Fortune's: nobody's casting it (knocking them down doesn't stop it)
+            public bool slammed; // Judgement's
         }
-        static readonly List<Vector3Int> _columnsDue = new();
 
         static readonly List<FireballState> FireballsS = new();
         static readonly List<HellfireState> HellfiresS = new();
@@ -549,8 +580,15 @@ namespace SuddenMageEncounter
 
         // ---------------- burn helper ----------------
 
-        static void Burn(Combatant c, PlayerController attacker) =>
-            c.ServerBurn(attacker != null ? attacker.OwnerClientId : Combatant.NoAttacker);
+        /// <param name="from">Where it comes from: the arcane shield takes it (all at once) if it's held out that way.</param>
+        /// <param name="striker">Whose body did it, if not the attacker's own (an attack dummy's fireball).</param>
+        static void Burn(Combatant c, PlayerController attacker, Vector3? from = null, Combatant striker = null)
+        {
+            // Parry: the fire's first touch is a blow like any other (turned aside: not set alight; the hit itself is then deflected)
+            if (ParryCatch(c, striker != null ? striker : attacker, c.transform.position)) return;
+            float share = from.HasValue ? ShieldBurn(c, attacker, striker != null ? striker : attacker, from.Value) : 1f;
+            if (share > 0f) c.ServerBurn(attacker != null ? attacker.OwnerClientId : Combatant.NoAttacker, share);
+        }
 
         /// <summary>Blows out a crater (rubble flung up), then blackens what's left round it.</summary>
         static void Scorch(Vector3 point, int crater4, int singe4, float push)
@@ -590,6 +628,25 @@ namespace SuddenMageEncounter
             f.lastPos = origin;
         }
 
+        /// <summary>An attack dummy starts a Ball of Flame.</summary>
+        public static void DummyFireball(TestDummy dummy)
+        {
+            int id = WorldNet.ServerFireball(dummy.NetworkObjectId);
+            if (id != 0) FireballsS.Add(new FireballState { id = id, caster = dummy, start = WorldNet.Now });
+        }
+
+        /// <summary>
+        /// From the ball over its hand to whatever is straight ahead of its chest (as a player's goes to what's under the
+        /// centre dot), so it doesn't pass over the head of someone standing in front of it.
+        /// </summary>
+        static Vector3 DummyAim(TestDummy dummy, Vector3 ball)
+        {
+            Vector3 fwd = Quaternion.Euler(0f, dummy.ViewYaw, 0f) * Vector3.forward, chest = dummy.transform.position + Vector3.up * 0.3f;
+            float far = SpellPlans.FireballRange;
+            if (SweepBall(dummy.NetworkObjectId, chest, fwd, far, 0.4f, out var hit, out _)) far = Mathf.Max(1f, hit.distance + 0.4f);
+            return chest + fwd * far - ball;
+        }
+
         static void TickFireballs(WorldNet net, double now)
         {
             for (int i = FireballsS.Count - 1; i >= 0; i--)
@@ -598,15 +655,16 @@ namespace SuddenMageEncounter
                 if (!net.Fireballs.TryGetValue(f.id, out var fx)) { FireballsS.RemoveAt(i); continue; }
                 if (!f.launched)
                 {
-                    if (f.caster == null || !f.caster.IsAlive)
+                    var dummy = f.caster as TestDummy; // (an attack dummy: thrown straight ahead the moment it's ready)
+                    if (f.caster == null || !f.caster.IsAlive || dummy != null && !dummy.CanThrow)
                     {
                         WorldNet.ServerFireballEnd(f.id, WorldNet.FireballPosition(fx, now), true);
                         FireballsS.RemoveAt(i);
                         continue;
                     }
                     // the owner never threw it: it goes where they're facing
-                    if (now > f.start + f.Charge + 0.4)
-                        DoLaunchFireball(f, Quaternion.Euler(f.caster.ViewPitch, f.caster.ViewYaw, 0) * Vector3.forward);
+                    if (now > f.start + f.Charge + (dummy != null ? 0f : 0.4f))
+                        DoLaunchFireball(f, dummy != null ? DummyAim(dummy, WorldNet.FireballPosition(fx, now)) : Quaternion.Euler(f.caster.ViewPitch, f.caster.ViewYaw, 0) * Vector3.forward);
                     continue;
                 }
                 Vector3 pos = WorldNet.FireballPosition(fx, now);
@@ -616,7 +674,7 @@ namespace SuddenMageEncounter
                 if (f.necro)
                 {
                     // (not fire: only a bubble stops it)
-                    var bubble = BubbleBlocking(fx.owner, pos, SpellPlans.FireballRadius);
+                    var bubble = BubbleBlocking(fx.owner, pos, f.Radius);
                     if (bubble != null)
                     {
                         HurtBubble(bubble, SpellPlans.NecroDamage, pos);
@@ -667,17 +725,21 @@ namespace SuddenMageEncounter
             if (f.necro) { LandNecro(f, fx, point, direct); return; }
             if (f.meteor) { LandMeteor(f, fx, point); return; }
             var owner = WorldNet.FindCaster(fx.owner);
-            if (direct != null && direct.IsAlive)
-                direct.ServerApplyDamage(SpellPlans.FireballHitDamage, owner != null ? owner.OwnerClientId : Combatant.NoAttacker, point, fx.velocity.normalized, -1, 17f, DeathCause.Spell); // killed by it: thrown like the blast would have
+            Combatant thrower = owner != null ? owner : WorldNet.FindCombatant(fx.owner); // (an attack dummy)
+            Vector3 behind = point - fx.velocity.normalized; // (whoever it hits: the way it came, not where on them it burst)
+            if (direct != null && direct.IsAlive
+                && direct.ServerApplyDamage(SpellPlans.FireballHitDamage, owner != null ? owner.OwnerClientId : Combatant.NoAttacker, point, fx.velocity.normalized, -1, 17f, DeathCause.Spell, // killed by it: thrown like the blast would have
+                    guarded: Guards(direct, thrower, behind), by: thrower)) Rebuke(thrower, direct);
             // the blast: everyone close (the thrower too) is set alight and thrown hard
             foreach (var c in Combatant.Registry.ToArray())
             {
                 if (c == null || !c.IsAlive || Shielded(c)) continue;
                 Vector3 d = c.transform.position - point;
                 if (d.magnitude > SpellPlans.FireballBlast + 0.5f) continue;
-                Burn(c, owner);
+                Vector3 from = c == direct ? behind : point;
+                Burn(c, owner, from, thrower);
                 Vector3 away = d.sqrMagnitude > 0.01f ? d.normalized : Vector3.up;
-                Hit(c, owner, 0f, c.transform.position, away * 15f + Vector3.up * 8f, 1.2f);
+                Hit(c, owner, 0f, c.transform.position, away * 15f + Vector3.up * 8f, 1.2f, from: from, card: CardId.BallOfFlame, striker: thrower);
             }
             Scorch(point, SpellPlans.FireballCrater4, SpellPlans.FireballSinge4, 9f);
             WorldNet.ServerFlameBurst(point, 1.2f);
@@ -757,9 +819,9 @@ namespace SuddenMageEncounter
                     if (c == null || !c.IsAlive || h.hit.Contains(c) || Shielded(c)) continue;
                     if (!InWall(h, c.FeetPosition, lit, 0.4f)) continue;
                     h.hit.Add(c);
-                    c.ServerApplyDamage(SpellPlans.HellfireDamage, h.caster != null ? h.caster.OwnerClientId : Combatant.NoAttacker,
-                        c.transform.position, Vector3.up, -1, 0f, DeathCause.Spell);
-                    for (int b = 0; b < SpellPlans.HellfireBurns; b++) Burn(c, h.caster);
+                    Vector3 from = WallSide(h, c);
+                    Hit(c, h.caster, SpellPlans.HellfireDamage, c.transform.position, Vector3.zero, 0f, from: from);
+                    for (int b = 0; b < SpellPlans.HellfireBurns; b++) Burn(c, h.caster, from);
                 }
                 // flying ground going through it catches fire
                 if (net == null) continue;
@@ -772,6 +834,25 @@ namespace SuddenMageEncounter
                     WorldNet.ServerRockIgnite(rock.id);
                 }
             }
+        }
+
+        /// <summary>Which side of someone a hellfire wall is on (they're walking into it; or the nearest of it).</summary>
+        static Vector3 WallSide(HellfireState h, Combatant c)
+        {
+            Vector3 p = c.transform.position, v = c.ViewVelocity;
+            v.y = 0f;
+            if (v.magnitude > 1.5f) return p + v.normalized * 2f;
+            Vector3 best = p + ViewDir(c);
+            float near = float.MaxValue;
+            for (int k = 1; k < h.points.Count; k++)
+            {
+                Vector3 a = h.points[k - 1], ab = h.points[k] - a;
+                Vector3 on = a + ab * (ab.sqrMagnitude > 1e-6f ? Mathf.Clamp01(Vector3.Dot(p - a, ab) / ab.sqrMagnitude) : 0f);
+                on.y = p.y;
+                float d = (on - p).sqrMagnitude;
+                if (d < near && d > 0.01f) { near = d; best = on; }
+            }
+            return best;
         }
 
         /// <summary>Is a point (feet) inside the risen part of a hellfire wall?</summary>
@@ -807,39 +888,66 @@ namespace SuddenMageEncounter
                 Escapes.RemoveAt(i);
                 var me = e.caster;
                 if (me == null || !me.IsAlive) continue;
-                Vector3 fwd = Quaternion.Euler(0, me.ViewYaw, 0) * Vector3.forward;
-                Vector3 point = me.transform.position + fwd * SpellPlans.EscapeReach + Vector3.up * 0.1f;
+                Vector3 fwd = Quaternion.Euler(0, e.yaw, 0) * Vector3.forward;
+                Vector3 point = e.spot;
+                float size = SpellPlans.EscapeSize(e.held), blast = SpellPlans.EscapeBlast * size;
                 // set off in water: it fizzles out in a puff of steam
                 if (InWater(point, 0.4f))
                 {
-                    WorldNet.ServerQuench(point, 1.2f);
+                    WorldNet.ServerQuench(point, 1.2f * size);
                     continue;
                 }
                 foreach (var c in Combatant.Registry.ToArray())
                 {
                     if (c == null || c == me || !c.IsAlive || Shielded(c)) continue;
                     Vector3 d = c.transform.position - point;
-                    if (d.magnitude > SpellPlans.EscapeBlast + 0.4f) continue;
-                    Burn(c, me);
+                    // any part of the body inside the blast (exactly as big as it's drawn, and as the outline showed)
+                    Vector3 feet = c.FeetPosition, ab = Vector3.up * 1.9f * c.transform.localScale.y;
+                    float u = Mathf.Clamp01(Vector3.Dot(point - feet, ab) / ab.sqrMagnitude);
+                    if ((point - (feet + ab * u)).magnitude > blast) continue;
+                    Burn(c, me, me.transform.position);
                     Vector3 away = new Vector3(d.x, 0f, d.z).sqrMagnitude > 0.01f ? new Vector3(d.x, 0f, d.z).normalized : fwd;
-                    Hit(c, me, 0f, c.transform.position, away * 10f + Vector3.up * 6f, 1f);
+                    Hit(c, me, 0f, c.transform.position, away * 10f + Vector3.up * 6f, 1f, from: me.transform.position, card: CardId.ExplosiveEscape);
                 }
                 // the ground in front is blasted out and flung, and scorched round it
-                Scorch(point + Vector3.down * 0.6f, SpellPlans.EscapeCrater4, SpellPlans.EscapeSinge4, 10f);
-                WorldNet.ServerFlameBurst(point, 1f);
-                FlameSetsOff(point, SpellPlans.EscapeBlast);
+                Scorch(SpellPlans.EscapeCraterCentre(point), Mathf.RoundToInt(SpellPlans.EscapeCrater4 * size), Mathf.RoundToInt(SpellPlans.EscapeSinge4 * size), 10f);
+                WorldNet.ServerFlameBurst(point, blast / SpellPlans.FlameBurstReach); // (its tongues reach exactly the blast's edge)
+                FlameSetsOff(point, blast);
             }
         }
 
         // ---------------- Arcane Judgment, Judgement ----------------
 
-        /// <summary>A circle (Arcane Judgment's, or Judgement's own: smaller, slower, gentler, mahogany) starts being written.</summary>
-        static bool CastJudgment(PlayerController caster, byte kind, Vector3 center, float yaw, double now)
+        /// <summary>A circle (Arcane Judgment's, or Judgement's own: smaller, mahogany) starts being written.</summary>
+        static bool CastJudgment(PlayerController caster, byte kind, Vector3 center, double now)
         {
-            Vector3 dir = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward; // (Judgement slides off this way)
-            int id = WorldNet.ServerJudgment(caster.NetworkObjectId, center, dir, kind);
-            JudgmentsS.Add(new JudgmentState { id = id, kind = kind, caster = caster, center = center, dir = dir, start = now, nextLayer = now + SpellPlans.JudgmentStartOf(kind) });
+            int id = WorldNet.ServerJudgment(caster.NetworkObjectId, center, kind);
+            JudgmentsS.Add(new JudgmentState { id = id, kind = kind, caster = caster, center = center, start = now, nextLayer = now + SpellPlans.JudgmentStartOf(kind) });
             return true;
+        }
+
+        /// <summary>One of Wheel of Fortune's Arcane Judgments.</summary>
+        static void LooseJudgment(PlayerController by, Vector3 center, double now)
+        {
+            int id = WorldNet.ServerJudgment(ulong.MaxValue, center, SpellPlans.ArcaneCircle);
+            JudgmentsS.Add(new JudgmentState { id = id, caster = by, center = center, start = now, loose = true, nextLayer = now + SpellPlans.JudgmentStartOf(SpellPlans.ArcaneCircle) });
+        }
+
+        /// <summary>
+        /// Judgement's circle is written: everything from 5 m over it to 0.5 m under it comes down. Every breakable voxel goes;
+        /// everyone in it (its caster too) takes 25 and is slammed into the floor.
+        /// </summary>
+        static void SlamJudgement(JudgmentState j)
+        {
+            var w = VoxelWorld.Current;
+            if (w != null) WorldNet.ServerJudgementSlam(w.CellOf(j.center + Vector3.down * 0.1f));
+            foreach (var o in Combatant.Registry.ToArray())
+            {
+                if (o == null || !o.IsAlive || Folded(o) || Shielded(o)) continue;
+                Vector3 d = o.transform.position - j.center;
+                if (d.y < -SpellPlans.TarotJudgmentDown || d.y > SpellPlans.TarotJudgmentUp + 0.6f || new Vector2(d.x, d.z).magnitude > SpellPlans.TarotJudgmentRadius + 0.2f) continue;
+                Hit(o, j.caster, SpellPlans.TarotJudgmentDamage, o.transform.position, Vector3.down * SpellPlans.TarotJudgmentSlam, SpellPlans.TarotJudgmentRagdoll);
+            }
         }
 
         static void TickJudgments(double now, float dt)
@@ -847,47 +955,35 @@ namespace SuddenMageEncounter
             var w = VoxelWorld.Current;
             for (int i = JudgmentsS.Count - 1; i >= 0; i--)
             {
+                if (i >= JudgmentsS.Count) continue; // (someone caught in the last one was writing their own)
                 var j = JudgmentsS[i];
                 float t = (float)(now - j.start);
-                if (t > SpellPlans.JudgmentEndOf(j.kind)) { JudgmentsS.RemoveAt(i); continue; }
+                if (j.kind == SpellPlans.TarotCircle && !j.slammed && t >= SpellPlans.JudgmentStartOf(j.kind))
+                {
+                    j.slammed = true;
+                    SlamJudgement(j);
+                }
+                if (t > SpellPlans.JudgmentEndOf(j.kind)) { JudgmentsS.Remove(j); continue; }
+                if (j.kind == SpellPlans.TarotCircle) continue;
                 if (t < SpellPlans.JudgmentStartOf(j.kind)) continue;
                 float radius = SpellPlans.JudgmentRadiusOf(j.kind);
-                Vector3 center = j.CenterAt(now);
+                Vector3 center = j.center;
                 // the beam eats down through the ground, a layer at a time
                 if (w != null && now >= j.nextLayer)
                 {
                     var c = w.CellOf(center);
                     int r = Mathf.RoundToInt(radius / VoxelWorld.Size);
-                    if (j.kind == SpellPlans.TarotCircle)
-                    {
-                        // it's moving: each column loses its top as the beam gets to it, and another for every while it stays on it
-                        j.nextLayer += SpellPlans.TarotJudgmentCheck;
-                        _columnsDue.Clear();
-                        for (int x = -r; x <= r; x++)
-                        for (int z = -r; z <= r; z++)
-                        {
-                            if (x * x + z * z > r * r) continue;
-                            var col = new Vector2Int(c.x + x, c.z + z);
-                            if (j.columns.TryGetValue(col, out double due) && now < due) continue;
-                            j.columns[col] = now + SpellPlans.JudgmentLayerOf(j.kind);
-                            _columnsDue.Add(new Vector3Int(col.x, 0, col.y));
-                        }
-                        WorldNet.ServerEraseColumns(_columnsDue, c.y - 80, c.y + 160);
-                    }
-                    else
-                    {
-                        j.nextLayer += SpellPlans.JudgmentLayerOf(j.kind);
-                        WorldNet.ServerJudgmentErase(c, r, c.y - 80, c.y + 160);
-                    }
+                    j.nextLayer += SpellPlans.JudgmentLayerEvery;
+                    WorldNet.ServerJudgmentErase(c, r, c.y - 80, c.y + 160);
                 }
-                // anyone in the beam, at any height: 50 (Judgement: 25) a second (no ragdoll)
+                // anyone in the beam, at any height: 50 a second (no ragdoll)
                 foreach (var o in Combatant.Registry.ToArray())
                 {
                     if (o == null || !o.IsAlive) continue;
                     Vector3 d = o.transform.position - center;
                     if (new Vector2(d.x, d.z).magnitude > radius) continue;
                     j.owed.TryGetValue(o, out float owed);
-                    owed += SpellPlans.JudgmentDpsOf(j.kind) * dt;
+                    owed += SpellPlans.JudgmentDps * dt;
                     if (owed >= 5f)
                     {
                         o.ServerApplyDamage(owed, j.caster != null ? j.caster.OwnerClientId : Combatant.NoAttacker, o.transform.position, Vector3.down, -1, 0f, DeathCause.Spell);
@@ -953,11 +1049,13 @@ namespace SuddenMageEncounter
         {
             foreach (var t in Tornados) if (t.captured.ContainsKey(c)) t.flung.Add(c);
             foreach (var f in ForcesS) if (f.held.Remove(c)) f.released.Add(c);
+            FreeFromTrap(c); // (a fly trap's mouth too)
         }
 
         /// <summary>A caster got thrown or hurt: whatever they were doing with their body stops.</summary>
         public static void OnInterrupted(PlayerController pc, bool knocked)
         {
+            if (knocked) pc.ServerLowerShield(true);
             InterruptArcane(pc, knocked);
             InterruptBlade(pc, knocked);
             InterruptWeapon(pc, knocked);
@@ -966,10 +1064,13 @@ namespace SuddenMageEncounter
             InterruptArcana(pc, knocked);
             InterruptBreath(pc, knocked);
             InterruptTarot3(pc, knocked);
+            InterruptBotany(pc, knocked);
+            InterruptGale(pc, knocked);
+            InterruptArms(pc, knocked);
             if (knocked) { FizzleGuns(pc); FreeGrasp(pc); }
             Dashes.RemoveAll(d => d.caster == pc);
             if (knocked) Siphons.RemoveAll(s => s.caster == pc);
-            if (knocked) DispelMagician(pc);
+            DispelMagician(pc); // (hurt or knocked down)
             CancelDomainStartup(pc);
             if (knocked) Fizzle(pc);
         }
@@ -996,7 +1097,7 @@ namespace SuddenMageEncounter
             // the missile orb in your hand, a barrier that hasn't gone up, a circle being drawn: gone
             shown |= Volleys.RemoveAll(v => v.caster == pc && !v.launched) > 0;
             shown |= Barriers.RemoveAll(b => b.caster == pc && now < b.start + SpellPlans.BarrierWindup) > 0;
-            shown |= JudgmentsS.RemoveAll(j => j.caster == pc && now < j.start + SpellPlans.JudgmentDrawOf(j.kind)) > 0;
+            shown |= JudgmentsS.RemoveAll(j => j.caster == pc && !j.loose && now < j.start + SpellPlans.JudgmentDrawOf(j.kind)) > 0;
             shown |= HellfiresS.RemoveAll(h => h.caster == pc && h.riseAt < 0) > 0;
             Escapes.RemoveAll(e => e.caster == pc);
             FizzleGround(pc, now);
@@ -1108,6 +1209,11 @@ namespace SuddenMageEncounter
                 case CardId.Severance:
                 case CardId.FlowingCut:
                     return CastBlade(caster, card, target, targetId, now);
+                case CardId.HammerSpin:
+                case CardId.Wolfgang:
+                case CardId.HeavenlySlash:
+                case CardId.Parry:
+                    return CastArms(caster, card, target, yaw, targetId, now);
                 case CardId.RisingHammer:
                 case CardId.DescendingHammer:
                     return CastWeapon(caster, card, now);
@@ -1150,7 +1256,18 @@ namespace SuddenMageEncounter
                 case CardId.ShatterHex:
                 case CardId.StasisHex:
                 case CardId.MindHex:
+                case CardId.SmallifyHex:
                     return CastHex(caster, card, targetId, now);
+                case CardId.Sunflower:
+                case CardId.Cactus:
+                case CardId.FlyTrap:
+                    return CastBotany(caster, card, now);
+                case CardId.CompressedShot:
+                case CardId.Ephemerate:
+                case CardId.CloudStep:
+                case CardId.Submerge:
+                case CardId.BubbleBomb:
+                    return CastGale(caster, card, target, yaw, targetId, now);
                 case CardId.NecromaticBlast:
                 {
                     // (torn out of the ground as Rock Barrage's is)
@@ -1175,13 +1292,18 @@ namespace SuddenMageEncounter
                 }
                 case CardId.ExplosiveEscape:
                 {
-                    Escapes.Add(new EscapeState { caster = caster, at = now + SpellPlans.EscapeDelay });
+                    // held this long first (the owner says; never more than it can be)
+                    float held = Mathf.Clamp(targetId / 1000f, 0f, SpellPlans.EscapeChargeMax);
+                    // where it goes off: fixed when let go (the spot the owner was shown), if it's believable
+                    Vector3 spot = SpellPlans.EscapeSpot(caster.transform.position, yaw);
+                    if ((target - spot).magnitude < 2.5f) spot = target;
+                    Escapes.Add(new EscapeState { caster = caster, at = now + SpellPlans.EscapeDelay, held = held, spot = spot, yaw = yaw });
                     return true;
                 }
                 case CardId.ArcaneJudgment:
-                    return CastJudgment(caster, SpellPlans.ArcaneCircle, target, yaw, now);
+                    return CastJudgment(caster, SpellPlans.ArcaneCircle, target, now);
                 case CardId.Judgement:
-                    return CastJudgment(caster, SpellPlans.TarotCircle, target, yaw, now);
+                    return CastJudgment(caster, SpellPlans.TarotCircle, target, now);
                 case CardId.TheStar:
                 case CardId.TheMoon:
                 case CardId.TheSun:
@@ -1202,7 +1324,7 @@ namespace SuddenMageEncounter
                     Gusts.Add(new GustState
                     {
                         id = id, caster = caster, origin = from, dir = dir, start = now, life = life,
-                        knock = SpellPlans.TugPull, up = SpellPlans.TugUp, ragdoll = SpellPlans.TugRagdoll,
+                        card = CardId.Tug, knock = SpellPlans.TugPull, up = SpellPlans.TugUp, ragdoll = SpellPlans.TugRagdoll,
                     });
                     return true;
                 }
@@ -1351,7 +1473,7 @@ namespace SuddenMageEncounter
                     {
                         Vector3 v = WorldNet.RockVelocity(fx, now);
                         Hit(victim, rock.caster, rock.damage, hit.point, (v.normalized * 9f + Vector3.up * 4f) * SpellPlans.RockKnockback, 0.8f);
-                        if (FlamingRocks.Contains(rock.id) && victim.IsAlive) Burn(victim, rock.caster); // set alight by a hellfire wall
+                        if (FlamingRocks.Contains(rock.id) && victim.IsAlive) Burn(victim, rock.caster, hit.point - v.normalized); // set alight by a hellfire wall
                         Impact(rock, hit.point, null, 0, null);
                     }
                     else Impact(rock, hit.point, hit.normal, rock.envR4, hit.collider);
@@ -1484,7 +1606,11 @@ namespace SuddenMageEncounter
             TickTarot3(net, now, Time.deltaTime);
             TickGuns(net, now);
             TickHex(now);
+            TickBotany(now, Time.deltaTime);
+            TickGale(now);
+            TickArms(now);
             TickHazards(now, Time.deltaTime);
+            TickShields(now); // last: whoever was thrown back by one
         }
 
         /// <summary>
@@ -1580,16 +1706,32 @@ namespace SuddenMageEncounter
 
         /// <param name="cutNormal">Non-zero: a killing hit cuts the body in half along this plane through <paramref name="point"/> (Blade).</param>
         /// <param name="bore">Non-zero: a killing hit bores a round hole (radius: its length) along this axis through <paramref name="point"/>.</param>
-        public static void Hit(Combatant victim, PlayerController attacker, float damage, Vector3 point, Vector3 knock, float ragdoll, Vector3 cutNormal = default, Vector3 bore = default)
+        /// <param name="from">Where it comes from, for the arcane shield (if not simply against the knock).</param>
+        /// <param name="card">What cast it: a throw without damage costs the shield by its mana.</param>
+        /// <param name="striker">Whose body did it, if not the attacker's own (an Undead's bite).</param>
+        /// <returns>Their arcane shield stopped it.</returns>
+        public static bool Hit(Combatant victim, PlayerController attacker, float damage, Vector3 point, Vector3 knock, float ragdoll, Vector3 cutNormal = default, Vector3 bore = default,
+            Vector3? from = null, CardId card = CardId.None, Combatant striker = null)
         {
-            if (victim == null || !victim.IsAlive) return;
-            if (Combatant.Allies(attacker, victim)) return; // a necromancer and their Undead never hurt or throw each other
-            victim.ServerCredit(attacker); // knocked off a ledge or into lava by this: still their kill
+            if (victim == null || !victim.IsAlive) return false;
+            if (Combatant.Allies(attacker, victim)) return false; // a necromancer and their Undead never hurt or throw each other
+            if (Combatant.RaisedAgainst(attacker, victim)) return false; // (nor do the Undead their master's teammates)
+            if (damage > 0f && Parries(victim, attacker, striker, point)) return true; // Parry: turned aside (and paid back)
+            Combatant by = striker != null ? striker : attacker;
+            Vector3 src = from ?? SourceOf(victim, by, point, knock);
+            bool throws = ragdoll > 0f || knock.sqrMagnitude > 0f;
+            if (damage <= 0f && throws && ShieldStops(victim, by, src, card)) return true;
             ulong who = attacker != null ? attacker.OwnerClientId : Combatant.NoAttacker;
             Vector3 dir = knock.sqrMagnitude > 0.01f ? knock.normalized : Vector3.up;
             // (if it kills, the body is thrown by the same knock as a ragdoll)
-            if (damage > 0f) victim.ServerApplyDamage(damage, who, point, dir, -1, knock.magnitude, DeathCause.Spell, cutNormal, bore);
-            if (victim.IsAlive && (ragdoll > 0f || knock.sqrMagnitude > 0f)) victim.ServerKnock(knock, ragdoll);
+            if (damage > 0f && victim.ServerApplyDamage(damage, who, point, dir, -1, knock.magnitude, DeathCause.Spell, cutNormal, bore, guarded: Guards(victim, by, src), by: by))
+            {
+                Rebuke(by, victim);
+                return true;
+            }
+            victim.ServerCredit(attacker); // knocked off a ledge or into lava by this: still their kill
+            if (victim.IsAlive && throws) victim.ServerKnock(knock, ragdoll);
+            return false;
         }
     }
 }

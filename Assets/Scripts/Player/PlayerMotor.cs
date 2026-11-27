@@ -124,13 +124,26 @@ namespace SuddenMageEncounter
         /// <summary>The way the body faces: <see cref="Yaw"/> (the camera's), unless it's face-locked.</summary>
         public float BodyYaw => _frozen ? _heldYaw : _puppet ? PuppetYaw() : FaceLocked ? _faceYaw : Yaw;
         /// <summary>The way the head looks up and down: <see cref="Pitch"/> (the camera's), unless a hex has hold of the body.</summary>
-        public float BodyPitch => _frozen || _puppet ? _heldPitch : Pitch;
-        float _faceLockUntil = -1f, _faceYaw;
+        public float BodyPitch => _frozen || _puppet ? _heldPitch : FaceLocked && _pitchLocked ? _facePitch : Pitch;
+        float _faceLockUntil = -1f, _faceYaw, _facePitch;
+        bool _pitchLocked;
 
         /// <summary>Keep the body facing the way it faces now for <paramref name="seconds"/> (the camera stays free).</summary>
-        public void FaceLock(float seconds)
+        /// <param name="pitch">Up and down too (Sebastian, about to fire).</param>
+        public void FaceLock(float seconds, bool pitch = false)
         {
             _faceYaw = Yaw;
+            _facePitch = Pitch;
+            _pitchLocked = pitch;
+            _faceLockUntil = Time.time + seconds;
+        }
+
+        /// <summary>Keep the body facing <paramref name="yaw"/> for <paramref name="seconds"/> (Parry's dash: at whoever it's going for).</summary>
+        public void FaceToward(float yaw, float seconds)
+        {
+            _faceYaw = yaw;
+            _facePitch = Pitch;
+            _pitchLocked = false;
             _faceLockUntil = Time.time + seconds;
         }
         /// <summary>Floating in a Bubble Away right now.</summary>
@@ -554,8 +567,12 @@ namespace SuddenMageEncounter
         public bool Blinking => _blinkStart >= 0f && Time.time < _blinkStart + _blinkTime;
 
         /// <summary>Flowing Cut: cross to <paramref name="to"/> (where the hips end up) in <paramref name="seconds"/>, passing through whatever's in between.</summary>
-        public void Blink(Vector3 to, float seconds)
+        /// <param name="steady">At an even speed all the way (Hammer Spin), not fast out of the stance and easing in.</param>
+        /// <param name="curve">Or how far along it is at each share of the time (Hammer Spin: speeding up and slowing down).</param>
+        public void Blink(Vector3 to, float seconds, bool steady = false, Func<float, float> curve = null)
         {
+            _blinkSteady = steady;
+            _blinkCurve = curve;
             _blinkFrom = transform.position;
             _blinkTo = to;
             _blinkTime = Mathf.Max(0.01f, seconds);
@@ -563,10 +580,13 @@ namespace SuddenMageEncounter
             _dashUntil = _siphonUntil = _rootUntil = 0f;
         }
 
+        bool _blinkSteady;
+        Func<float, float> _blinkCurve;
+
         void BlinkTick()
         {
             float u = Mathf.Clamp01((Time.time - _blinkStart) / _blinkTime);
-            float e = 1f - (1f - u) * (1f - u); // fast out of the stance, easing in
+            float e = _blinkCurve != null ? _blinkCurve(u) : _blinkSteady ? u : 1f - (1f - u) * (1f - u); // fast out of the stance, easing in (or steady)
             Vector3 p = Vector3.Lerp(_blinkFrom, _blinkTo, e);
             Velocity = (_blinkTo - _blinkFrom) / _blinkTime;
             _cc.enabled = false;
@@ -663,11 +683,22 @@ namespace SuddenMageEncounter
         // ---------------- Arcane Swiftness ----------------
 
         float _swiftFrom = -1f, _swiftUntil = -1f, _lastSwiftBreak;
+        /// <summary>When the last Arcane Swiftness ended, or will (-1: never cast).</summary>
+        public float SwiftEndsAt => _swiftUntil;
         /// <summary>Running with Arcane Swiftness right now (after the crouch): free to move, three times as fast.</summary>
         public bool Swifting => Time.time >= _swiftFrom && Time.time < _swiftUntil;
         /// <summary>(feet, direction) — the swift run hit voxels: they come apart.</summary>
         public event Action<Vector3, Vector3> SwiftBlocked;
-        float SpeedScale => (Swifting ? SpellPlans.SwiftSpeedScale : 1f) * (Chilled ? SpellPlans.SlowScale : 1f);
+        float SpeedScale => (Swifting ? SpellPlans.SwiftSpeedScale : 1f) * (Chilled ? SpellPlans.SlowScale : 1f) * (Strong ? SpellPlans.StrengthSpeed : 1f) * (InBile ? SpellPlans.BileSlow : 1f)
+            * (Small ? SpellPlans.SmallSpeed : 1f) * SpellServer.PotSpeed(_pc) * (Concentrating ? SpellPlans.ShotChargeSpeed : 1f)
+            * (_pc != null && _pc.IsSpawned && _pc.Status.Value.Under(WorldNet.Now) ? SpellPlans.SubSpeed : 1f)
+            * SpellPlans.SpeedDemonScale(_pc);
+        /// <summary>Shrunk by Smallify Hex: half speed.</summary>
+        bool Small => _pc != null && _pc.IsSpawned && _pc.Status.Value.Small(WorldNet.Now);
+        /// <summary>Standing in Death's black bile (anyone holding Death wades through it).</summary>
+        bool InBile => IsGrounded && OnBile() && !SpellServer.HoldsDeath(_pc);
+        /// <summary>Transformed by Strength.</summary>
+        bool Strong => _pc != null && _pc.IsSpawned && _pc.Status.Value.Strong(WorldNet.Now);
         /// <summary>Breathed on by Icy Breath: half speed for a moment.</summary>
         bool Chilled => _pc != null && _pc.IsSpawned && _pc.Status.Value.Slowed(WorldNet.Now);
 
@@ -767,12 +798,16 @@ namespace SuddenMageEncounter
         }
 
         /// <summary>Mana Siphon: charge forward, steering a little with the mouse.</summary>
-        public void Siphon(float seconds)
+        /// <param name="speed">Times its usual speed (Wheel of Fortune's 6).</param>
+        public void Siphon(float seconds, float speed = 1f)
         {
             _siphonUntil = Time.time + seconds;
+            _siphonSpeed = SpellPlans.SiphonSpeed * speed;
             _dashDir = Quaternion.Euler(0, Yaw, 0) * Vector3.forward;
             _dashUntil = 0f;
         }
+
+        float _siphonSpeed = SpellPlans.SiphonSpeed;
 
         public void EndSiphon()
         {
@@ -843,7 +878,7 @@ namespace SuddenMageEncounter
                 _pinRefusedUntil = Time.time + 0.6f;
                 _pinnedTo = null;
             }
-            if (ragdollSeconds > 0f) { _dashUntil = _siphonUntil = 0f; StopCharging(); _standAt = -1f; _standOnLanding = false; }
+            if (ragdollSeconds > 0f) { _dashUntil = _siphonUntil = 0f; StopCharging(); _standAt = -1f; _standOnLanding = false; _blinkStart = -1f; } // (knocked out of a hover too)
             EndLeap(); // thrown out of the crouch or the leap: no slam
             if (_ragdollUntil == float.MaxValue) _ragdollUntil = 0f;
             Velocity = velocity;
@@ -965,12 +1000,23 @@ namespace SuddenMageEncounter
         {
             float dt = Mathf.Min(Time.deltaTime, 0.05f);
             // Strength: falling twice as fast, jumping twice as high (twice the speed against twice the gravity)
-            float strong = _pc != null && _pc.IsSpawned && _pc.Status.Value.Strong(WorldNet.Now) ? SpellPlans.StrengthJump : 1f;
+            float strong = Strong ? SpellPlans.StrengthJump : 1f;
             gravity = _gravity0 * strong;
             jumpUpSpeed = _jump0 * strong;
+            if (Concentrating) gravity *= SpellPlans.ShotChargeGravity; // Compressed Shot charging: falling gently
             HexTick();
             Look();
             if (Held) { Velocity = Vector3.zero; _fallSpeed = 0f; IsGrounded = true; return; }
+            if (_pc != null && _pc.IsSpawned && _pc.Status.Value.Eaten(WorldNet.Now)) { EatenTick(); return; }
+            if (Ephemeral) { EphemTick(dt); return; }
+            if (_wasEphem)
+            {
+                // back: solid again (not shoved out of what we came back inside: the server decides that), drifting on a little
+                _wasEphem = false;
+                _cc.enabled = true;
+                _blinkArrived = Time.time + 0.2f;
+                Velocity *= 0.25f;
+            }
             if (_frozen) { FrozenTick(); return; } // Stasis Hex: exactly where and as we are
             if (_pinnedTo != null) { PinTick(dt); return; }
             if (Hanging && (Ragdolled || _carried)) StandUpNow(); // caught by the noose: up off the floor (it can be cast while down)
@@ -990,7 +1036,11 @@ namespace SuddenMageEncounter
             bool walking = !Ragdolled && !Charioting && !Leaping && !Bubbled && !Dashing && !Siphoning;
             SetCrouch(walking && (_puppet ? SpellPlans.PuppetCrouched(Master) : InputMap.Held(GameAction.Crouch)) && !GettingUp);
             CrouchBlend = Mathf.MoveTowards(CrouchBlend, Crouching ? 1f : 0f, dt * 7f);
-            if (Hanging) HangTick(dt);
+            bool hanging = Hanging;
+            // the noose lets go at the top: falling from there, not flying on up
+            if (_wasHanging && !hanging && Velocity.y > 0f) Velocity.y = 0f;
+            _wasHanging = hanging;
+            if (hanging) HangTick(dt);
             else if (Ragdolled) RagdollTick(dt);
             else if (Charioting) ChariotTick(dt);
             else if (Grasped) GraspTick(dt);
@@ -1002,6 +1052,8 @@ namespace SuddenMageEncounter
             else if (Reeling) ReelTick(dt);
             else MoveTick(dt);
             if (Unstoppable && !Ragdolled) StayThisSide(was);
+            if (Concentrating && Velocity.y < -SpellPlans.ShotChargeFall) Velocity.y = -SpellPlans.ShotChargeFall;
+            if (IsGrounded) AirSteps = 0;
             ThroughPortals();
         }
 
@@ -1025,7 +1077,7 @@ namespace SuddenMageEncounter
             Vector3 aim = Quaternion.Euler(0, Yaw, 0) * Vector3.forward;
             _dashDir = Vector3.RotateTowards(_dashDir, aim, SpellPlans.SiphonTurn * Mathf.Deg2Rad * dt, 0f);
             GroundCheck();
-            Vector3 want = _dashDir * SpellPlans.SiphonSpeed;
+            Vector3 want = _dashDir * _siphonSpeed;
             Velocity = new Vector3(want.x, IsGrounded ? -2f : Velocity.y - gravity * dt, want.z);
             Vector3 before = transform.position;
             var flags = _cc.Move(Velocity * dt);
@@ -1066,7 +1118,7 @@ namespace SuddenMageEncounter
                 {
                     var o = Overlaps[i];
                     if (o == null || o == _cc || Physics.GetIgnoreCollision(_cc, o)) continue; // (passing into a portal)
-                    if (TrainCar.Of(o) != null) continue; // (a train kills; it mustn't shove you up onto its roof first)
+                    if (TrainCar.Of(o) != null || SpikeWalls.IsWall(o)) continue; // (a train kills; it mustn't shove you up onto its roof first)
                     if (Physics.ComputePenetration(_probe, transform.position, Quaternion.identity, o, o.transform.position, o.transform.rotation,
                             out var dir, out float dist) && dist > push.magnitude)
                         push = dir * (dist + 0.02f);
@@ -1232,6 +1284,93 @@ namespace SuddenMageEncounter
 
         float _iceGraceUntil;
 
+        // ---------------- Compressed Shot, Ephemerate, Cloud Step ----------------
+
+        /// <summary>Charging Compressed Shot (set by the owner's caster): half speed, falling gently.</summary>
+        public bool Concentrating;
+        float _ephemUntil = -1f;
+        bool _wasEphem;
+        /// <summary>Gone with Ephemerate: flying where we aim, through anything (not out of the arena).</summary>
+        public bool Ephemeral => Time.time < _ephemUntil;
+        /// <summary>When the last Ephemerate ended, or will (-1: never cast).</summary>
+        public float EphemEndsAt => _ephemUntil;
+        /// <summary>Cloud Steps taken since we last stood on something.</summary>
+        public int AirSteps;
+
+        public void Ephemerate(float seconds)
+        {
+            if (Ragdolled) StandUpNow();
+            _ephemUntil = Time.time + seconds;
+            _wasEphem = true;
+            _ephemMirror = Vector3.one;
+        }
+
+        Vector3 _ephemMirror = Vector3.one;
+
+        /// <summary>Somewhere Ephemerate can't go: out of the arena's sides or top, or down near where we'd fall out.</summary>
+        static bool EphemOut(Vector3 p) => ArenaLimits.Outside(p, 0.5f) || p.y < Practice.KillYAt(p) + 2f;
+
+        void EphemTick(float dt)
+        {
+            _cc.enabled = false;
+            // where we aim, mirrored on each side of the arena we've bounced off this time
+            Vector3 dir = Vector3.Scale(ViewRotation * Vector3.forward, _ephemMirror);
+            Vector3 here = transform.position, next = here + dir * (SpellPlans.EphemSpeed * dt);
+            if (EphemOut(next))
+            {
+                // at the edge: bounce off it (that way reversed from now on), each way on its own
+                Vector3 step = next - here, p = here;
+                for (int a = 0; a < 3; a++)
+                {
+                    Vector3 axis = Vector3.zero; axis[a] = 1f;
+                    Vector3 q = p + Vector3.Scale(step, axis);
+                    if (!EphemOut(q)) { p = q; continue; }
+                    _ephemMirror[a] = -_ephemMirror[a];
+                    dir[a] = -dir[a];
+                    q = p - Vector3.Scale(step, axis);
+                    if (!EphemOut(q)) p = q;
+                }
+                next = p;
+            }
+            transform.position = next;
+            Velocity = dir * SpellPlans.EphemSpeed;
+            IsGrounded = false;
+            _fallSpeed = 0f;
+        }
+
+        /// <summary>Cloud Step: a jump three times as high, from wherever we are (counted, in the air).</summary>
+        public void CloudStep()
+        {
+            if (!IsGrounded) AirSteps++;
+            Knock(new Vector3(Velocity.x, jumpUpSpeed * Mathf.Sqrt(SpellPlans.CloudJump), Velocity.z), 0f);
+        }
+
+        /// <summary>Inside a fly trap: wherever its mouth is (held, on the ground or thrown), up off the floor.</summary>
+        void EatenTick()
+        {
+            // limp the whole time (the ragdoll is steered to where we're held), unless a combo break just got us out
+            if (!Unstoppable)
+            {
+                if (!Ragdolled) BeginRagdoll();
+                _ragdollUntil = Mathf.Max(_ragdollUntil, Time.time + 0.3f);
+            }
+            var st = _pc.Status.Value;
+            // (the body's own collider is off meanwhile: see EatenBodyFx; it would shove its eater about)
+            if (WorldNet.PotMouth(st.EatenBy, WorldNet.Now, out var mouth)) transform.position = mouth + Vector3.down * SpellPlans.EatenDrop;
+            Velocity = Vector3.zero;
+            IsGrounded = false;
+            _fallSpeed = 0f;
+        }
+
+        /// <summary>Standing on Death's black bile?</summary>
+        bool OnBile()
+        {
+            var w = VoxelWorld.Current;
+            if (w == null || _cc == null) return false;
+            Vector3 feet = transform.position + _cc.center + Vector3.down * (_cc.height * 0.5f);
+            return w.IsBile(w.Get(w.CellOf(feet + Vector3.down * 0.1f)));
+        }
+
         /// <summary>Standing on ice?</summary>
         bool OnIce()
         {
@@ -1243,8 +1382,9 @@ namespace SuddenMageEncounter
 
         // ---------------- The Hanged Man ----------------
 
-        /// <summary>Hanging from The Hanged Man's noose: lifted steadily by the neck, no walking (turning and casting still work).</summary>
+        /// <summary>Yanked up by The Hanged Man's noose: no walking (turning and casting still work).</summary>
         public bool Hanging => _pc != null && _pc.IsSpawned && _pc.Status.Value.Hanging(WorldNet.Now);
+        bool _wasHanging;
 
         void HangTick(float dt)
         {

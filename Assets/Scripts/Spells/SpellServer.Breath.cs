@@ -5,8 +5,8 @@ namespace SuddenMageEncounter
 {
     /// <summary>
     /// Server rules for the Flame Thrower, Icy Breath and the Grapple Hook.
-    ///  - Flame Thrower: held. Hands clasped straight out (rooted), fire spews in a cone: ground in it blackens, and 0.1 s
-    ///    later burns away, layer by layer; anyone in it gets a burn every half second they stay. 2 mana a second; ends when let go, knocked
+    ///  - Flame Thrower: held. Hands drawn back and thrust out (0.3 s, rooted), then fire spews in a cone: ground in it blackens, and 0.1 s
+    ///    later burns away, layer by layer; anyone in it gets a burn every 0.7 s they stay. 2 mana a second (it still refills); ends when let go, knocked
     ///    down, or out of mana. No knockback.
     ///  - Icy Breath: 0.3 s leaning in, then 3 s of frost breathed along the aim (moving is fine): surfaces it touches turn
     ///    to ice (walking on ice knocks you down), anyone in it is slowed to half speed and frosted over (until 2 s after the last of it), and it puts fire out as water does.
@@ -21,7 +21,7 @@ namespace SuddenMageEncounter
 
         class BreathState
         {
-            public int id; public PlayerController caster; public byte kind; public double start, end, nextCheck;
+            public int id; public PlayerController caster; public byte kind; public double start, end, nextCheck; public bool going;
             public readonly Dictionary<Combatant, double> lastBurn = new();
         }
         class HookState
@@ -54,10 +54,9 @@ namespace SuddenMageEncounter
                 case CardId.FlameThrower:
                 {
                     if (BreathsS.Exists(b => b.caster == caster && b.kind == FlameKind)) return false;
-                    var b = new BreathState { caster = caster, kind = FlameKind, start = now, end = double.MaxValue };
-                    b.id = WorldNet.ServerBreath(caster.NetworkObjectId, FlameKind, now);
+                    var b = new BreathState { caster = caster, kind = FlameKind, start = now + SpellPlans.FlameStart, end = double.MaxValue };
+                    b.id = WorldNet.ServerBreath(caster.NetworkObjectId, FlameKind, b.start);
                     BreathsS.Add(b);
-                    RefreshFlow(caster);
                     return true;
                 }
                 case CardId.IcyBreath:
@@ -112,8 +111,14 @@ namespace SuddenMageEncounter
                 if (i >= BreathsS.Count) continue;
                 var b = BreathsS[i];
                 var me = b.caster;
-                if (me == null || !me.IsAlive || now >= b.end || b.kind == FlameKind && me.ManaNow <= 0.001f) { EndBreath(b); continue; }
-                if (now < b.start || now < b.nextCheck) continue;
+                if (me == null || !me.IsAlive || now >= b.end || b.going && b.kind == FlameKind && me.ManaNow <= 0.001f && me.Mana.Value.RateAt(now) < 0f) { EndBreath(b); continue; }
+                if (now < b.start) continue;
+                if (!b.going)
+                {
+                    b.going = true;
+                    if (b.kind == FlameKind) RefreshFlow(me); // (from now on it costs)
+                }
+                if (now < b.nextCheck) continue;
                 b.nextCheck = now + SpellPlans.FlameCheck;
                 SpellPlans.BreathFrom(me, out var origin, out var dir);
                 if (b.kind == FlameKind) FlameTick(b, origin, dir, now);
@@ -197,14 +202,14 @@ namespace SuddenMageEncounter
             if (Singed.Count > 4000) Singed.Clear(); // (long-forgotten scorch marks)
 
             FlamesSetOff(origin, dir);
-            // anyone in the cone: a burn a second while they stay (no knockback)
+            // anyone in the cone: a burn every so often while they stay (no knockback)
             foreach (var c in Combatant.Registry.ToArray())
             {
                 if (c == null || c == b.caster || !c.IsAlive || Combatant.Allies(b.caster, c) || Shielded(c)) continue;
                 if (!InBreath(origin, dir, SpellPlans.FlameReach, SpellPlans.FlameAngle, c)) continue;
                 if (b.lastBurn.TryGetValue(c, out double last) && now - last < SpellPlans.FlameBurnEvery) continue;
                 b.lastBurn[c] = now;
-                Burn(c, b.caster);
+                Burn(c, b.caster, origin);
                 c.ServerCredit(b.caster);
             }
         }
@@ -377,9 +382,6 @@ namespace SuddenMageEncounter
         static void HookPerson(HookState h, Combatant who, Vector3 point, double now)
         {
             var me = h.caster;
-            h.victim = who;
-            h.attachedAt = now;
-            WorldNet.ServerHookAttach(h.id, point, who.NetworkObjectId);
             // a throw that lands at the caster's feet (just in front of them) a second from now
             Vector3 to = me.transform.position;
             Vector3 flat = who.transform.position - to;
@@ -388,7 +390,11 @@ namespace SuddenMageEncounter
             float T = SpellPlans.HookReelTime;
             Vector3 d = to - who.transform.position;
             Vector3 v = new Vector3(d.x, 0f, d.z) / T + Vector3.up * (d.y / T + 0.5f * 20f * T);
-            Hit(who, me, SpellPlans.HookDamage, point, v, T + 0.3f);
+            // (a shield held out towards it: the hook glances off)
+            if (Hit(who, me, SpellPlans.HookDamage, point, v, T + 0.3f, from: point - h.dir)) { EndHook(h); return; }
+            h.victim = who;
+            h.attachedAt = now;
+            WorldNet.ServerHookAttach(h.id, point, who.NetworkObjectId);
         }
 
         static void EndHook(HookState h)

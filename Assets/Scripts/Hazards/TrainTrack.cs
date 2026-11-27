@@ -20,10 +20,10 @@ namespace SuddenMageEncounter
         public Transform from, to;
 
         [Header("Timetable")]
-        [Tooltip("Seconds after FIGHT with no trains at all.")]
-        public float firstAfter = 30f;
+        [Tooltip("Seconds after FIGHT that the first train comes.")]
+        public float firstAfter = 10f;
         [Tooltip("Seconds between one train leaving and the next coming (random).")]
-        public float minGap = 5f, maxGap = 45f;
+        public float minGap = 3f, maxGap = 15f;
         [Tooltip("Seconds its signals are green before it comes.")]
         public float warning = 3f;
 
@@ -94,11 +94,11 @@ namespace SuddenMageEncounter
             }
             while (_trains.Count == 0 || _trains[^1].at < time + warning + 1.0)
             {
-                double after = _trains.Count == 0 ? firstAfter : _trains[^1].gone;
+                bool first = _trains.Count == 0;
                 double gap = minGap + _random.NextDouble() * Mathf.Max(0f, maxGap - minGap);
                 int cars = _random.Next(Mathf.Max(1, minCars), Mathf.Max(minCars, maxCars) + 1);
                 float length = cars * carSize.z + (cars - 1) * carGap;
-                double at = _trains.Count == 0 && MapClock.ByHand(_arena) ? warning : after + gap; // (set off by hand: the first comes at once)
+                double at = !first ? _trains[^1].gone + gap : MapClock.ByHand(_arena) ? warning : firstAfter; // (set off by hand: the first comes at once)
                 _trains.Add(new Train { at = at, cars = cars, length = length, gone = at + (Distance + length) / Mathf.Max(1f, speed) });
             }
         }

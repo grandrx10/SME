@@ -140,6 +140,7 @@ namespace SuddenMageEncounter
                 }
                 ReflectStars(h, me, net, now);
                 ReflectPellets(h, me, net, now);
+                ReflectWolfBullets(h, me, now);
                 ReflectBombs(h, me, net, now);
                 // mana missiles (they stop tracking and fly straight back out)
                 foreach (var v in Volleys)
@@ -236,7 +237,7 @@ namespace SuddenMageEncounter
                     {
                         l.tethered = true;
                         l.pos = aim;
-                        me.Mana.Value = me.Mana.Value.WithFlow(now, ManaState.Draining);
+                        RefreshFlow(me);
                         WorldNet.ServerLoversTether(l.id);
                         continue;
                     }
@@ -311,11 +312,16 @@ namespace SuddenMageEncounter
                     if (!SpellPlans.ChariotTouches(ball, o.transform.position)) continue;
                     Vector3 rel = o.transform.position - ball;
                     // met with the front of the ball: stuck on it (the first one only)
-                    if (c.victim == null && Vector3.Dot(rel, c.dir) > 0f && !o.Pinned && !Shielded(o)) { Pin(c, o); continue; }
+                    if (c.victim == null && Vector3.Dot(rel, c.dir) > 0f && !o.Pinned && !Shielded(o))
+                    {
+                        if (ParryCatch(o, me, o.transform.position)) { c.bowled.Add(o); continue; } // Parry: not pinned
+                        Pin(c, o); // (an arcane shield doesn't stop it)
+                        continue;
+                    }
                     // anyone else in the way is bowled aside
                     c.bowled.Add(o);
                     Vector3 side = Vector3.Dot(rel, right) >= 0f ? right : -right;
-                    Hit(o, me, 0f, o.transform.position, side * 9f + c.dir * 6f + Vector3.up * 5f, 1f);
+                    Hit(o, me, 0f, o.transform.position, side * 9f + c.dir * 6f + Vector3.up * 5f, 1f, from: ball, card: CardId.TheChariot);
                 }
                 if (clash != null) Clash(c, clash);
             }

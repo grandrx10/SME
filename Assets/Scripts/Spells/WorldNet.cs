@@ -93,7 +93,9 @@ namespace SuddenMageEncounter
             /// <summary>A map hazard's meteor: a big fireball, falling.</summary>
             public bool meteor;
             /// <summary>How much bigger than a Ball of Flame it's drawn.</summary>
-            public float Scale => meteor ? SpellPlans.MeteorScale : 1f;
+            public float Scale => meteor ? SpellPlans.MeteorScale * size : 1f;
+            /// <summary>A meteor's size (and its blast's), against an ordinary one's.</summary>
+            public float size = 1f;
         }
         public class HellfireFx
         {
@@ -108,9 +110,7 @@ namespace SuddenMageEncounter
         /// <summary><see cref="kind"/>: <see cref="SpellPlans.ArcaneCircle"/> (Arcane Judgment) or <see cref="SpellPlans.TarotCircle"/> (Judgement).</summary>
         public class JudgmentFx
         {
-            public int id; public ulong caster; public Vector3 center, dir; public double start; public byte kind; public JudgmentView view;
-            /// <summary>Where the circle is (Judgement's slides along <see cref="dir"/>).</summary>
-            public Vector3 CenterAt(double now) => SpellPlans.JudgmentCenterAt(kind, center, dir, (float)(now - start));
+            public int id; public ulong caster; public Vector3 center; public double start; public byte kind; public JudgmentView view;
         }
 
         public readonly Dictionary<int, FireballFx> Fireballs = new();
@@ -138,6 +138,15 @@ namespace SuddenMageEncounter
             public DomainView view;
         }
         public readonly Dictionary<int, DomainFx> Domains = new();
+        /// <summary>(caster object id, kind, when): a domain that had opened is over (its caster can't open another for a while).</summary>
+        public static event Action<ulong, byte, double> DomainEnded;
+
+        /// <summary>This player's open domain of this kind (0 The Empress, 1 The Emperor), if any.</summary>
+        public DomainFx OpenDomain(ulong caster, byte kind)
+        {
+            foreach (var d in Domains.Values) if (d.caster == caster && d.kind == kind && d.ended < 0) return d;
+            return null;
+        }
 
         /// <summary>A Water of Life orb. how it ended: 0 burst while forming, 1 drunk (by <see cref="who"/>), 2 left too long.</summary>
         public class OrbFx
@@ -208,6 +217,8 @@ namespace SuddenMageEncounter
         {
             public int id; public ulong caster; public double start, launchTime = -1, ended = -1;
             public Vector3 origin, dir; public FuseView view;
+            /// <summary>0: in front of its caster; 1, 2, 3: one of Wheel of Fortune's, over their head.</summary>
+            public byte over;
             public bool Launched => launchTime >= 0;
         }
         public readonly Dictionary<int, ForceFx> Forces = new();
@@ -223,8 +234,9 @@ namespace SuddenMageEncounter
             if (f.Launched)
                 return f.origin + f.dir * (SpellPlans.FuseSpeed * Mathf.Clamp((float)(now - f.launchTime), 0f, SpellPlans.FuseRange / SpellPlans.FuseSpeed));
             var c = FindCombatant(f.caster);
-            float r = SpellPlans.FuseRadiusAt((float)(now - f.start));
-            return c != null ? SpellPlans.FuseHoldPoint(c.transform.position, c.ViewYaw, r) : f.origin;
+            if (c == null) return f.origin;
+            if (f.over > 0) return SpellPlans.FuseOverHead(c.transform.position, c.ViewYaw, f.over);
+            return SpellPlans.FuseHoldPoint(c.transform.position, c.ViewYaw, SpellPlans.FuseRadiusAt((float)(now - f.start)));
         }
 
         /// <summary>The Hierophant's wall: stands from <see cref="up"/> for <see cref="SpellPlans.HierophantTime"/>, its face along <see cref="Rotation"/>.</summary>
@@ -688,13 +700,14 @@ namespace SuddenMageEncounter
 
         // ---------------- arcane judgment ----------------
 
-        public static int ServerJudgment(ulong caster, Vector3 center, Vector3 dir, byte kind)
+        /// <param name="caster">Who's writing it (knocked down meanwhile, it stops); <see cref="ulong.MaxValue"/>: nobody (Wheel of Fortune's).</param>
+        public static int ServerJudgment(ulong caster, Vector3 center, byte kind)
         {
             var i = Instance;
             if (i == null || !IsServer) return 0;
             int id = i._nextId++;
-            var w = NewOp(Op.Judgment, 56);
-            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now); w.WriteValueSafe(kind); w.WriteValueSafe(dir);
+            var w = NewOp(Op.Judgment, 44);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(center); w.WriteValueSafe(Now); w.WriteValueSafe(kind);
             i.Broadcast(Finish(ref w));
             return id;
         }
@@ -854,13 +867,13 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        public static int ServerFuse(ulong caster)
+        public static int ServerFuse(ulong caster, byte over = 0)
         {
             var i = Instance;
             if (i == null || !IsServer) return 0;
             int id = i._nextId++;
-            var w = NewOp(Op.Fuse, 24);
-            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(Now);
+            var w = NewOp(Op.Fuse, 28);
+            w.WriteValueSafe(id); w.WriteValueSafe(caster); w.WriteValueSafe(Now); w.WriteValueSafe(over);
             i.Broadcast(Finish(ref w));
             return id;
         }
@@ -1321,7 +1334,7 @@ namespace SuddenMageEncounter
             var islands = new List<List<VoxelWorld.RemovedCell>>();
 
             // Rock Swarm and Ice Spike (WorldNet.Ground.cs); everything else here
-            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r) && !ApplyHex(op, ref r, world, removed, islands) && !ApplyHazards(op, ref r))
+            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyArms(op, ref r, world, removed, islands) && !ApplyDeath(op, ref r, world) && !ApplyBotany(op, ref r, world, removed, islands) && !ApplyGale(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r) && !ApplyHex(op, ref r, world, removed, islands) && !ApplyHazards(op, ref r, world) && !ApplyWheel(op, ref r, world, removed, islands))
             switch (op)
             {
                 case Op.RemoveSphere:
@@ -1549,7 +1562,7 @@ namespace SuddenMageEncounter
                 {
                     var fx = new JudgmentFx();
                     r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.center); r.ReadValueSafe(out fx.start);
-                    r.ReadValueSafe(out fx.kind); r.ReadValueSafe(out fx.dir);
+                    r.ReadValueSafe(out fx.kind);
                     fx.view = JudgmentView.Create(fx);
                     Judgments[fx.id] = fx;
                     break;
@@ -1664,7 +1677,7 @@ namespace SuddenMageEncounter
                 case Op.Fuse:
                 {
                     var fx = new FuseFx();
-                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start);
+                    r.ReadValueSafe(out fx.id); r.ReadValueSafe(out fx.caster); r.ReadValueSafe(out fx.start); r.ReadValueSafe(out fx.over);
                     var who = FindCombatant(fx.caster);
                     fx.origin = who != null ? who.transform.position : Vector3.zero;
                     if (!Debris.Suppressed) fx.view = FuseView.Create(fx);
@@ -1762,7 +1775,11 @@ namespace SuddenMageEncounter
                 {
                     r.ReadValueSafe(out int id);
                     r.ReadValueSafe(out double t);
-                    if (Domains.TryGetValue(id, out var fx)) fx.ended = t;
+                    if (Domains.TryGetValue(id, out var fx))
+                    {
+                        fx.ended = t;
+                        if (t >= fx.start) DomainEnded?.Invoke(fx.caster, fx.kind, t);
+                    }
                     break;
                 }
                 case Op.Orb:
@@ -2166,7 +2183,10 @@ namespace SuddenMageEncounter
             AnimateMore(now);
             AnimateTarot3(now);
             AnimateGuns(now);
+            AnimateArms(now);
             AnimateHex(now);
+            AnimateBotany(now);
+            AnimateGale(now);
             StepMissiles(Time.deltaTime);
 
             // finished effects (their views fade themselves out)
@@ -2384,6 +2404,7 @@ namespace SuddenMageEncounter
             ClearMoreIn(minX, maxX);
             ClearTarot3In(minX, maxX);
             ClearBombsIn(minX, maxX);
+            BulletHole.ClearIn(minX, maxX);
         }
 
         void ClearEffects()
@@ -2440,8 +2461,11 @@ namespace SuddenMageEncounter
             ClearMore();
             ClearTarot3();
             ClearGuns();
+            ClearArms();
             ClearBombs();
             ClearHex();
+            ClearBotany();
+            ClearGale();
             SpellServer.Reset();
         }
 

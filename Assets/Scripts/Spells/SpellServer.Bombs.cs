@@ -373,11 +373,10 @@ namespace SuddenMageEncounter
             foreach (var s in StarsS)
             {
                 if (!net.Stars.TryGetValue(s.id, out var fx)) continue;
-                for (int k = 0; k < SpellPlans.StarCount; k++)
+                for (int k = 0; k < fx.stars.Length; k++)
                     if (fx.stars[k].launched && fx.stars[k].Alive) ShotSetsOff(s.lastPos[k], WorldNet.StarPosition(fx, k, now), SpellPlans.StarRadius);
             }
-            foreach (var d in DiceS)
-                if (net.Dice.TryGetValue(d.id, out var fx)) ShotSetsOff(d.lastPos, WorldNet.DiePosition(fx, now), SpellPlans.DieRadius);
+
             foreach (var f in FusesS)
                 if (f.launched) ShotSetsOff(f.origin + f.dir * f.swept, f.origin + f.dir * Mathf.Min(SpellPlans.FuseSpeed * (float)(now - f.launchTime), SpellPlans.FuseRange), SpellPlans.FuseRadius1, true);
             foreach (var f in ForcesS) // Repulsion's ball (Attraction's is water)
@@ -439,11 +438,11 @@ namespace SuddenMageEncounter
                 // (its owner too; not their Undead, as with everything else of theirs)
                 if (c == null || !c.IsAlive || Shielded(c) || Folded(c) || Combatant.Allies(b.owner, c) || !Touching(c, p, SpellPlans.BombScorch)) continue;
                 c.ServerCredit(b.owner);
-                Burn(c, b.owner);
+                Burn(c, b.owner, p);
                 if (!Touching(c, p, SpellPlans.BombBlast)) continue;
                 Vector3 away = c.transform.position - p;
                 away = away.sqrMagnitude > 0.01f ? away.normalized : Vector3.up;
-                Hit(c, b.owner, SpellPlans.BombDamage, p, away * SpellPlans.BombKnock + Vector3.up * SpellPlans.BombKnockUp, SpellPlans.BombRagdoll);
+                Hit(c, b.owner, SpellPlans.BombDamage, p, away * SpellPlans.BombKnock + Vector3.up * SpellPlans.BombKnockUp, SpellPlans.BombRagdoll, from: p);
             }
             Scorch(p, SpellPlans.R4(SpellPlans.BombBlast), SpellPlans.R4(SpellPlans.BombScorch), 10f);
         }

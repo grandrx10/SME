@@ -24,8 +24,8 @@ namespace SuddenMageEncounter
         }
         class FlurryState
         {
-            public Combatant victim; public PlayerController attacker; public float damage; public int left; public double next;
-            public Vector3 knock; public float ragdoll; public float yaw;
+            public Combatant victim; public PlayerController attacker; public float damage; public int left, total; public double next;
+            public Vector3 knock, from; public float ragdoll; public float yaw;
         }
         class FlowState { public PlayerController caster; public Vector3 from, to; public double start; public float damage; public int charges; public readonly HashSet<Combatant> hit = new(); }
 
@@ -153,7 +153,7 @@ namespace SuddenMageEncounter
             away.y = 0f;
             away = away.sqrMagnitude > 0.01f ? Vector3.Lerp(w.dir, away.normalized, 0.4f).normalized : w.dir;
             StartFlurry(o, w.caster, SpellPlans.SeveranceDamage, 0.0,
-                away * SpellPlans.SeveranceKnockOut + Vector3.up * SpellPlans.SeveranceKnockUp, SpellPlans.SeveranceRagdoll);
+                away * SpellPlans.SeveranceKnockOut + Vector3.up * SpellPlans.SeveranceKnockUp, SpellPlans.SeveranceRagdoll, w.origin);
         }
 
         // ------------------------------------------------------------------ Severance: the cut in flight
@@ -273,7 +273,7 @@ namespace SuddenMageEncounter
                     side = Vector3.ProjectOnPlane(new Vector3(side.x, 0f, side.z), along);
                     Vector3 dir = (along + (side.sqrMagnitude > 1e-4f ? side.normalized * 0.35f : Vector3.zero)).normalized;
                     Vector3 knock = dir * SpellPlans.FlowKnockOut(f.charges) + Vector3.up * SpellPlans.FlowKnockUp(f.charges);
-                    StartFlurry(c, f.caster, f.damage, f.start + SpellPlans.FlowTime - now, knock, SpellPlans.FlowRagdoll(f.charges));
+                    StartFlurry(c, f.caster, f.damage, f.start + SpellPlans.FlowTime - now, knock, SpellPlans.FlowRagdoll(f.charges), f.from);
                 }
                 // projectiles crossing the path while the blade passes: cut out of the air
                 SlashProjectiles(a + Vector3.up * 1f, b + Vector3.up * 1f, SpellPlans.FlowHalfWidth, f.caster);
@@ -356,12 +356,12 @@ namespace SuddenMageEncounter
         // ------------------------------------------------------------------ the strikes
 
         /// <summary>Three slashes on <paramref name="victim"/>, <see cref="SpellPlans.FlurryGap"/> apart, starting in <paramref name="delay"/> s. The first one carries the knock.</summary>
-        static void StartFlurry(Combatant victim, PlayerController attacker, float damage, double delay, Vector3 knock, float ragdoll)
+        static void StartFlurry(Combatant victim, PlayerController attacker, float damage, double delay, Vector3 knock, float ragdoll, Vector3 from, int strikes = SpellPlans.FlurryStrikes)
         {
             Flurries.Add(new FlurryState
             {
-                victim = victim, attacker = attacker, damage = damage, left = SpellPlans.FlurryStrikes, next = WorldNet.Now + System.Math.Max(0.0, delay),
-                knock = knock, ragdoll = ragdoll, yaw = Random.Range(0f, 360f),
+                victim = victim, attacker = attacker, damage = damage, left = strikes, total = strikes, next = WorldNet.Now + System.Math.Max(0.0, delay),
+                knock = knock, ragdoll = ragdoll, from = from, yaw = Random.Range(0f, 360f),
             });
         }
 
@@ -370,18 +370,18 @@ namespace SuddenMageEncounter
             for (int i = Flurries.Count - 1; i >= 0; i--)
             {
                 var f = Flurries[i];
-                if (f.victim == null || !f.victim.IsAlive) { Flurries.RemoveAt(i); continue; }
+                if (f.victim == null || !f.victim.IsAlive || f.left <= 0) { Flurries.RemoveAt(i); continue; } // (left 0: parried)
                 if (now < f.next) continue;
-                bool first = f.left == SpellPlans.FlurryStrikes;
+                bool first = f.left == f.total;
                 Vector3 point = f.victim.transform.position + Vector3.up * 0.25f + Random.insideUnitSphere * 0.25f;
                 // spread over half a turn, so the slashes cross rather than stack (as in The Last Chromatist)
-                f.yaw += 180f / SpellPlans.FlurryStrikes + Random.Range(-15f, 15f);
+                f.yaw += 180f / f.total + Random.Range(-15f, 15f);
                 Vector3 dir = Quaternion.Euler(Random.Range(-35f, 35f), f.yaw, 0f) * Vector3.forward;
                 WorldNet.ServerSlash(point, dir, 1f);
                 // a killing slash cuts them in two along it: the plane holds the slash line, tipped as near level as it allows
                 Vector3 cut = Vector3.ProjectOnPlane(Vector3.up, dir);
                 if (cut.sqrMagnitude < 1e-4f) cut = Vector3.Cross(dir, Vector3.right);
-                Hit(f.victim, f.attacker, f.damage, point, first ? f.knock : Vector3.zero, first ? f.ragdoll : 0f, cut.normalized);
+                Hit(f.victim, f.attacker, f.damage, point, first ? f.knock : Vector3.zero, first ? f.ragdoll : 0f, cut.normalized, from: f.from);
                 f.left--;
                 f.next += SpellPlans.FlurryGap;
                 if (f.left <= 0) Flurries.RemoveAt(i);

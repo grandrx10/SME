@@ -24,10 +24,13 @@ namespace SuddenMageEncounter
         Rachmaninoff = 59, Sebastian = 60, UndyingGrasp = 61,
         Skinwalker = 62, RemoteFlameBomb = 63, RemoteDetonation = 64, FlameBombToss = 65,
         NecromaticBlast = 66, ShatterHex = 67, StasisHex = 68, MindHex = 69,
+        SmallifyHex = 70, Sunflower = 71, Cactus = 72, FlyTrap = 73,
+        CompressedShot = 74, Ephemerate = 75, CloudStep = 76, Submerge = 77, BubbleBomb = 78,
+        HammerSpin = 79, Wolfgang = 80, HeavenlySlash = 81, Parry = 82, SpeedDemon = 83,
     }
 
-    /// <summary>Saved with cards: append new elements at the end, never reorder.</summary>
-    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot, Water, Weapon, Necromancy, Hex }
+    /// <summary>Saved with cards: append new elements at the end, never reorder. (Weapon is retired: no card is one any more.)</summary>
+    public enum Element : byte { Flame, Arcane, Lightning, Wind, Ground, Tarot, Water, Weapon, Necromancy, Hex, Botany, Blade, Gun, Hammer }
 
     /// <summary>What a card costs to cast (shown top right: a bubble for mana, a heart for health, a P for a passive card that is never cast).</summary>
     public enum CostType : byte { Mana, Health, Passive }
@@ -84,13 +87,13 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.Shove, name = "Shove", element = Element.Wind, costType = CostType.Mana, cost = 4,
+                id = CardId.Shove, name = "Shove", element = Element.Wind, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Starter,
                 description = "Send a gust of Wind forward.", symbol = CardSymbols.Shove,
             },
             new()
             {
-                id = CardId.Tornado, name = "Tornado", element = Element.Wind, costType = CostType.Mana, cost = 6,
+                id = CardId.Tornado, name = "Tornado", element = Element.Wind, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Rare,
                 description = "Summon a tornado of Wind. After a brief delay, send it forward.", symbol = CardSymbols.Tornado,
             },
@@ -102,13 +105,13 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.ManaMissiles, name = "Mana Missiles", element = Element.Arcane, costType = CostType.Mana, cost = 4,
+                id = CardId.ManaMissiles, name = "Mana Missiles", element = Element.Arcane, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Common,
                 description = "Launch tracking Arcane missiles at a targeted enemy.", symbol = CardSymbols.ManaMissiles, castOnPress = true,
             },
             new()
             {
-                id = CardId.MagicalBarrier, name = "Magical Barrier", element = Element.Arcane, costType = CostType.Mana, cost = 4,
+                id = CardId.MagicalBarrier, name = "Magical Barrier", element = Element.Arcane, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Common,
                 description = "Summon a Barrier around yourself.", symbol = CardSymbols.MagicalBarrier, castOnPress = true,
             },
@@ -134,7 +137,7 @@ namespace SuddenMageEncounter
             {
                 id = CardId.ExplosiveEscape, name = "Explosive Escape", element = Element.Flame, costType = CostType.Mana, cost = 2,
                 rarity = Rarity.Rare,
-                description = "Summon a Flame explosion in front of you, propelling yourself away.", castOnPress = true,
+                description = "Summon a Flame explosion in front of you. Can be held to increase blast size.",
             },
             new()
             {
@@ -156,7 +159,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.TheFool, name = "The Fool", element = Element.Tarot, costType = CostType.Mana, cost = 5,
+                id = CardId.TheFool, name = "The Fool", element = Element.Tarot, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Epic,
                 description = "Generate a free random single-use card from all possible cards.", castOnPress = true,
             },
@@ -180,15 +183,15 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.TheEmperor, name = "The Emperor", element = Element.Tarot, costType = CostType.Mana, cost = 6,
+                id = CardId.TheEmperor, name = "The Emperor", element = Element.Tarot, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Common,
                 description = "Create an aura around you that reduces damage taken.", castOnPress = true,
             },
             new()
             {
-                id = CardId.WaterOfLife, name = "Water of Life", element = Element.Water, costType = CostType.Mana, cost = 5,
+                id = CardId.WaterOfLife, name = "Water of Life", element = Element.Water, costType = CostType.Mana, cost = 7,
                 rarity = Rarity.Common,
-                description = "After a delay, summon a ball of healing Water.",
+                description = "After a delay, summon a ball of healing Water. Consuming more than 2 is dangerous.",
             },
             new()
             {
@@ -210,7 +213,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.WarpSpace, name = "Warp Space", element = Element.Arcane, costType = CostType.Mana, cost = 5,
+                id = CardId.WarpSpace, name = "Warp Space", element = Element.Arcane, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Epic,
                 description = "Summon a Warp between two spaces.",
             },
@@ -222,13 +225,13 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.Severance, name = "Severance", element = Element.Weapon, costType = CostType.Mana, cost = 3,
+                id = CardId.Severance, name = "Severance", element = Element.Blade, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Common,
                 description = "Dash forward and Cut.", castOnPress = true,
             },
             new()
             {
-                id = CardId.FlowingCut, name = "Flowing Cut", element = Element.Weapon, costType = CostType.Mana, cost = 5,
+                id = CardId.FlowingCut, name = "Flowing Cut", element = Element.Blade, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Rare,
                 description = "Charge a dash that cuts enemies in the path.",
             },
@@ -246,7 +249,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.TheHierophant, name = "The Hierophant", element = Element.Tarot, costType = CostType.Mana, cost = 5,
+                id = CardId.TheHierophant, name = "The Hierophant", element = Element.Tarot, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Rare,
                 description = "Create a wall that reflects projectiles.",
             },
@@ -264,13 +267,13 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.RisingHammer, name = "Rising Hammer", element = Element.Weapon, costType = CostType.Mana, cost = 4,
+                id = CardId.RisingHammer, name = "Rising Hammer", element = Element.Hammer, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Common,
                 description = "Dash forward, striking an enemy into the air.", castOnPress = true,
             },
             new()
             {
-                id = CardId.DescendingHammer, name = "Descending Hammer", element = Element.Weapon, costType = CostType.Mana, cost = 7,
+                id = CardId.DescendingHammer, name = "Descending Hammer", element = Element.Hammer, costType = CostType.Mana, cost = 6,
                 rarity = Rarity.Rare,
                 description = "Leap into the air and damage a large area upon landing.", castOnPress = true,
             },
@@ -288,55 +291,55 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.TheHermit, name = "The Hermit", element = Element.Tarot, costType = CostType.Mana, cost = 6,
+                id = CardId.TheHermit, name = "The Hermit", element = Element.Tarot, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Common,
-                description = "Summon walls of Ground around you.",
+                description = "Summon walls of Ground around you. Can be cast while in Ragdoll.",
             },
             new()
             {
-                id = CardId.WheelOfFortune, name = "Wheel of Fortune", element = Element.Tarot, costType = CostType.Mana, cost = 5,
+                id = CardId.WheelOfFortune, name = "Wheel of Fortune", element = Element.Tarot, costType = CostType.Mana, cost = 6,
                 rarity = Rarity.Epic,
                 description = "Something random will happen!", castOnPress = true,
             },
             new()
             {
-                id = CardId.Justice, name = "Justice", element = Element.Tarot, costType = CostType.Mana, cost = 5,
+                id = CardId.Justice, name = "Justice", element = Element.Tarot, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Rare,
-                description = "Share life force with another player.", castOnPress = true,
+                description = "Target a corpse. Gain mana when damaging the killer.", castOnPress = true,
             },
             new()
             {
-                id = CardId.TheHangedMan, name = "The Hanged Man", element = Element.Tarot, costType = CostType.Mana, cost = 3,
+                id = CardId.TheHangedMan, name = "The Hanged Man", element = Element.Tarot, costType = CostType.Health, cost = 10,
                 rarity = Rarity.Common,
-                description = "Hang yourself midair.", castOnPress = true,
+                description = "A noose yanks you high into the air. Can be cast while in Ragdoll.", castOnPress = true,
             },
             new()
             {
-                id = CardId.Death, name = "Death", element = Element.Tarot, costType = CostType.Mana, cost = 1,
+                id = CardId.Death, name = "Death", element = Element.Tarot, costType = CostType.Mana, cost = 9,
                 rarity = Rarity.Common,
-                description = "Create an aura around you that damages players.", castOnPress = true,
+                description = "Dash forward, applying Death to enemies hit. Applying Death to an enemy marked with Death causes them to die.", castOnPress = true,
             },
             new()
             {
                 id = CardId.Temperance, name = "Temperance", element = Element.Tarot, costType = CostType.Passive, cost = 0,
                 rarity = Rarity.Common,
-                description = "Increase your maximum mana, maximum health and mana costs.", castOnPress = true,
+                description = "Increase your maximum mana at the cost of your max health.", castOnPress = true,
             },
             new()
             {
-                id = CardId.TheDevil, name = "The Devil", element = Element.Tarot, costType = CostType.Health, cost = 25,
+                id = CardId.TheDevil, name = "The Devil", element = Element.Tarot, costType = CostType.Health, cost = 20,
                 rarity = Rarity.Common,
                 description = "Sacrifice life for mana.", castOnPress = true,
             },
             new()
             {
-                id = CardId.TheTower, name = "The Tower", element = Element.Tarot, costType = CostType.Mana, cost = 10,
+                id = CardId.TheTower, name = "The Tower", element = Element.Tarot, costType = CostType.Mana, cost = 9,
                 rarity = Rarity.Epic,
                 description = "Summon a Massive Tower made of Ground to collapse.",
             },
             new()
             {
-                id = CardId.UndeadServitude, name = "Undead Servitude", element = Element.Necromancy, costType = CostType.Mana, cost = 10,
+                id = CardId.UndeadServitude, name = "Undead Servitude", element = Element.Necromancy, costType = CostType.Mana, cost = 8,
                 rarity = Rarity.Epic,
                 description = "Revive a corpse into an Undead.", castOnPress = true,
             },
@@ -354,7 +357,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.GrappleHook, name = "Grapple Hook", element = Element.Weapon, costType = CostType.Mana, cost = 4,
+                id = CardId.GrappleHook, name = "Grapple Hook", element = Element.Gun, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Rare,
                 description = "Summon a grapple hook that pulls enemies in and pulls you towards surfaces.", castOnPress = true,
             },
@@ -366,13 +369,13 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.IcyBreath, name = "Icy Breath", element = Element.Water, costType = CostType.Mana, cost = 6,
+                id = CardId.IcyBreath, name = "Icy Breath", element = Element.Water, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Common,
                 description = "Turn surfaces into Ice.", castOnPress = true,
             },
             new()
             {
-                id = CardId.Strength, name = "Strength", element = Element.Tarot, costType = CostType.Mana, cost = 6,
+                id = CardId.Strength, name = "Strength", element = Element.Tarot, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Common,
                 description = "Become stronger temporarily.", castOnPress = true,
             },
@@ -380,13 +383,13 @@ namespace SuddenMageEncounter
             {
                 id = CardId.TheStar, name = "The Star", element = Element.Tarot, costType = CostType.Mana, cost = 6,
                 rarity = Rarity.Rare,
-                description = "Throw stars forward.", castOnPress = true,
+                description = "Throw stars forward. Landing a hit adds a star to your next throw.", castOnPress = true,
             },
             new()
             {
                 id = CardId.TheMoon, name = "The Moon", element = Element.Tarot, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Rare,
-                description = "Pulse a healing wave around you after a short delay.", castOnPress = true,
+                description = "Deal damage to heal.", castOnPress = true,
             },
             new()
             {
@@ -398,7 +401,7 @@ namespace SuddenMageEncounter
             {
                 id = CardId.Judgement, name = "Judgement", element = Element.Tarot, costType = CostType.Mana, cost = 6,
                 rarity = Rarity.Rare,
-                description = "Create a moving Tarot circle and greatly damage everything within it.",
+                description = "Create a Tarot circle and flatten everything within it.",
             },
             new()
             {
@@ -410,23 +413,23 @@ namespace SuddenMageEncounter
             {
                 id = CardId.Undying, name = "Undying", element = Element.Necromancy, costType = CostType.Passive, cost = 0,
                 rarity = Rarity.Common,
-                description = "After dying, revive as an Undead.", castOnPress = true,
+                description = "After dying, revive as an Undead. Your max health is reduced.", castOnPress = true,
             },
             new()
             {
-                id = CardId.Rachmaninoff, name = "Rachmaninoff", element = Element.Weapon, costType = CostType.Mana, cost = 5,
+                id = CardId.Rachmaninoff, name = "Rachmaninoff", element = Element.Gun, costType = CostType.Mana, cost = 5,
                 rarity = Rarity.Rare,
                 description = "Fire a burst of Bullets.", castOnPress = true,
             },
             new()
             {
-                id = CardId.Sebastian, name = "Sebastian", element = Element.Weapon, costType = CostType.Mana, cost = 8,
+                id = CardId.Sebastian, name = "Sebastian", element = Element.Gun, costType = CostType.Mana, cost = 7,
                 rarity = Rarity.Epic,
                 description = "Charge a heavy piercing Bullet.",
             },
             new()
             {
-                id = CardId.UndyingGrasp, name = "Undying Grasp", element = Element.Necromancy, costType = CostType.Mana, cost = 5,
+                id = CardId.UndyingGrasp, name = "Undying Grasp", element = Element.Necromancy, costType = CostType.Mana, cost = 4,
                 rarity = Rarity.Common,
                 description = "Summon a line of hands that hold your enemies in place.",
             },
@@ -450,7 +453,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.FlameBombToss, name = "Flame Bomb Toss", element = Element.Flame, costType = CostType.Mana, cost = 10,
+                id = CardId.FlameBombToss, name = "Flame Bomb Toss", element = Element.Flame, costType = CostType.Mana, cost = 9,
                 rarity = Rarity.Common,
                 description = "Toss out 4 Flame bombs in front of you. Can be activated with Remote Detonation.", castOnPress = true,
             },
@@ -462,7 +465,7 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.ShatterHex, name = "Shatter Hex", element = Element.Hex, costType = CostType.Mana, cost = 4,
+                id = CardId.ShatterHex, name = "Shatter Hex", element = Element.Hex, costType = CostType.Mana, cost = 3,
                 rarity = Rarity.Common,
                 description = "Apply Shatter Hex to an enemy. Dealing damage will Shatter them.", castOnPress = true,
             },
@@ -474,9 +477,93 @@ namespace SuddenMageEncounter
             },
             new()
             {
-                id = CardId.MindHex, name = "Mind Hex", element = Element.Hex, costType = CostType.Mana, cost = 8,
+                id = CardId.MindHex, name = "Mind Hex", element = Element.Hex, costType = CostType.Mana, cost = 7,
                 rarity = Rarity.Rare,
                 description = "Apply Mind Hex to an enemy. Staying nearby grants control of their body.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.SmallifyHex, name = "Smallify Hex", element = Element.Hex, costType = CostType.Mana, cost = 5,
+                rarity = Rarity.Common,
+                description = "Apply Smallify Hex to an enemy. Staying nearby makes them small.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.Sunflower, name = "Sunflower", element = Element.Botany, costType = CostType.Mana, cost = 6,
+                rarity = Rarity.Common,
+                description = "Summon a sunflower that releases a powerful beam.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.Cactus, name = "Cactus", element = Element.Botany, costType = CostType.Mana, cost = 3,
+                rarity = Rarity.Common,
+                description = "Summon a cactus that hurts enemies on touch.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.FlyTrap, name = "Fly Trap", element = Element.Botany, costType = CostType.Mana, cost = 5,
+                rarity = Rarity.Rare,
+                description = "Summon a fly trap that consumes an enemy. Cast again to throw.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.CompressedShot, name = "Compressed Shot", element = Element.Wind, costType = CostType.Mana, cost = 5,
+                rarity = Rarity.Common,
+                description = "Channel the air around you to fire a high powered Wind shot. Headshots deal increased damage.",
+            },
+            new()
+            {
+                id = CardId.Ephemerate, name = "Ephemerate", element = Element.Wind, costType = CostType.Mana, cost = 4,
+                rarity = Rarity.Rare,
+                description = "Briefly phase out of existence, then reappear.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.CloudStep, name = "Cloud Step", element = Element.Wind, costType = CostType.Mana, cost = 2,
+                rarity = Rarity.Common,
+                description = "Perform a leap.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.Submerge, name = "Submerge", element = Element.Water, costType = CostType.Mana, cost = 5,
+                rarity = Rarity.Epic,
+                description = "Hold to dive into the ground and regenerate health. Release to ambush your enemies.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.BubbleBomb, name = "Bubble Bomb", element = Element.Water, costType = CostType.Mana, cost = 2,
+                rarity = Rarity.Common,
+                description = "Create a proximity explosive bubble.",
+            },
+            new()
+            {
+                id = CardId.HammerSpin, name = "Hammer Spin", element = Element.Hammer, costType = CostType.Mana, cost = 5,
+                rarity = Rarity.Common,
+                description = "Spin in a direction with a hammer.",
+            },
+            new()
+            {
+                id = CardId.Wolfgang, name = "Wolfgang", element = Element.Gun, costType = CostType.Mana, cost = 7,
+                rarity = Rarity.Common,
+                description = "Continuously fire Bullets.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.HeavenlySlash, name = "Heavenly Slash", element = Element.Blade, costType = CostType.Mana, cost = 8,
+                rarity = Rarity.Rare,
+                description = "Leap into the air, then send out a devastating cut.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.Parry, name = "Parry", element = Element.Blade, costType = CostType.Mana, cost = 6,
+                rarity = Rarity.Common,
+                description = "Deflect an attack and retaliate.", castOnPress = true,
+            },
+            new()
+            {
+                id = CardId.SpeedDemon, name = "Panic Winds", element = Element.Wind, costType = CostType.Passive, cost = 0,
+                rarity = Rarity.Common,
+                description = "Gain speed as you lose health. Lose max shield health.", castOnPress = true,
             },
         };
 
@@ -517,11 +604,10 @@ namespace SuddenMageEncounter
         public static int TemperanceCount(EquippedCards e) => CountOf(e, CardId.Temperance);
 
         /// <summary>
-        /// What a card costs in a loadout holding <paramref name="temperance"/> Temperance cards: each one puts 1 on the
-        /// mana cost of every other card.
+        /// How much a loadout's passive cards change its owner's maximum health: each Temperance and each Undying takes some.
         /// </summary>
-        public static int CostWith(CardInfo info, int temperance) =>
-            info == null ? 0 : info.costType == CostType.Mana && info.id != CardId.Temperance ? info.cost + temperance : info.cost;
+        public static float HealthBonus(EquippedCards e) =>
+            -SpellPlans.TemperanceHealth * CountOf(e, CardId.Temperance) - SpellPlans.UndyingHealth * CountOf(e, CardId.Undying);
 
         /// <summary>Attraction and Repulsion: cast together (within <see cref="SpellPlans.FuseWindow"/>), they fuse.</summary>
         public static bool Fuses(CardId a, CardId b) =>
@@ -570,17 +656,18 @@ namespace SuddenMageEncounter
             CardId.DescendingHammer => SpellPlans.HammerCrouch + 0.1f,         // the crouch (the leap itself keeps you busy until you land)
             CardId.RockSwarm => SpellPlans.SwarmGather,                        // hands up while the rocks are torn out
             CardId.IceSpike => SpellPlans.IceCrouch,                           // crouched, hands on the ground
-            CardId.TheHermit => SpellPlans.HermitKneel + SpellPlans.HermitBuild, // kneeling while the house goes up
+            CardId.TheHermit => 0f,                                            // (the house goes up at once)
             CardId.WheelOfFortune => SpellPlans.WheelBusy,                     // the die is over your head
-            CardId.Justice => SpellPlans.JusticeClasp,                         // hands clasped
-            CardId.TheHangedMan => SpellPlans.HangedDrop,                      // the noose coming down
-            CardId.Death => SpellPlans.DeathDelay,                             // the head tips back
+            CardId.Justice => SpellPlans.JusticeCast,                          // down on one knee over the corpse
+            CardId.TheHangedMan => SpellPlans.HangedDrop + SpellPlans.HangedYank, // the noose coming down, then the yank
+            CardId.Death => SpellPlans.DeathArm,                               // the fist drawn back (the charge then keeps you busy)
             CardId.Temperance => 0f,
+            CardId.SpeedDemon => 0f,
             CardId.TheDevil => SpellPlans.DevilRaise,                          // the right hand goes up
             CardId.TheTower => SpellPlans.TowerPray,                           // kneeling in prayer
             CardId.UndeadServitude => SpellPlans.ReviveTime,                   // crouched over the corpse
             CardId.InfectiousBite => SpellPlans.BiteCrouch,                    // the crouch before the lunge
-            CardId.FlameThrower => 0.3f,                                       // (held: no other card while it spews)
+            CardId.FlameThrower => SpellPlans.FlameStart,                                       // (held: no other card while it spews)
             CardId.GrappleHook => SpellPlans.HookCast,                         // the hand points
             CardId.SummonHorde => SpellPlans.HordeCrouch,                      // hands out over the ground
             CardId.IcyBreath => SpellPlans.BreathLean + SpellPlans.IceBreathTime, // leaning in, then breathing
@@ -599,7 +686,17 @@ namespace SuddenMageEncounter
             CardId.RemoteDetonation => SpellPlans.DetonateTime,                // the left hand goes up
             CardId.FlameBombToss => SpellPlans.TossTime,                       // both hands thrown forward
             CardId.NecromaticBlast => SpellPlans.NecroCharge,                  // the ball gathers, then it's thrown
-            CardId.ShatterHex or CardId.StasisHex or CardId.MindHex => SpellPlans.HexCast, // the left hand points
+            CardId.ShatterHex or CardId.StasisHex or CardId.MindHex or CardId.SmallifyHex => SpellPlans.HexCast, // the left hand points
+            CardId.Sunflower or CardId.Cactus or CardId.FlyTrap => SpellPlans.PotGrow, // the pot phases in, the plant grows (then held: no other card meanwhile)
+            CardId.CompressedShot => 0.2f,                                     // the flick of the hand (the charge was held before)
+            CardId.Ephemerate => SpellPlans.EphemTime,                         // gone
+            CardId.CloudStep => 0.15f,
+            CardId.Submerge => SpellPlans.SubDive,                             // diving in (then under: no other card meanwhile)
+            CardId.BubbleBomb => 0.3f,
+            CardId.HammerSpin => 0.2f,                                         // (the spin itself keeps you busy: the server times it by its length)
+            CardId.Wolfgang => SpellPlans.WolfDraw + SpellPlans.WolfFireTime,  // drawn, then firing
+            CardId.HeavenlySlash => SpellPlans.HeavenRelease + 0.2f,           // the crouch, the leap, the pose, the cut
+            CardId.Parry => SpellPlans.ParryWindow,                            // on guard (cut short if it deflects)
             _ => 0.3f,
         };
 
@@ -628,6 +725,10 @@ namespace SuddenMageEncounter
             Element.Weapon => new Color(0.87f, 0.9f, 0.95f), // steel silver-white
             Element.Necromancy => new Color(0.56f, 0.72f, 0.36f), // sickly green
             Element.Hex => new Color(0.58f, 0.36f, 0.82f), // purple
+            Element.Botany => new Color(0.32f, 0.76f, 0.3f), // leaf green
+            Element.Blade => new Color(0.87f, 0.9f, 0.95f), // steel silver-white
+            Element.Gun => new Color(0.5f, 0.53f, 0.6f), // gunmetal
+            Element.Hammer => new Color(0.66f, 0.6f, 0.56f), // iron
             _ => new Color(0.82f, 0.68f, 0.5f), // Ground: light brown
         };
 

@@ -34,12 +34,11 @@ namespace SuddenMageEncounter
             }
             _enemy = Make(shader, "EnemyOutline", EnemyColor);
             _team = Make(shader, "TeamOutline", TeamColor);
-            // Wheel of Fortune: a glowing metallic grey (unmovable), golden purple (unhurtable), flashing red (about to blow up)
-            _steel = Make(shader, "SteelGlow", ArcanaVfx.Steel);
+            // Wheel of Fortune: golden purple (untouchable), red (about to blow up)
             _gold = Make(shader, "GoldGlow", ArcanaVfx.GoldPurple);
             _doom = Make(shader, "DoomGlow", ArcanaVfx.Doom);
             _sun = Make(shader, "SunGlow", SpellPlans.SunRim);
-            foreach (var m in new[] { _steel, _gold, _doom, _sun }) m.SetFloat("_Width", Width * 2.2f);
+            foreach (var m in new[] { _gold, _doom, _sun }) m.SetFloat("_Width", Width * 2.2f);
             // The Star: an outline seen through anything. The body first (marked, not drawn), then its hull round it
             var mask = Shader.Find("SME/LitMask");
             var lit = Shader.Find("SME/LitOutline");
@@ -48,31 +47,26 @@ namespace SuddenMageEncounter
                 _litMask = new Material(mask) { name = "LitMask" };
                 _lit = Make(lit, "LitOutline", LitColor);
                 _lit.SetFloat("_Width", Width * 1.8f);
+                _justice = Make(lit, "JusticeOutline", SpellPlans.JusticeGlow);
+                _justice.SetFloat("_Width", Width * 1.8f);
             }
             var invert = Shader.Find("SME/Invert");
             if (invert != null) _invert = new Material(invert) { name = "Inverted" };
         }
 
         static readonly Color LitColor = new(3.2f, 1.5f, 0.6f, 1f); // glowing mahogany gold
-        Material _sun, _litMask, _lit, _invert;
+        Material _sun, _litMask, _lit, _justice, _invert;
 
-        Material _steel, _gold, _doom;
+        Material _gold, _doom;
 
-        /// <summary>A glow the Wheel of Fortune put on this body right now, if any (the doom glow flashes faster and faster).</summary>
+        /// <summary>A glow the Wheel of Fortune put on this body right now, if any.</summary>
         Material StatusGlow(Combatant c)
         {
             if (!c.IsSpawned || !c.IsAlive) return null;
             var st = c.Status.Value;
             double now = WorldNet.Now;
-            if (st.Doomed)
-            {
-                // flashing once a second at first, speeding up to 7 a second (the flashes counted: t + 2t³/T²)
-                float t = (float)(now - st.DoomFrom), T = Mathf.Max(0.01f, (float)(st.DoomAt - st.DoomFrom));
-                float flashes = t + 2f * t * t * t / (T * T);
-                return Mathf.Repeat(flashes, 1f) < 0.5f ? _doom : null;
-            }
+            if (st.Doomed) return _doom;
             if (st.Gold(now)) return _gold;
-            if (st.Steel(now)) return _steel;
             if (st.Sun(now)) return _sun;
             return null;
         }
@@ -102,6 +96,8 @@ namespace SuddenMageEncounter
                     var st = c.Status.Value;
                     double now = WorldNet.Now;
                     if (st.Sun(now)) over = _invert;
+                    // Justice: the killer its caster is after, on their screen only
+                    else if (me != null && c != me && me.IsSpawned && me.Status.Value.JusticeOn == c.NetworkObjectId) { over = _litMask; round = _justice; }
                     else if (st.Lit(now)) { over = _litMask; round = _lit; }
                 }
                 c.SetOutline(m, over, round);

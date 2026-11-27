@@ -226,7 +226,8 @@ namespace SuddenMageEncounter
         public const int FoldLength = 17; // 4.25 m along your view (17 x 17: twice the old 12 x 12)
         public const int FoldThick = 2;   // 0.5 m
         public const int FoldGap = 4;     // the strip in the middle where the slabs meet (= 2 * thickness)
-        public const float FoldBuckle = 0.15f, FoldClose = 0.1f;
+        public const float FoldSpeed = 0.7f;                                        // (of how fast it first was)
+        public const float FoldBuckle = 0.15f / FoldSpeed, FoldClose = 0.1f / FoldSpeed;
         public const float FoldDamage = 25f, FoldRagdoll = 0.5f;
 
         public class FoldPlan
@@ -426,7 +427,7 @@ namespace SuddenMageEncounter
 
         // ---------------------------------------------------------------- Magical Barrier
         public const float BarrierWindup = 0.2f, BarrierTime = 0.8f, BarrierRadius = 3f;
-        public const float BarrierDamage = 5f;
+        public const float BarrierDamage = 10f;
 
         // ---------------------------------------------------------------- Burn (the Flame cards' damage over time)
         public const float BurnDamage = 15f, BurnTime = 5f; // each application: 15 over 5 s; they stack
@@ -446,12 +447,25 @@ namespace SuddenMageEncounter
         public const float HellfireRise = 0.15f, HellfireStand = 2f, HellfireFall = 0.25f;
         public const float HellfireHeight = 2.5f, HellfireThick = 0.8f;
         public const float HellfireDamage = 15f;
-        public const int HellfireBurns = 2;               // burn stacks it puts on whoever steps in
+        public const int HellfireBurns = 1;               // burn stacks it puts on whoever steps in
 
         // ---------------------------------------------------------------- Explosive Escape
         public const float EscapeDelay = 0.3f, EscapeReach = 1.4f, EscapeBlast = 2.2f;
         public const float EscapeBack = 14f, EscapeUp = 12f;
         public const int EscapeCrater4 = 16, EscapeSinge4 = 28;
+        public const float FlameBurstReach = 3.9f;         // how far a flame burst's tongues reach at scale 1 (FireVfx.FlameBurst: 1.7 out + 2.2 long)
+        public const float EscapeChargeStep = 1f, EscapeChargeMax = 2f; // held: another blast's size every second, up to triple
+        public const float EscapeKnockGrow = 1.25f;       // ...and the kick back on you grows this much every second
+        /// <summary>Explosive Escape's blast (and crater) size after holding it <paramref name="held"/> s: 1, growing to 3.</summary>
+        public static float EscapeSize(float held) => 1f + Mathf.Clamp(held, 0f, EscapeChargeMax) / EscapeChargeStep;
+        /// <summary>How much harder the caster is kicked back after holding it <paramref name="held"/> s.</summary>
+        public static float EscapeKnockScale(float held) => Mathf.Pow(EscapeKnockGrow, Mathf.Clamp(held, 0f, EscapeChargeMax) / EscapeChargeStep);
+        /// <summary>Where the clap goes off: in front of the caster (body centre <paramref name="pos"/>), fixed when it's let go.</summary>
+        public static Vector3 EscapeSpot(Vector3 pos, float yaw) => pos + Quaternion.Euler(0f, yaw, 0f) * Vector3.forward * EscapeReach + Vector3.up * 0.1f;
+        /// <summary>The crater's centre (the explosion itself), below the clap.</summary>
+        public static Vector3 EscapeCraterCentre(Vector3 spot) => spot + Vector3.down * 0.6f;
+        /// <summary>The crater's radius (m) after holding it <paramref name="held"/> s.</summary>
+        public static float EscapeCraterRadius(float held) => Mathf.RoundToInt(EscapeCrater4 * EscapeSize(held)) / 4f * VoxelWorld.Size;
 
         // ---------------------------------------------------------------- Tarot
         public const float MagicianTime = 5f;            // double mana regeneration for this long
@@ -460,13 +474,14 @@ namespace SuddenMageEncounter
         public const float BlindFade = 2f;               // white screen fading out
         public const float DomainDelay = 0.5f;           // startup: rooted, hands clasped, symbols pouring out (hurt / thrown = cancelled)
         public const float DomainGrow = 0.2f;            // expands to full size this fast
-        public const float EmpressRadius = 15f, EmperorRadius = 6.8f;
+        public const float EmpressRadius = 11.25f, EmperorRadius = 6.8f;
         public static float DomainRadius(byte kind) => kind == 0 ? EmpressRadius : EmperorRadius;
         public const float EmpressTime = 10f, EmpressDamage = 1.25f;
         public const float EmpressTrapTime = 5f;         // caught in it: silenced and chained this long (once per domain)
         public const float ChainSlack = 0.4f;            // trapped: pulled back once this far inside the Empress's edge
         public const float ChainSpeed = 14f, ChainPull = 45f; // m/s back in, and how hard the chains accelerate you
-        public const float EmperorTime = 10f, EmperorDamage = 0.5f;
+        public const float EmperorTime = 8f, EmperorDamage = 0.3f; // damage from outside the circle, scaled
+        public const float DomainRest = 3f;              // after either one ends, this long before its caster can open another
 
         /// <summary>
         /// The Empress's chains on a trapped body outside her domain: no further out (taut), and hauled back in.
@@ -489,7 +504,7 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- The Hierophant
-        public const float HierophantDelay = 0.5f;       // after the cast, the wall appears
+        public const float HierophantDelay = 0.3f;       // after the cast, the wall appears
         public const float HierophantTime = 6f;          // and stands this long
         public const float HierophantWidth = 4f, HierophantHeight = 4f;
         public const float HierophantThick = 0.12f;      // the pane (projectiles bounce off either face)
@@ -694,7 +709,7 @@ namespace SuddenMageEncounter
         public const float TugRange = 15f, TugPull = 13f, TugUp = 3f, TugRagdoll = 1.8f;
 
         // ---------------------------------------------------------------- Mana Siphon
-        public const float SiphonTime = 1f, SiphonSpeed = 22f, SiphonArm = 0.3f;
+        public const float SiphonTime = 0.5f, SiphonSpeed = 22f, SiphonArm = 0.3f;
         public const float SiphonTurn = 260f;              // deg/s the mouse can steer the charge (was 100)
         public const float SiphonReach = 2.9f, SiphonHalfWidth = 2f, SiphonHalfHeight = 1.4f; // hit box in front: a wide, flat slab
         public const float SiphonDamage = 15f, SiphonDrain = 1f;
@@ -702,10 +717,13 @@ namespace SuddenMageEncounter
         // ---------------------------------------------------------------- Water of Life
         public const float OrbReach = 1.6f;              // floats this far in front of the caster (m)
         public const float OrbLift = 0.35f;              // ... this far above their hips
-        public const float OrbGrow = 1.5f;               // grows from a droplet to full size, then it's active
+        public const float OrbGrow = 4.5f;               // grows from a droplet to full size, then it's active
         public const float OrbStartRadius = 0.12f, OrbRadius = 0.35f;
         public const float OrbLife = 10f;                // once formed: pops by itself if nobody touches it
-        public const float OrbHeal = 25f, OrbHealTime = 1f;
+        public const float OrbHeal = 15f, OrbHealTime = 1f;
+        public const int OrbSafe = 2;                    // drink more than this many in one life, and...
+        public const float BloatTime = 0.5f;             // ...the body swells up this long, then bursts into pieces
+        public const float BloatSize = 1.7f;             // how fat it gets
 
         /// <summary>Where the orb floats: in front of the caster at chest height, pulled in short of any wall.</summary>
         public static Vector3 OrbSpot(Vector3 root, float yaw)
@@ -844,7 +862,7 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- Warp Self
-        public const float WarpRange = 20f;          // no further than this from where you stand (drops included)
+        public const float WarpRange = 16.5f;         // no further than this from where you stand (drops included)
         public const float WarpCharge = 0.4f;            // hands together... pulled apart (you can still move)
         public const float WarpFold = 0.2f;              // folding away into the rift (untouchable)
         public const float WarpUnfold = 0.2f;            // unfolding at the destination (a hit finishes it at once)
@@ -984,6 +1002,7 @@ namespace SuddenMageEncounter
         public const float SwiftPrep = 0.1f;             // crouched, gathering (a knock interrupts it)
         public const float SwiftTime = 1.6f;             // then running free, untouchable
         public const float SwiftSpeedScale = 2.3f;         // times running speed (and acceleration)
+        public const float SwiftRest = 1f;                 // not cast again until this long after it ends
         public const float SwiftBumpReach = 1.4f;          // run into someone this close: they're bowled over (Nomadic Dash's knock)
 
         /// <summary>The cells a swift dash smashes in front of you when it runs into something.</summary>
@@ -1034,7 +1053,8 @@ namespace SuddenMageEncounter
             ? Mathf.Lerp(AttractReach0, AttractReach1, Mathf.Clamp01(t / ForceLife))
             : ForceRadius(false, t) * ForceReachScale;
 
-        public static float ForceSpeedOf(bool water) => water ? ForceSpeed : ForceSpeed * FlameSpeedScale;
+        public const float AttractSpeedScale = 1.25f;      // Attraction moves this much faster than ForceSpeed (Repulsion keeps its own)
+        public static float ForceSpeedOf(bool water) => water ? ForceSpeed * AttractSpeedScale : ForceSpeed * FlameSpeedScale;
 
         /// <summary>
         /// A projectile caught by Attraction, over <paramref name="dt"/>: pulled towards the ball, and slowing down
@@ -1066,12 +1086,27 @@ namespace SuddenMageEncounter
         public const float FuseWindow = 0.3f;             // both cast this close together: they fuse
         public const float FuseCharge = 2f;               // forming in front of you (you're untouchable)
         public const float FuseRadius0 = 0.25f, FuseRadius1 = 1f; // what you see is what it erases and hits
-        public const float FuseRange = 40f, FuseSpeed = 45f;
+        public const float FuseRange = 75f, FuseSpeed = 45f;
+        /// <summary>Wheel of Fortune's 7: the die becomes this many of the balls over the caster's head, in <see cref="WheelFuseForm"/>; then one goes every <see cref="WheelFuseGap"/>.</summary>
+        public const int WheelFuses = 3;
+        public const float WheelFuseForm = 0.3f, WheelFuseGap = 0.3f;
         public const float FuseDamage = 75f;
         public const float FuseKnock = 10f, FuseUp = 4f, FuseRagdoll = 1f;
         public static readonly Color FusePurple = new(2.4f, 0.35f, 4.4f, 1f);
 
-        public static float FuseRadiusAt(float t) => Mathf.Lerp(FuseRadius0, FuseRadius1, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / FuseCharge)));
+        /// <param name="over">0: the ball in front of its caster; 1, 2, 3: one of the Wheel's, over their head.</param>
+        public static float FuseRadiusAt(float t, int over = 0) =>
+            Mathf.Lerp(FuseRadius0, FuseRadius1, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t / (over > 0 ? WheelFuseForm : FuseCharge))));
+
+        /// <summary>How long after it starts forming a ball is thrown.</summary>
+        public static float FuseThrowAt(int over) => over > 0 ? WheelFuseForm + WheelFuseGap * (over - 1) : FuseCharge;
+
+        /// <summary>Where one of the Wheel's balls waits: side by side over the caster's head, the middle one first to go.</summary>
+        public static Vector3 FuseOverHead(Vector3 root, float yaw, int over)
+        {
+            float side = over == 1 ? 0f : over == 2 ? -1f : 1f;
+            return root + Vector3.up * (DieAbove + FuseRadius1) + Quaternion.Euler(0f, yaw, 0f) * Vector3.right * (side * FuseRadius1 * 2.3f);
+        }
 
         /// <summary>Where the forming ball sits: in front of the caster, far enough out that it never swallows them.</summary>
         public static Vector3 FuseHoldPoint(Vector3 root, float yaw, float radius) =>
@@ -1089,7 +1124,7 @@ namespace SuddenMageEncounter
         public const float RisingTime = 0.5f;           // the rush (as Severance's): this long, or until someone's in reach
         public const float RisingArm = 0.15f;           // rushing this long before someone in reach sets it off
         public const float RisingHitAt = 0.1f;          // after the trigger, the head comes up through them
-        public const float RisingDamage = 20f;
+        public const float RisingDamage = 18f;
         public const float RisingLaunch = 15f;          // thrown straight up (m/s): about 5.5 m high
         public const float RisingRagdoll = 1.4f;
 
@@ -1146,10 +1181,10 @@ namespace SuddenMageEncounter
         }
 
         // ---------------------------------------------------------------- Severance
-        public const float SeveranceTime = 0.5f;        // the rush: this long, or until someone's in reach
+        public const float SeveranceTime = 0.125f;      // the rush: this long, or until someone's in reach
         public const float SeveranceArm = 0.15f;        // rushing this long before someone in reach sets it off
         public const float SeveranceSlashAt = 0.08f;    // after the trigger, the blade is in front: the cut leaves it
-        public const float SeveranceDamage = 6f;        // per strike (3 strikes)
+        public const float SeveranceDamage = 5f;        // per strike (3 strikes)
         public const float SeveranceRange = 10f;        // the cut flies this far, then fades
         public const float SeveranceSpeed = 30f;
         public const float SeveranceHalfWidth = 3.4f;   // the crescent, tip to tip / 2 (6.8 m across)
@@ -1271,7 +1306,7 @@ namespace SuddenMageEncounter
         public const float SwarmOrbitRadius = 3f;       // they circle the caster this far out...
         public const float SwarmLift = 0.2f;            // ...this high above the hips
         public const float SwarmSpin = 75f;             // deg/s, counter-clockwise seen from above
-        public const float SwarmLife = 6f;              // seconds from the cast: then every rock still going crumbles
+        public const float SwarmLife = 12f;             // seconds from the cast: then every rock still going crumbles
         public const int SwarmRockR4 = 8;               // each rock is a voxel ball: every cell within 2 cells of its middle
         /// <summary>A rock's radius (0.625 m): the ball of cells is drawn this big, and it hits and is hit this big.</summary>
         public static float SwarmRockRadius => (SwarmRockR4 / 4f + 0.5f) * VoxelWorld.Size;

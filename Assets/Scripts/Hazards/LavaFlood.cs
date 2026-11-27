@@ -12,7 +12,7 @@ namespace SuddenMageEncounter
     public class LavaFlood : Liquid
     {
         [Tooltip("Seconds after FIGHT that the lava fall starts.")]
-        public float startAfter = 180f;
+        public float startAfter = 55f;
         [Tooltip("How long lava pours from the sky before the pool starts rising.")]
         public float fallSeconds = 5f;
         [Tooltip("The level the lava rises to.")]

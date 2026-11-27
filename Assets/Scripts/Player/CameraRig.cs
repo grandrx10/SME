@@ -123,7 +123,9 @@ namespace SuddenMageEncounter
             float ads = _ads * _ads * (3f - 2f * _ads);
             _cam.fieldOfView *= Mathf.Lerp(1f, 0.72f, ads);
             float height = Mathf.Lerp(pivotHeight, 0.52f, ads);
-            Place(_pivot + Vector3.up * (height - crouch + 0.95f * big), pc.Motor.ViewRotation, Vector3.Lerp(shoulderOffset, new Vector3(0.36f, 0.1f, -1.5f), ads) * (1f + 0.5f * big));
+            // Smallify Hex: the head is down where the shrunk body puts it
+            float small = 1f - SpellPlans.SmallScale(pc);
+            Place(_pivot + Vector3.up * (height - crouch + 0.95f * big - (height + 0.95f) * small), pc.Motor.ViewRotation, Vector3.Lerp(shoulderOffset, new Vector3(0.36f, 0.1f, -1.5f), ads) * (1f + 0.5f * big));
         }
 
         /// <summary>Puts the camera at pivot + rotation * offset, pulled in if something is in the way.</summary>

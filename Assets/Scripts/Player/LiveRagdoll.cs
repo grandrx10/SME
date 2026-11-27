@@ -41,6 +41,12 @@ namespace SuddenMageEncounter
                 j.projectionAngle = 10f;
             }
             foreach (var rb in _bodies) rb.solverIterations = Mathf.Max(rb.solverIterations, 16);
+            // where each part is on the body, as it was made (from the body as it stood: its own frame is upright)
+            _rest0 = transform.rotation;
+            _rest = new Vector3[_bodies.Length];
+            if (_pelvis != null)
+                for (int i = 0; i < _bodies.Length; i++)
+                    if (_bodies[i] != null) _rest[i] = Quaternion.Inverse(_rest0) * (_bodies[i].position - _pelvis.position);
         }
 
         void FixedUpdate()
@@ -55,6 +61,8 @@ namespace SuddenMageEncounter
                 if (moved.sqrMagnitude > 1e-8f) foreach (var rb in _bodies) if (rb != null) rb.position += moved;
                 return;
             }
+            if (InJaws()) return;
+            _laid = false;
             Vector3 error = target.transform.position - _pelvis.position;
             if (error.sqrMagnitude > 25f)
             {
@@ -66,6 +74,76 @@ namespace SuddenMageEncounter
             Vector3 change = (want - _pelvis.linearVelocity) * 0.6f;
             foreach (var rb in _bodies) rb.linearVelocity += change;
             HeadFirst();
+            Tumble();
+        }
+
+        bool _laid;
+        Vector3[] _rest;   // each body's offset from the hips when it was made, in the body's own frame (x: side, y: up, z: front)
+        Quaternion _rest0;
+
+        /// <summary>
+        /// Inside a fly trap: lying flat in its jaws, head out in front (the way the trap faces), face down. The hips, the
+        /// spine, the head and the legs are held in that line; the arms are left to dangle.
+        /// </summary>
+        bool InJaws()
+        {
+            if (!target.IsSpawned) return false;
+            var st = target.Status.Value;
+            double now = WorldNet.Now;
+            var net = WorldNet.Instance;
+            if (!st.Eaten(now) || net == null || !net.Pots.TryGetValue(st.EatenBy, out var fx)) return false;
+            if (_rest == null) return false;
+            Vector3 mouth = WorldNet.PotHead(fx, now);
+            Vector3 ahead = Quaternion.Euler(0f, WorldNet.PotYaw(fx), 0f) * Vector3.forward;
+            // body up -> ahead, body front -> down
+            Quaternion lay = Quaternion.LookRotation(Vector3.down, ahead);
+            Quaternion turn = lay * Quaternion.Inverse(_rest0);
+            Vector3 hips = mouth - ahead * SpellPlans.EatenDrop; // the chest in its jaws
+            if (!_laid)
+            {
+                // swung flat at once, about the hips, and put there
+                _laid = true;
+                Vector3 pivot = _pelvis.position;
+                foreach (var rb in _bodies)
+                {
+                    if (rb == null) continue;
+                    rb.position = hips + turn * (rb.position - pivot);
+                    rb.rotation = turn * rb.rotation;
+                    rb.linearVelocity = rb.angularVelocity = Vector3.zero;
+                }
+                return true;
+            }
+            Vector3 carry = target.ViewVelocity;
+            for (int i = 0; i < _bodies.Length; i++)
+            {
+                var rb = _bodies[i];
+                if (rb == null) continue;
+                Vector3 r = _rest[i];
+                if (rb != _pelvis && Mathf.Abs(r.x) > 0.18f) continue; // an arm: limp
+                Vector3 want = hips + lay * r;
+                rb.linearVelocity = Vector3.Lerp(rb.linearVelocity, carry + (want - rb.position) * 15f, 0.5f);
+                rb.angularVelocity *= 0.8f;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Wheel of Fortune's throw into the sky: the whole body turns over and over about the hips, on an axis that itself
+        /// swings round (the limbs still flop).
+        /// </summary>
+        void Tumble()
+        {
+            if (!target.IsSpawned || WorldNet.Now >= target.Status.Value.SpinUntil) return;
+            float t = Time.fixedTime;
+            Vector3 spin = new Vector3(Mathf.Cos(t * 1.1f), 0.5f * Mathf.Sin(t * 1.7f), Mathf.Sin(t * 1.1f)).normalized * SpellPlans.SkySpin;
+            Vector3 hips = _pelvis.position, along = _pelvis.linearVelocity;
+            foreach (var rb in _bodies)
+            {
+                if (rb == null) continue;
+                rb.maxAngularVelocity = SpellPlans.SkySpin * 2f;
+                rb.angularVelocity = Vector3.Lerp(rb.angularVelocity, spin, 0.4f);
+                rb.linearVelocity = Vector3.Lerp(rb.linearVelocity, along + Vector3.Cross(spin, rb.worldCenterOfMass - hips), 0.4f);
+            }
         }
 
         /// <summary>

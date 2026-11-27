@@ -63,6 +63,25 @@ namespace SuddenMageEncounter.EditorTools
             Done(go, "Add Meteor Shower");
         }
 
+        [MenuItem(Menu + "Add Sky Wrap", priority = 47)]
+        public static void AddSkyWrap()
+        {
+            if (!Target(out var arena, out _)) return;
+            if (arena.GetComponentInChildren<SkyWrap>(true) != null) { Selection.activeObject = arena.GetComponentInChildren<SkyWrap>(true); return; }
+            Undo.AddComponent<SkyWrap>(arena.gameObject).FitToMap();
+            EditorUtility.SetDirty(arena.gameObject);
+            Selection.activeGameObject = arena.gameObject;
+        }
+
+        [MenuItem(Menu + "Add Rising Wall", priority = 48)]
+        public static void AddRisingWall()
+        {
+            if (!Target(out var arena, out _)) return;
+            if (arena.GetComponentInChildren<RisingWall>(true) == null) Undo.AddComponent<RisingWall>(arena.gameObject);
+            EditorUtility.SetDirty(arena.gameObject);
+            Selection.activeGameObject = arena.gameObject;
+        }
+
         [MenuItem(Menu + "Add Train Track", priority = 43)]
         public static void AddTrack()
         {
@@ -83,6 +102,33 @@ namespace SuddenMageEncounter.EditorTools
             t.from = Marker("From", go.transform, mid - f * half);
             t.to = Marker("To", go.transform, mid + f * half);
             Done(go, "Add Train Track");
+        }
+
+        [MenuItem(Menu + "Add Spike Walls", priority = 45)]
+        public static void AddSpikes()
+        {
+            if (!Target(out var arena, out var b)) return;
+            var go = Box("Spike Walls", arena, b.center, b.size, Vector3.zero);
+            if (b.size.x > b.size.z) // along the longer way
+            {
+                go.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
+                go.GetComponent<BoxCollider>().size = new Vector3(b.size.z, b.size.y, b.size.x);
+            }
+            go.AddComponent<SpikeWalls>();
+            Done(go, "Add Spike Walls");
+        }
+
+        [MenuItem(Menu + "Add Closing Zone", priority = 46)]
+        public static void AddZone()
+        {
+            if (!Target(out var arena, out var b)) return;
+            var go = new GameObject("Closing Zone");
+            go.transform.SetParent(arena.transform, true);
+            go.transform.position = b.center;
+            var z = go.AddComponent<ClosingZone>();
+            z.radius = new Vector2(b.size.x, b.size.z).magnitude * 0.5f;
+            z.height = b.size.y + 10f;
+            Done(go, "Add Closing Zone");
         }
 
         /// <summary>An example signal (post and lamp) beside the selected track, wired to it. Bake the arena after.</summary>
