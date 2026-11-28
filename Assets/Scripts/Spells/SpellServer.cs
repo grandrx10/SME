@@ -20,7 +20,7 @@ namespace SuddenMageEncounter
         class RockState
         {
             public int id; public PlayerController caster; public double start;
-            public bool launched; public Vector3 lastPos; public double lastTime;
+            public bool launched; public Vector3 lastPos; public double lastTime; public int wraps;
             public float damage = SpellPlans.RockDamage, radius = SpellPlans.RockRadius;
             public int envR4 = 7;
             public int lastGust;
@@ -523,7 +523,7 @@ namespace SuddenMageEncounter
 
         class FireballState
         {
-            public int id; public Combatant caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust;
+            public int id; public Combatant caster; public double start; public bool launched; public Vector3 lastPos; public int lastGust, wraps;
             /// <summary>Necromatic Blast's ball: flies (and is turned, caught, blocked, sent through portals) as a fireball, but isn't fire.</summary>
             public bool necro;
             /// <summary>A map hazard's meteor: a big fireball nobody threw (SpellServer.Hazards).</summary>
@@ -1261,7 +1261,10 @@ namespace SuddenMageEncounter
                 case CardId.Sunflower:
                 case CardId.Cactus:
                 case CardId.FlyTrap:
+                case CardId.PineTree:
                     return CastBotany(caster, card, now);
+                case CardId.Hammerang:
+                    return CastRang(caster, now);
                 case CardId.CompressedShot:
                 case CardId.Ephemerate:
                 case CardId.CloudStep:

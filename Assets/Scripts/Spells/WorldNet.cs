@@ -586,12 +586,12 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        public static void ServerMissileRedirect(int id, int index, Vector3 pos, Vector3 dir, ulong newOwner)
+        public static void ServerMissileRedirect(int id, int index, Vector3 pos, Vector3 dir, ulong newOwner, bool keepAge = false)
         {
             var i = Instance;
             if (i == null || !IsServer) return;
-            var w = NewOp(Op.MissileRedirect, 48);
-            w.WriteValueSafe(id); w.WriteValueSafe((byte)index); w.WriteValueSafe(pos); w.WriteValueSafe(dir); w.WriteValueSafe(newOwner);
+            var w = NewOp(Op.MissileRedirect, 49);
+            w.WriteValueSafe(id); w.WriteValueSafe((byte)index); w.WriteValueSafe(pos); w.WriteValueSafe(dir); w.WriteValueSafe(newOwner); w.WriteValueSafe(keepAge);
             i.Broadcast(Finish(ref w));
         }
 
@@ -758,7 +758,7 @@ namespace SuddenMageEncounter
             return id;
         }
 
-        /// <summary>Severance's cut is spent (voxels, a barrier, cut by another blade) before its full 10 m.</summary>
+        /// <summary>Severance's cut is spent (voxels, a barrier, cut by another blade) before its full range.</summary>
         public static void ServerWaveEnd(int id)
         {
             var i = Instance;
@@ -1334,7 +1334,7 @@ namespace SuddenMageEncounter
             var islands = new List<List<VoxelWorld.RemovedCell>>();
 
             // Rock Swarm and Ice Spike (WorldNet.Ground.cs); everything else here
-            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyArms(op, ref r, world, removed, islands) && !ApplyDeath(op, ref r, world) && !ApplyBotany(op, ref r, world, removed, islands) && !ApplyGale(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r) && !ApplyHex(op, ref r, world, removed, islands) && !ApplyHazards(op, ref r, world) && !ApplyWheel(op, ref r, world, removed, islands))
+            if (!ApplyGround(op, ref r, world, removed, islands) && !ApplyArms(op, ref r, world, removed, islands) && !ApplyRang(op, ref r) && !ApplyDeath(op, ref r, world) && !ApplyBotany(op, ref r, world, removed, islands) && !ApplyGale(op, ref r, world, removed, islands) && !ApplyMore(op, ref r, world, removed, islands) && !ApplyTarot3(op, ref r, world, removed, islands) && !ApplyGuns(op, ref r, world, removed, islands) && !ApplyBombs(op, ref r) && !ApplyHex(op, ref r, world, removed, islands) && !ApplyHazards(op, ref r, world) && !ApplyWheel(op, ref r, world, removed, islands))
             switch (op)
             {
                 case Op.RemoveSphere:
@@ -1443,13 +1443,14 @@ namespace SuddenMageEncounter
                     r.ReadValueSafe(out Vector3 pos);
                     r.ReadValueSafe(out Vector3 dir);
                     r.ReadValueSafe(out ulong owner);
+                    r.ReadValueSafe(out bool keepAge);
                     if (!Missiles.TryGetValue(id, out var fx) || idx >= fx.m.Length) break;
                     var m = fx.m[idx];
                     m.pos = m.prev = pos;
                     m.dir = dir;
                     m.tracking = false;
                     m.owner = owner;
-                    m.age = 0f;
+                    if (!keepAge) m.age = 0f;
                     break;
                 }
                 case Op.Barrier:
@@ -2184,6 +2185,7 @@ namespace SuddenMageEncounter
             AnimateTarot3(now);
             AnimateGuns(now);
             AnimateArms(now);
+            AnimateRang(now);
             AnimateHex(now);
             AnimateBotany(now);
             AnimateGale(now);
@@ -2462,6 +2464,7 @@ namespace SuddenMageEncounter
             ClearTarot3();
             ClearGuns();
             ClearArms();
+            ClearRang();
             ClearBombs();
             ClearHex();
             ClearBotany();

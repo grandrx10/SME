@@ -8,7 +8,8 @@ namespace SuddenMageEncounter
     /// once into a clean template the way the sword and hammer are (meshes copied out, no colliders, every part on
     /// SME/ToonFade so it phases in and out in a dither). Each template's origin is the bottom middle of the model. The
     /// models were made standing together in one place, so where a plant stood over the pot there is where it grows.
-    /// The cactus came as a body and one spike: the spike is copied all round the body here.
+    /// The cactus came as a body and one spike: the spike is copied all round the body here (unless the model has
+    /// more than one spike: then the user placed them all, and it's drawn as made).
     /// </summary>
     public static class PotModel
     {
@@ -29,8 +30,16 @@ namespace SuddenMageEncounter
         {
             SpellPlans.PotSunflower => "Sunflower",
             SpellPlans.PotCactus => "Cactus",
+            SpellPlans.PotPine => "PineTree",
             _ => "FlyTrap",
         };
+
+        /// <summary>The plant alone at its model's size, from its own origin (the bottom middle).</summary>
+        public static Bounds PlantBounds(byte kind)
+        {
+            var p = Plant(kind);
+            return p.any ? p.bounds : new Bounds(Vector3.up * 0.4f, new Vector3(0.4f, 0.8f, 0.4f));
+        }
 
         public static GameObject SpawnPot() => Spawn(Pot().go, "Pot");
         public static GameObject SpawnPlant(byte kind) => Spawn(Plant(kind).go, NameOf(kind));
@@ -92,14 +101,17 @@ namespace SuddenMageEncounter
             src.transform.SetPositionAndRotation(prefab.transform.position, Quaternion.identity); // (where the user made it)
             var filters = new List<MeshFilter>();
             foreach (var mf in src.GetComponentsInChildren<MeshFilter>(true)) if (mf.sharedMesh != null) filters.Add(mf);
-            MeshFilter spike = kind == SpellPlans.PotCactus ? filters.Find(f => f.name == "Spike") : null;
+            // the cactus with just its one spike: copied all round the body here. Given more spikes (the user placed
+            // them all), it's drawn exactly as made.
+            MeshFilter spike = kind == SpellPlans.PotCactus && filters.FindAll(f => f.name.StartsWith("Spike")).Count == 1
+                ? filters.Find(f => f.name.StartsWith("Spike")) : null;
 
             // the bottom middle of the model (the cactus's spike left out: it's copied round the body below)
             Bounds b = default;
             bool any = false;
             foreach (var mf in filters)
             {
-                if (mf == spike) continue;
+                if (mf == spike || kind == SpellPlans.PotCactus && mf.name.StartsWith("Spike")) continue; // (the body alone, spikes baked in or not)
                 var r = mf.GetComponent<Renderer>();
                 if (r == null) continue;
                 if (!any) { b = r.bounds; any = true; } else b.Encapsulate(r.bounds);
@@ -212,13 +224,26 @@ namespace SuddenMageEncounter
         {
             var mr = spike.GetComponent<MeshRenderer>();
             var mats = mr != null ? mr.sharedMaterials : null;
+            Vector3 scale = spike.transform.lossyScale;
+            var places = new List<(Vector3 pos, Quaternion rot)>();
+            SpikePlaces(spike.transform, body, places);
+            foreach (var (pos, rot) in places)
+                AddPart(t, "Spike", Object.Instantiate(spike.sharedMesh), mats, toLocal * Matrix4x4.TRS(pos, rot, scale));
+        }
+
+        /// <summary>
+        /// Where the copies of the cactus's one spike go (world space, the model as it was made): round the body and a
+        /// few on top. Also used by the editor's Bake Cactus Spikes, which writes them into the model.
+        /// </summary>
+        public static void SpikePlaces(Transform spike, Bounds body, List<(Vector3 pos, Quaternion rot)> places)
+        {
+            places.Clear();
             Vector3 axis = new(body.center.x, 0f, body.center.z);
-            Vector3 p0 = spike.transform.position;
+            Vector3 p0 = spike.position;
             Vector3 out0 = new Vector3(p0.x, 0f, p0.z) - axis;
             float r0 = out0.magnitude;
             out0 = r0 > 1e-3f ? out0 / r0 : Vector3.forward;
-            Quaternion rot0 = spike.transform.rotation;
-            Vector3 scale = spike.transform.lossyScale;
+            Quaternion rot0 = spike.rotation;
             float lo = Mathf.Max(body.min.y + body.size.y * 0.15f, Mathf.Min(p0.y, body.max.y)), hi = body.max.y - body.size.y * 0.12f;
             int side = SpellPlans.CactusSpikes - 3;
             for (int i = 0; i < SpellPlans.CactusSpikes; i++)
@@ -239,8 +264,7 @@ namespace SuddenMageEncounter
                     dir = (Vector3.up + flat * 0.45f).normalized;
                     pos = new Vector3(axis.x, body.max.y - Mathf.Max(0f, body.extents.x - r0), axis.z) + flat * (body.extents.x * 0.35f);
                 }
-                var rot = Quaternion.FromToRotation(out0, dir) * rot0;
-                AddPart(t, "Spike", Object.Instantiate(spike.sharedMesh), mats, toLocal * Matrix4x4.TRS(pos, rot, scale));
+                places.Add((pos, Quaternion.FromToRotation(out0, dir) * rot0));
             }
         }
     }
@@ -327,6 +351,7 @@ namespace SuddenMageEncounter
             // (held: it's in the hands, wherever the animation has them: see SpellPlans.PotPoint)
             transform.SetPositionAndRotation(pos, rot);
             float size = _fx.phase == WorldNet.PotHeld && holder != null ? SpellPlans.BodyGrow(holder) * SpellPlans.SmallScale(holder) : 1f;
+            if (_fx.kind == SpellPlans.PotPine) size *= SpellPlans.PinePotScale(t); // (popped: the pot and tree grow huge together)
             transform.localScale = Vector3.one * size;
 
             // phasing in, and out at the end
@@ -339,10 +364,13 @@ namespace SuddenMageEncounter
             // the plant grows up out of the pot
             float g = Mathf.Clamp01((t - SpellPlans.PotAppear * 0.5f) / SpellPlans.PotGrow);
             g = 1f - (1f - g) * (1f - g) * (1f - g);
-            _plant.localScale = Vector3.one * Mathf.Max(0.001f, g * (1f + 0.12f * Mathf.Sin(g * Mathf.PI)));
+            float big = _fx.kind == SpellPlans.PotPine ? SpellPlans.PineSize(t) : 1f; // (the Pine Tree grows on, then pops)
+            _plant.localScale = Vector3.one * Mathf.Max(0.001f, g * (1f + 0.12f * Mathf.Sin(g * Mathf.PI)) * big);
             // the stem sways gently (the cactus barely)
-            float sway = _fx.kind == SpellPlans.PotCactus ? 1.2f : 4.5f;
+            float sway = _fx.kind == SpellPlans.PotCactus ? 1.2f : _fx.kind == SpellPlans.PotPine ? 2f : 4.5f;
             _plant.localRotation = Quaternion.Euler(Mathf.Sin(t * 2.3f) * sway, Mathf.Sin(t * 1.1f) * sway * 0.6f, Mathf.Sin(t * 1.7f + 1f) * sway * 0.8f);
+            _plant.localPosition = _plantAt;
+            if (_fx.kind == SpellPlans.PotPine) Pine(t);
 
             // the Sunflower: brighter and brighter, then the beam
             float glow = 0f;
@@ -372,6 +400,37 @@ namespace SuddenMageEncounter
                 r.SetPropertyBlock(_mpb);
             }
         }
+
+        bool _popped;
+
+        /// <summary>The Pine Tree: shaking harder and harder before it pops (jolting about its base), then the pop itself.</summary>
+        void Pine(float t)
+        {
+            float k = SpellPlans.PineShaking(t);
+            if (k > 0f)
+            {
+                // fast random jolts (not a smooth wobble): violent, as the card says
+                float a = 14f * k * k;
+                _plant.localRotation *= Quaternion.Euler(Random.Range(-a, a), Random.Range(-a * 0.5f, a * 0.5f), Random.Range(-a, a));
+                _plant.localPosition = _plantAt + new Vector3(Random.Range(-1f, 1f), 0f, Random.Range(-1f, 1f)) * (0.03f * k);
+            }
+            if (_popped || t < SpellPlans.PineBurstAt || _fx.ended >= 0) return;
+            _popped = true;
+            Vector3 root = _plant.position, up = _plant.up;
+            var b = PotModel.PlantBounds(SpellPlans.PotPine);
+            float reach = Mathf.Max(b.extents.x, b.extents.z) * SpellPlans.PineBig;
+            // a burst at its foot as wide as the big tree's lowest branches, a ring along the ground, a big jolt
+            EnergyBurst.Create(root + up * (b.size.y * SpellPlans.PineBig * 0.25f), new EnergyBurst.Settings
+            {
+                flashSize = reach, flashTime = 0.14f, sparkCount = 18, sparkSize = 0.35f,
+                sparkSpeed = new Vector2(6f, 13f), sparkLife = 0.35f, colour = PineGreen,
+            });
+            Ripple.Create(root + Vector3.up * 0.05f, 0.4f, reach, 0.35f, 0.1f);
+            CameraRig.ShakeFrom(root, 0.7f, 0.35f);
+        }
+
+        /// <summary>The pine's burst: a bright needle green.</summary>
+        static readonly Color PineGreen = new(0.5f, 3.2f, 0.9f, 1f);
 
         /// <summary>Someone is inside this fly trap right now.</summary>
         bool Eating(double now)

@@ -22,6 +22,7 @@ namespace SuddenMageEncounter
             public Vector3 lastPos;
             public Rigidbody body; public double nextMove; // thrown: the server's physics body
             public bool ate; public Combatant caught; public double caughtUntil;
+            public bool popped; public double nextSmash; // (the Pine Tree: grown big; when it may next break ground)
             public readonly Dictionary<Combatant, double> pricked = new();
             public readonly Dictionary<Combatant, float> owed = new();
             public readonly Dictionary<Combatant, double> refused = new();
@@ -67,17 +68,19 @@ namespace SuddenMageEncounter
                 if (p.caster == pc || net != null && net.Pots.TryGetValue(p.id, out var fx) && inside(WorldNet.PotPosition(fx, WorldNet.Now))) EndPot(p);
         }
 
-        /// <summary>The owner pressed the Fly Trap again: the pot is thrown (with whoever is in it).</summary>
-        static void ThrowPot(PlayerController pc)
+        /// <summary>The owner pressed the Fly Trap (or Pine Tree) again: the pot is thrown (with whoever is in it).</summary>
+        static void ThrowPot(PlayerController pc, byte kind)
         {
-            var p = PotsS.Find(x => x.caster == pc && x.phase == WorldNet.PotHeld && x.kind == SpellPlans.PotFlyTrap);
+            var p = PotsS.Find(x => x.caster == pc && x.phase == WorldNet.PotHeld && x.kind == kind);
             var net = WorldNet.Instance;
             if (p == null || net == null || !net.Pots.TryGetValue(p.id, out var fx)) return;
             double now = WorldNet.Now;
             // thrown along the aim, on top of how the caster was already moving; a little end-over-end turn
-            Vector3 vel = ViewDir(pc) * SpellPlans.TrapThrowSpeed + Vector3.up * SpellPlans.TrapThrowUp + pc.ViewVelocity;
+            bool pine = kind == SpellPlans.PotPine;
+            Vector3 vel = ViewDir(pc) * (pine ? SpellPlans.PineThrowSpeed : SpellPlans.TrapThrowSpeed) + Vector3.up * (pine ? SpellPlans.PineThrowUp : SpellPlans.TrapThrowUp) + pc.ViewVelocity;
             Vector3 right = Quaternion.Euler(0f, pc.ViewYaw, 0f) * Vector3.right;
             StartBody(p, fx, now, vel, right * 6f + Random.insideUnitSphere * 1.5f);
+            if (pine) return; // (it still grows and pops when it was going to)
             p.until = now + SpellPlans.TrapFlight;
             if (p.caught != null && p.caught.IsSpawned)
             {
@@ -120,6 +123,7 @@ namespace SuddenMageEncounter
             if (p.caught != null) foreach (var c in p.caught.GetComponentsInChildren<Collider>()) Physics.IgnoreCollision(box, c);
             p.body = rb;
             p.nextMove = now;
+            if (p.kind == SpellPlans.PotPine) PineBody(p, rb);
         }
 
         /// <summary>The plant's head right now (a thrown or dropped pot: where its physics body really is).</summary>
@@ -155,6 +159,7 @@ namespace SuddenMageEncounter
                 {
                     case SpellPlans.PotSunflower: FlowerTick(p, fx, now, dt, t); break;
                     case SpellPlans.PotCactus: CactusTick(p, fx, now); break;
+                    case SpellPlans.PotPine: PineTick(p, fx, now, t); break;
                     default: TrapTick(p, fx, now); break;
                 }
             }
@@ -169,12 +174,13 @@ namespace SuddenMageEncounter
             }
         }
 
-        /// <summary>Ragdolled or dead while holding it: a cactus is put down; the others are gone.</summary>
+        /// <summary>Ragdolled or dead while holding it: a cactus or pine tree is dropped; the others are gone.</summary>
         static void LetGoOfPot(PotState p, double now)
         {
             var net = WorldNet.Instance;
-            if (p.kind == SpellPlans.PotCactus && now - p.start >= SpellPlans.PotGrow && net != null && net.Pots.TryGetValue(p.id, out var fx))
-                DropPot(p, fx, now, SpellPlans.CactusGround);
+            bool drops = p.kind == SpellPlans.PotCactus || p.kind == SpellPlans.PotPine;
+            if (drops && now - p.start >= SpellPlans.PotGrow && net != null && net.Pots.TryGetValue(p.id, out var fx))
+                DropPot(p, fx, now, p.kind == SpellPlans.PotPine ? (float)(p.until - now) : SpellPlans.CactusGround);
             else EndPot(p);
         }
 

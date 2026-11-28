@@ -107,6 +107,68 @@ namespace SuddenMageEncounter
 
         /// <summary>How far inside the opposite side a body comes back in (m).</summary>
         const float Inset = 0.3f;
+
+        /// <summary>How many times one projectile wraps before it's let go (else a rock could fall round forever).</summary>
+        public const int ShotWraps = 3;
+
+        /// <summary>
+        /// A projectile that moved from <paramref name="a"/> to <paramref name="b"/> and went out through a face of the
+        /// area (a side, the top or the bottom): where it is now, the same distance in past the opposite face (still
+        /// moving the same way). Only going out counts, not coming in from outside (a meteor from high above).
+        /// </summary>
+        public static bool WrapShot(Vector3 a, Vector3 b, out Vector3 to)
+        {
+            to = b;
+            var s = Near(b);
+            if (s == null) return false;
+            Vector3 o = s.Origin, la = a - o, lb = b - o;
+            bool moved = false;
+            if (!s.Unset)
+            {
+                float hx = s.size.x * 0.5f, hz = s.size.y * 0.5f;
+                if (Mathf.Abs(la.x) <= hx && Mathf.Abs(lb.x) > hx) { lb.x -= Mathf.Sign(lb.x) * s.size.x; moved = true; }
+                if (Mathf.Abs(la.z) <= hz && Mathf.Abs(lb.z) > hz) { lb.z -= Mathf.Sign(lb.z) * s.size.y; moved = true; }
+            }
+            float h = s.top - s.bottom;
+            if (h > 1f)
+            {
+                if (la.y >= s.bottom && lb.y < s.bottom) { lb.y += h; moved = true; }
+                else if (la.y <= s.top && lb.y > s.top) { lb.y -= h; moved = true; }
+            }
+            to = o + lb;
+            return moved;
+        }
+
+        /// <summary>
+        /// A straight shot from <paramref name="a"/> along <paramref name="dir"/>: if it goes out through a face of the
+        /// area within <paramref name="len"/>, how far along that is and where it comes back in at the opposite face.
+        /// </summary>
+        public static bool ShotExit(Vector3 a, Vector3 dir, float len, out float at, out Vector3 enter)
+        {
+            at = len;
+            enter = default;
+            var s = Near(a);
+            if (s == null) return false;
+            Vector3 l = a - s.Origin, shift = default;
+            bool found = false;
+            if (!s.Unset)
+            {
+                Face(l.x, dir.x, -s.size.x * 0.5f, s.size.x * 0.5f, s.size.x, Vector3.right, ref at, ref shift, ref found);
+                Face(l.z, dir.z, -s.size.y * 0.5f, s.size.y * 0.5f, s.size.y, Vector3.forward, ref at, ref shift, ref found);
+            }
+            if (s.top - s.bottom > 1f) Face(l.y, dir.y, s.bottom, s.top, s.top - s.bottom, Vector3.up, ref at, ref shift, ref found);
+            if (!found) return false;
+            enter = a + dir * at + shift + dir * 0.02f; // (a hair in, so the next stretch starts inside)
+            return true;
+        }
+
+        static void Face(float p, float d, float lo, float hi, float span, Vector3 axis, ref float at, ref Vector3 shift, ref bool found)
+        {
+            if (p < lo || p > hi) return; // started outside on this axis: not going out through it
+            float t;
+            if (d > 1e-5f) { t = (hi - p) / d; if (t < at) { at = Mathf.Max(0f, t); shift = -axis * span; found = true; } }
+            else if (d < -1e-5f) { t = (lo - p) / d; if (t < at) { at = Mathf.Max(0f, t); shift = axis * span; found = true; } }
+        }
         /// <summary>The Sky Wrap over <paramref name="p"/> (in its arena or practice chamber), if any.</summary>
         public static SkyWrap At(Vector3 p)
         {

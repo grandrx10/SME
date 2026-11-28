@@ -205,7 +205,8 @@ namespace SuddenMageEncounter
         {
             if (pc == null) return;
             if (card == CardId.GrappleHook) foreach (var h in HooksS.ToArray()) if (h.caster == pc) EndHook(h);
-            if (card == CardId.FlyTrap) ThrowPot(pc);
+            if (card == CardId.FlyTrap) ThrowPot(pc, SpellPlans.PotFlyTrap);
+            if (card == CardId.PineTree) ThrowPot(pc, SpellPlans.PotPine);
             if (card == CardId.Submerge) CancelSubmerge(pc);
             if (card == CardId.TheHangedMan) EndHang(pc);
         }

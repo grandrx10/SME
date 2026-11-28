@@ -512,11 +512,13 @@ namespace SuddenMageEncounter
         const float InkRim = 0.07f;
         const int RingBits = 14;
 
-        public static void Create(List<Vector3> points)
+        /// <param name="jumps">Bit i set: points i to i+1 is a wrap round Skyland (nothing drawn between).</param>
+        public static void Create(List<Vector3> points, int jumps = 0)
         {
             var b = new GameObject("SebastianShot") { layer = Layers.Fx }.AddComponent<SebastianBeam>();
             for (int i = 0; i + 1 < points.Count; i++)
             {
+                if ((jumps >> i & 1) != 0) continue;
                 Vector3 d = points[i + 1] - points[i];
                 float len = d.magnitude;
                 if (len < 0.02f) continue;

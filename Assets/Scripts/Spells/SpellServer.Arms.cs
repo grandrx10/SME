@@ -55,6 +55,7 @@ namespace SuddenMageEncounter
             HeavenCutsS.Clear();
             ParriesS.Clear();
             ParryDashesS.Clear();
+            RangsS.Clear();
         }
 
         static bool CastArms(PlayerController caster, CardId card, Vector3 target, float yaw, ulong extra, double now)
@@ -129,6 +130,7 @@ namespace SuddenMageEncounter
             WolfsS.RemoveAll(w => w.caster == pc);
             HeavenCastsS.RemoveAll(h => h.caster == pc);
             ParriesS.RemoveAll(p => p.caster == pc);
+            InterruptRang(pc, knocked);
         }
 
         /// <summary>A practice chamber is being reset: what its player had going stops, and bullets in it are dropped.</summary>
@@ -144,6 +146,7 @@ namespace SuddenMageEncounter
                 ParryDashesS.RemoveAll(p => p.caster == pc);
             }
             WolfBulletsS.RemoveAll(b => b.by == pc || inside(b.lastPos));
+            ClearRang(pc, inside);
         }
 
         static void TickArms(double now)
@@ -154,6 +157,7 @@ namespace SuddenMageEncounter
             TickHeavenCasts(now);
             TickHeavenCuts(now);
             TickParries(now);
+            TickRangs(now, Time.deltaTime);
         }
 
         // ------------------------------------------------------------------ Hammer Spin

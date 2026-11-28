@@ -397,7 +397,7 @@ namespace SuddenMageEncounter
         public const float MissileLockTime = 0.12f, MissileLockTurn = 1200f;
         public const float MissileTrackTurn = 90f;
         public const float MissileScatterJitter = 30f, MissileScatterLift = 25f;
-        public const float MissileDamage = 5f, MissileRadius = 0.18f;
+        public const float MissileDamage = 4f, MissileRadius = 0.18f;
         public const int MissileCount = 4;
         /// <summary>Each missile goes off in a tiny explosion that blows out voxels (radius in quarter voxels: 1.75 voxels).</summary>
         public const int MissileBlast4 = 7;
@@ -430,7 +430,7 @@ namespace SuddenMageEncounter
         public const float BarrierDamage = 10f;
 
         // ---------------------------------------------------------------- Burn (the Flame cards' damage over time)
-        public const float BurnDamage = 15f, BurnTime = 5f; // each application: 15 over 5 s; they stack
+        public const float BurnDamage = 12f, BurnTime = 5f; // each application: 12 over 5 s; they stack
 
         // ---------------------------------------------------------------- Ball of Flame
         public const float FireballCharge = 0.5f, FireballSpeed = 42f, FireballRadius = 0.35f;
@@ -1185,7 +1185,7 @@ namespace SuddenMageEncounter
         public const float SeveranceArm = 0.15f;        // rushing this long before someone in reach sets it off
         public const float SeveranceSlashAt = 0.08f;    // after the trigger, the blade is in front: the cut leaves it
         public const float SeveranceDamage = 5f;        // per strike (3 strikes)
-        public const float SeveranceRange = 10f;        // the cut flies this far, then fades
+        public const float SeveranceRange = 5f;         // the cut flies this far, then fades
         public const float SeveranceSpeed = 30f;
         public const float SeveranceHalfWidth = 3.4f;   // the crescent, tip to tip / 2 (6.8 m across)
         public const float SeveranceBow = 1.4f;         // how far its tips trail behind its middle (scaled with the width: same curve)

@@ -620,6 +620,15 @@ namespace SuddenMageEncounter
             new(SpellPlans.HexCast + 0.08f, new(0.26f, -0.24f, -0.04f), new(0f, -1f, 0.2f), new(-0.06f, 0.16f, 0.74f), Fwd, 22f, 0.02f, 9f),
         };
 
+        // ---- Hammerang: the left hand held out, drawn back a little... then flung forward (the hammer leaves it) ----
+        static readonly Key[] RangThrowKeys =
+        {
+            new(0.00f, new(0.22f, -0.3f, 0.1f), new(0f, -1f, 0.3f), new(-0.22f, 0f, 0.34f), Fwd),
+            new(0.12f, new(0.24f, -0.26f, 0.08f), new(0f, -1f, 0.3f), new(-0.14f, 0.16f, 0.6f), Fwd, 10f, 0f, 3f),
+            new(SpellPlans.RangCast - 0.04f, new(0.24f, -0.26f, 0.08f), new(0f, -1f, 0.3f), new(-0.22f, 0.24f, 0.22f), new(0f, 0.5f, 1f), -8f, 0f, -4f),
+            new(SpellPlans.RangCast + 0.06f, new(0.26f, -0.24f, -0.04f), new(0f, -1f, 0.2f), new(-0.06f, 0.12f, 0.78f), Fwd, 24f, 0.02f, 10f),
+        };
+
         // ---- the arcane shield: the right hand held out (turned up and down to the aim in LateUpdate) ----
         static readonly Key[] ShieldKeys =
         {
@@ -718,6 +727,7 @@ namespace SuddenMageEncounter
             SpellPose.ParryGuard => (ParryGuardKeys, SpellPlans.ParryWindow - 0.15f, SpellPlans.ParryWindow, false),
             SpellPose.ParryStab => (ParryStabKeys, 0.3f, 0.5f, false),
             SpellPose.HexPoint => (HexPointKeys, SpellPlans.HexCast + 0.2f, SpellPlans.HexCast + 0.4f, false),
+            SpellPose.RangThrow => (RangThrowKeys, SpellPlans.RangCast + 0.2f, SpellPlans.RangCast + 0.4f, false),
             SpellPose.Flex => (FlexKeys, SpellPlans.StrengthFlex + 0.1f, SpellPlans.StrengthFlex + 0.3f, true),
             SpellPose.BreathLean => (BreathLeanKeys, SpellPlans.BreathLean + SpellPlans.IceBreathTime, SpellPlans.BreathLean + SpellPlans.IceBreathTime + 0.2f, false),
             _ => (null, 0f, 0f, false),

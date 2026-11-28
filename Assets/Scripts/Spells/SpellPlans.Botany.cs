@@ -9,7 +9,7 @@ namespace SuddenMageEncounter
     public static partial class SpellPlans
     {
         // ---------------------------------------------------------------- the pot
-        public const byte PotSunflower = 1, PotCactus = 2, PotFlyTrap = 3;
+        public const byte PotSunflower = 1, PotCactus = 2, PotFlyTrap = 3, PotPine = 5; // (4 is Smallify Hex's)
         public const float PotAppear = 0.2f;                 // the pot phases into the hands (dithers in)...
         public const float PotGrow = 0.3f;                   // ...and the plant grows up out of it
         public const float PotVanish = 0.25f;                // gone: dithered away
@@ -24,6 +24,7 @@ namespace SuddenMageEncounter
             CardId.Sunflower => PotSunflower,
             CardId.Cactus => PotCactus,
             CardId.FlyTrap => PotFlyTrap,
+            CardId.PineTree => PotPine,
             _ => 0,
         };
 
@@ -106,11 +107,64 @@ namespace SuddenMageEncounter
         public const float TrapThrowSpeed = 25.5f, TrapThrowUp = 4f;
         public const float TrapSpit = 6f, TrapSpitUp = 5f, TrapSpitRagdoll = 1f; // let go of: spat out
 
+        // ---------------------------------------------------------------- Pine Tree
+        public const float PineGrow = 6f;                    // grown, the sapling grows slowly this long...
+        public const float PineShake = 1f;                   // ...shaking hard over the last of it...
+        public const float PineBig = 6f;                     // ...then it's suddenly this many times its size (the pot grows too)
+        public const float PineSaplingGrow = 1.35f;          // (the slow growth, up to this size, before it shakes)
+        public const float PinePop = 0.12f;                  // the sudden growth takes this long (overshooting a little)
+        public const float PineStay = 2.5f;                  // big, it stands this long, then dithers away
+        public const float PineDamage = 30f;                 // anyone in the big tree when it pops (the caster too)
+        public const float PineKnock = 13f, PineKnockUp = 9f, PineRagdoll = 1.5f;
+        public const float PineThrowSpeed = 20f, PineThrowUp = 5f;
+        /// <summary>When it pops, counted from the cast.</summary>
+        public const float PineBurstAt = PotGrow + PineGrow;
+
+        /// <summary>
+        /// How big the tree is against its pot at <paramref name="t"/> s from the cast: 1 (its model's size) growing slowly
+        /// to <see cref="PineSaplingGrow"/> before it pops. (The pop itself grows the pot and tree together: <see cref="PinePotScale"/>.)
+        /// </summary>
+        public static float PineSize(float t)
+        {
+            float g = t - PotGrow;
+            return g <= 0f ? 1f : Mathf.Lerp(1f, PineSaplingGrow, g / PineGrow);
+        }
+
+        /// <summary>The pot (and the tree in it) when it's popped: the tree is then <see cref="PineBig"/> times its model's size.</summary>
+        public const float PinePotBig = PineBig / PineSaplingGrow;
+
+        /// <summary>
+        /// How big the whole pot (and the tree in it) is at <paramref name="t"/> s from the cast: 1, then on the pop
+        /// shooting out to <see cref="PinePotBig"/> (a little past it, settling back).
+        /// </summary>
+        public static float PinePotScale(float t)
+        {
+            float u = Mathf.Clamp01((t - PineBurstAt) / PinePop);
+            if (u <= 0f) return 1f;
+            float over = Mathf.Sin(u * Mathf.PI) * 0.12f;
+            return Mathf.Lerp(1f, PinePotBig, 1f - (1f - u) * (1f - u)) + over * PinePotBig;
+        }
+
+        // thrown, it breaks the ground it hits (a bite of it, not all the way through) and bounces off
+        public const float PineSmash = 0.5f;                 // the bite's radius: this times how big the pot is now...
+        public const float PineSmashMax = 2.5f;              // ...up to this
+        public const float PineSmashSpeed = 4f;              // hitting slower than this breaks nothing
+        public const float PineSmashEvery = 0.15f;           // (at most this often)
+        public const float PineBounce = 0.5f;                // how much of its speed it bounces back with
+
+        /// <summary>How hard it shakes at <paramref name="t"/> s from the cast: 0, building to 1 just before it pops.</summary>
+        public static float PineShaking(float t)
+        {
+            float g = t - PotGrow - (PineGrow - PineShake);
+            return g <= 0f || t >= PineBurstAt ? 0f : Mathf.Clamp01(g / PineShake);
+        }
+
         /// <summary>When a pot of this kind (not thrown) is over, counted from the cast.</summary>
         public static float PotHeldFor(byte kind) => kind switch
         {
             PotSunflower => FlowerLaserEnd,
             PotCactus => PotGrow + CactusTime,
+            PotPine => PineBurstAt + PineStay,
             _ => PotGrow + TrapTime,
         };
 

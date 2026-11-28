@@ -101,6 +101,7 @@ namespace SuddenMageEncounter
         HeavenSlash = 90,    // ...the cut
         ParryGuard = 91,     // Parry: the sword held point down in front, on guard
         ParryStab = 92,      // ...deflected: dashing in, a straight stab
+        RangThrow = 93,      // Hammerang: the left hand held out... then flung forward, letting the hammer go
     }
 
     /// <summary>Owner-authoritative movement snapshot replicated to everyone.</summary>

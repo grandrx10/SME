@@ -1129,7 +1129,7 @@ Transform:
   m_GameObject: {fileID: 739091983741995118}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: 0.70710576, z: -0, w: 0.70710784}
-  m_LocalPosition: {x: -86.097015, y: 0, z: -0.00019073486}
+  m_LocalPosition: {x: -88.9, y: 0, z: -0.00019073486}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -5948,7 +5948,7 @@ Transform:
   m_GameObject: {fileID: 3143002168203668111}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: 0.776016, z: -0, w: -0.6307132}
-  m_LocalPosition: {x: -48.749462, y: 34.5, z: 20.165733}
+  m_LocalPosition: {x: -45.97, y: 31.13, z: 24.83}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -25828,7 +25828,7 @@ Transform:
   m_GameObject: {fileID: 8172879811490662211}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -46, y: 30, z: 24}
+  m_LocalPosition: {x: -45.1, y: 30, z: 24}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -25924,10 +25924,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0d752396dc5542bdb0070c721ab52975, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SuddenMageEncounter.SkyWrap
-  size: {x: 84.73724, y: 69.187836}
+  size: {x: 79.36635, y: 69.18784}
   top: 57.99195
   bottom: -47.005928
-  mapCentre: {x: -1.709835, y: -7.994073, z: 0.53499985}
+  bottomWindow: 1
+  mapCentre: {x: -0.39483643, y: -7.994073, z: 0.53499985}
 --- !u!114 &1590175390279491948
 MonoBehaviour:
   m_ObjectHideFlags: 0

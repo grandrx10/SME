@@ -363,6 +363,7 @@ namespace SuddenMageEncounter
                 SpellPose.BombPlace or SpellPose.BombToss or SpellPose.LeftArmUp or SpellPose.PotThrow => 0.6f,
                 SpellPose.NecroRaise => SpellPlans.NecroCharge + 0.42f,
                 SpellPose.HexPoint => SpellPlans.HexCast + 0.4f,
+                SpellPose.RangThrow => SpellPlans.RangCast + 0.4f,
                 SpellPose.GrapplePoint => OwnHook() != null ? float.MaxValue : 0.6f, // held while the hook is out
                 SpellPose.PotHold => OwnPot() != null || t < 0.4f ? float.MaxValue : 0f, // held while the pot is
                 SpellPose.WindShot => 0.35f, SpellPose.CloudStep => 0.4f,
@@ -440,9 +441,11 @@ namespace SuddenMageEncounter
             var pot = OwnPot();
             if (pot != null)
             {
-                if (info.id == CardId.FlyTrap && pot.kind == SpellPlans.PotFlyTrap && WorldNet.Now - pot.start > 0.15)
+                bool trap = info.id == CardId.FlyTrap && pot.kind == SpellPlans.PotFlyTrap && WorldNet.Now - pot.start > 0.15;
+                bool pine = info.id == CardId.PineTree && pot.kind == SpellPlans.PotPine && WorldNet.Now - pot.start > SpellPlans.PotGrow;
+                if (trap || pine)
                 {
-                    _pc.RequestCardCancel(CardId.FlyTrap);
+                    _pc.RequestCardCancel(info.id);
                     SetPose(SpellPose.PotThrow);
                 }
                 else Denied?.Invoke(slot);
@@ -873,7 +876,11 @@ namespace SuddenMageEncounter
                 case CardId.Sunflower:
                 case CardId.Cactus:
                 case CardId.FlyTrap:
+                case CardId.PineTree:
                     SetPose(SpellPose.PotHold); // (held until the pot's gone: see the gestures below)
+                    break;
+                case CardId.Hammerang:
+                    SetPose(SpellPose.RangThrow); // the left hand out... flung forward
                     break;
                 case CardId.Death:
                     _pc.Motor.Siphon(SpellPlans.DeathDashTime); // Mana Siphon's charge, twice as long

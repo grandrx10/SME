@@ -22,43 +22,10 @@ namespace SuddenMageEncounter
         {
             new()
             {
-                title = "Weapons",
-                notes = new Note[]
-                {
-                    new("Blade", Cards.ElementColor(Element.Blade), "Severance, Flowing Cut and the new Heavenly Slash and Parry."),
-                    new("Gun", Cards.ElementColor(Element.Gun), "Rachmaninoff, Sebastian, Grapple Hook and the new Wolfgang."),
-                    new("Hammer", Cards.ElementColor(Element.Hammer), "Rising Hammer, Descending Hammer and the new Hammer Spin."),
-                    new(CardId.HammerSpin, "hold to wind up (at least 0.5 s): 10 m, +10 m a second, up to 40 m. Spin through everything in the way: 25 damage. Nothing knocks you down meanwhile."),
-                    new(CardId.Wolfgang, "two pistols, 20 shots each: 2 damage a bullet, each one knocks back. Your body stays facing where you cast it."),
-                    new(CardId.HeavenlySlash, "leap up, pose for 1 s, then a 30 m cut along your aim at a random angle: 4 strikes of 10."),
-                    new(CardId.Parry, "on guard for 1.5 s: the first blow (not fire) is turned aside, and you dash back and stab whoever dealt it for 15."),
-                    new(CardId.SpeedDemon, "passive: faster the less health you have (up to 1.8x near death), a wind trail under 30%. Your shield has 10 less health."),
-                    new(CardId.FlyTrap, "is now Rare."),
-                    new(CardId.SmallifyHex, "being knocked down while small deals 5 damage."),
-                },
-            },
-            new()
-            {
-                title = "New cards",
-                notes = new Note[]
-                {
-                    new("Botany", Cards.ElementColor(Element.Botany), "a new element: potted plants held in both hands."),
-                    new(CardId.Sunflower, "glows for 3 s, then fires a 25 m beam at whatever you aim at for 3 s."),
-                    new(CardId.Cactus, "pricks enemies who touch it or you. You run 1.5x faster while holding it."),
-                    new(CardId.FlyTrap, "eats the first enemy it touches. Cast again to throw it, with them inside."),
-                    new(CardId.SmallifyHex, "stay near your target to shrink them for 5 s: half size, half speed, and anyone walking into them knocks them over."),
-                    new(CardId.CompressedShot, "hold to charge (up to 1.5 s) a bolt of air: 15 to 25 damage, 1.5x on the head, breaks through up to 5 layers of ground."),
-                    new(CardId.Ephemerate, "vanish for 0.75 s and fly where you aim, through walls. Come back inside the ground and it hurts."),
-                    new(CardId.CloudStep, "a jump three times as high, twice in the air before you land."),
-                    new(CardId.Submerge, "hold to dive head first into a pool (up to 2 s): untouchable, 1.5x as fast, healing 5 a second. Let go to burst out for 20 damage."),
-                    new(CardId.BubbleBomb, "a bubble mine that drifts 3 m. Live after 1 s: enemies within 2 m set it off for 15 damage. It also puts out fire. Pops harmlessly after 5 s."),
-                },
-            },
-            new()
-            {
                 title = "Balance update",
                 notes = new Note[]
                 {
+                    new("Burn", Cards.ElementColor(Element.Flame), "each burn stack deals 12 damage (was 15)."),
                     new(CardId.Death, "was reworked."),
                     new(CardId.TheHangedMan, "was reworked."),
                     new(CardId.ExplosiveEscape, "was reworked."),
@@ -74,10 +41,10 @@ namespace SuddenMageEncounter
                     new(CardId.TheEmpress, "enemies inside her circle can't use their shield."),
                     new(CardId.ManaSiphon, "dash distance halved (22 m to 11 m)."),
                     new(CardId.ArcaneSwiftness, "can't be cast again until 1 s after it ends."),
-                    new(CardId.ManaMissiles, "costs 3 (was 4)."),
+                    new(CardId.ManaMissiles, "costs 3 (was 4). Each missile deals 4 damage (was 5)."),
                     new(CardId.MagicalBarrier, "costs 3 (was 4)."),
                     new(CardId.WarpSelf, "range 16.5 m (was 15 m)."),
-                    new(CardId.Severance, "dash distance is a quarter of what it was."),
+                    new(CardId.Severance, "dash distance is a quarter of what it was. Its cut flies 5 m (was 10 m)."),
                     new(CardId.Sebastian, "range 75 m (was 25 m). Costs 7 (was 8)."),
                     new(CardId.Rachmaninoff, "pellets are twice as big."),
                     new(CardId.DescendingHammer, "costs 6 (was 7)."),

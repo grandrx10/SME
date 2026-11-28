@@ -53,5 +53,6 @@ Server-authoritative: the server decides, peers apply the same ops in order; deb
 
 - `powershell -File Tools/check.ps1`: offline compile (the editor is usually open). Run after changes. It can't run gameplay: say briefly what to test in Unity.
 - `powershell -File Tools/cardart.ps1 -Pdf <pdf> -Cards Id1,Id2` (or `-Png <file>`): sketches → `Assets/Resources/CardArt`, metas included.
+- `powershell -File Tools/release.ps1 [-DryRun] [-Notes "..."]`: build on a project copy (editor can stay open) and publish the next `vN` GitHub release; players run `Launcher/SMELauncher.cs` (in each release), which auto-updates. Bump its `LauncherVersion` when you change it. Lobbies are per version (`GameVersion`).
 - No Python or .NET SDK here; Unity's bundled `dotnet` + `csc` work (see `check.ps1`).
 - Git: `C:\Program Files\Git\cmd\git.exe`, repo https://github.com/grandrx10/SME. To push: `$env:GCM_INTERACTIVE="always"; $env:GIT_TERMINAL_PROMPT="1"` first. `Assets/StreamingAssets/Tools/*.exe` are in Git LFS.

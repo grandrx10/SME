@@ -125,7 +125,6 @@ namespace SuddenMageEncounter
         readonly List<(Transform t, float age, float life, Vector3 v)> _bubbles = new();
         float _bubbleOwed, _poolSize, _spin, _nextRipple, _nextDrip, _flipFor, _ballGrow;
         bool _subAir;
-        Vector3 _ballAt;
 
         void Awake() => _c = GetComponent<Combatant>();
 
@@ -244,18 +243,21 @@ namespace SuddenMageEncounter
         {
             bool diving = st.SubUntil > now && now < st.SubFrom;
             bool under = st.Under(now) && _c.IsAlive;
-            bool flag = (_c.ViewFlags & NetState.Grounded) != 0;
-            // pool on the ground, ball in the air: the grounded flag flickers on steps and little hops, so only switch
-            // once it's settled (else the two swap back and forth every few frames)
-            if (!under) { _subAir = !flag; _flipFor = 0f; }
-            else if (flag == _subAir)
+            Vector3 feet = _c.FeetPosition;
+            // pool on the ground, ball in the air. The grounded flag flickers on voxel steps and little hops (the ball
+            // then grew and shrank over and over), so go by how high the feet really are over the ground, with a gap
+            // between the heights that switch it each way, and only once that's held for a moment.
+            float drop = Physics.Raycast(feet + Vector3.up * 0.3f, Vector3.down, out var gh, 30f, Layers.EnvironmentMask, QueryTriggerInteraction.Ignore)
+                ? gh.distance - 0.3f : 999f;
+            bool high = _subAir ? drop > 0.6f : drop > 1.4f;
+            if (!under) { _subAir = drop > 1f; _flipFor = 0f; }
+            else if (high != _subAir)
             {
                 _flipFor += Time.deltaTime;
-                if (_flipFor > (_subAir ? 0.08f : 0.15f)) { _subAir = !_subAir; _flipFor = 0f; }
+                if (_flipFor > (_subAir ? 0.2f : 0.12f)) { _subAir = high; _flipFor = 0f; }
             }
             else _flipFor = 0f;
             bool grounded = !_subAir;
-            Vector3 feet = _c.FeetPosition;
             // in: a splash, droplets thrown up, a ring of water
             if (under && _subIn != st.SubFrom)
             {
@@ -279,21 +281,20 @@ namespace SuddenMageEncounter
             _ballGrow = Mathf.MoveTowards(_ballGrow, under && !grounded ? 1f : 0f, Time.deltaTime / 0.12f);
             if (_ballGrow > 0f)
             {
-                Vector3 body = _c.transform.position;
+                // a child of the body, at its middle: it moves exactly as the body (and so the camera) does, whatever
+                // order things update in. (Eased after the body before, it swam about on screen and seemed to throb.)
+                var root = _c.transform;
                 if (_ball == null)
                 {
-                    _ball = Glow.Piece(null, Glow.SphereMesh, Water, "WaterBall");
-                    _ballCore = Glow.Piece(null, Glow.SphereMesh, Foam, "WaterBallCore", false);
-                    _ballAt = body;
+                    _ball = Glow.Piece(root, Glow.SphereMesh, Water, "WaterBall");
+                    _ballCore = Glow.Piece(root, Glow.SphereMesh, Foam, "WaterBallCore", false);
                 }
-                // follows the body smoothly (its position can step a little frame to frame); a steady size (no wobble)
-                _ballAt += _c.ViewVelocity * Time.deltaTime; // (carried along first, so a fast fall doesn't leave it trailing)
-                _ballAt = (_ballAt - body).sqrMagnitude > 4f ? body : Vector3.Lerp(_ballAt, body, 1f - Mathf.Exp(-25f * Time.deltaTime));
-                _ball.position = _ballAt;
                 float g = _ballGrow * _ballGrow * (3f - 2f * _ballGrow);
-                _ball.localScale = Glow.SphereScale(SpellPlans.SubBall * g);
-                _ballCore.position = _ballAt + new Vector3(-0.12f, 0.16f, 0f) * g;
-                _ballCore.localScale = Glow.SphereScale(SpellPlans.SubBall * 0.32f * g);
+                float unit = 1f / Mathf.Max(0.0001f, root.lossyScale.x); // (world sizes, whatever the root's scale)
+                _ball.localPosition = Vector3.zero;
+                _ball.localScale = Glow.SphereScale(SpellPlans.SubBall * g) * unit;
+                _ballCore.localPosition = Quaternion.Inverse(root.rotation) * (new Vector3(-0.12f, 0.16f, 0f) * g) * unit;
+                _ballCore.localScale = Glow.SphereScale(SpellPlans.SubBall * 0.32f * g) * unit;
                 if (Time.time >= _nextDrip)
                 {
                     _nextDrip = Time.time + 0.07f;

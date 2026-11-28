@@ -113,9 +113,18 @@ namespace SuddenMageEncounter
         public static CosmeticItem Open()
         {
             if (!Wallet.Spend(Rewards.CrateCost)) return null;
+            // Never an exact copy of one you own: reroll (rarity odds kept). Only if everything near-owned, take a repeat.
             var item = Roll();
+            for (int tries = 0; tries < 500 && Owned(item); tries++) item = Roll();
             Wardrobe.Add(item);
             return item;
+        }
+
+        static bool Owned(CosmeticItem item)
+        {
+            foreach (var o in Wardrobe.Items)
+                if (o.id == item.id && o.colour == item.colour && o.size == item.size) return true;
+            return false;
         }
 
         /// <summary>What a crate might have in it (also the reel's other tiles).</summary>

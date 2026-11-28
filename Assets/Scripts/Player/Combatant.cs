@@ -22,7 +22,7 @@ namespace SuddenMageEncounter
 
         public readonly NetworkVariable<float> Health = new(100f);
         public readonly NetworkVariable<bool> Dead = new(false);
-        /// <summary>How many burns are on this body right now (each: 15 damage over 5 s; they stack). Drives the flames on it.</summary>
+        /// <summary>How many burns are on this body right now (each: SpellPlans.BurnDamage over 5 s; they stack). Drives the flames on it.</summary>
         public readonly NetworkVariable<byte> BurnStacks = new(0);
         /// <summary>The Empress domain (id) holding this body, 0 = free: can't cast, and can't leave the domain (the chains pull it back in).</summary>
         public readonly NetworkVariable<int> TrappedBy = new();
@@ -221,7 +221,7 @@ namespace SuddenMageEncounter
         readonly List<(double end, ulong attacker)> _burns = new();
         float _burnOwed;
 
-        /// <summary>Server: set alight — another 15 damage over 5 seconds, on top of any burns already going.</summary>
+        /// <summary>Server: set alight — another SpellPlans.BurnDamage over 5 seconds, on top of any burns already going.</summary>
         public void ServerBurn(ulong attacker, float share = 1f)
         {
             if (!IsServer || Dead.Value || SpellServer.Invulnerable(this)) return;

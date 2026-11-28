@@ -19,7 +19,8 @@ namespace SuddenMageEncounter
     {
         // Different from Gunbound's lobby name: this project was copied from it and may share its Unity Gaming
         // Services project, so the two games must never find each other's lobbies.
-        public const string LobbyName = "SME DEV test";
+        // The game version is in the name too, so a build only ever finds lobbies running the same version.
+        public static string LobbyName => "SME DEV test v" + GameVersion.Current;
         public const int MaxPlayers = 20;
 
         public static ISession Session { get; private set; }

@@ -27,6 +27,7 @@ namespace SuddenMageEncounter
         SmallifyHex = 70, Sunflower = 71, Cactus = 72, FlyTrap = 73,
         CompressedShot = 74, Ephemerate = 75, CloudStep = 76, Submerge = 77, BubbleBomb = 78,
         HammerSpin = 79, Wolfgang = 80, HeavenlySlash = 81, Parry = 82, SpeedDemon = 83,
+        Hammerang = 84, PineTree = 85,
     }
 
     /// <summary>Saved with cards: append new elements at the end, never reorder. (Weapon is retired: no card is one any more.)</summary>
@@ -565,6 +566,19 @@ namespace SuddenMageEncounter
                 rarity = Rarity.Common,
                 description = "Gain speed as you lose health. Lose max shield health.", castOnPress = true,
             },
+            new()
+            {
+                id = CardId.Hammerang, name = "Hammerang", element = Element.Hammer, costType = CostType.Mana, cost = 4,
+                rarity = Rarity.Rare,
+                description = "Throw out a boomeranging hammer.", castOnPress = true,
+            },
+            // Pine Tree: out of the game for now (its id and code stay). To bring it back, put this entry back in:
+            // new()
+            // {
+            //     id = CardId.PineTree, name = "Pine Tree", element = Element.Botany, costType = CostType.Mana, cost = 8,
+            //     rarity = Rarity.Epic,
+            //     description = "Summon a pine tree sapling that grows big. Cast again to throw.", castOnPress = true,
+            // },
         };
 
         /// <summary>The card that comes along with this one (None: nothing does): any card that places flame bombs brings Remote Detonation.</summary>
@@ -697,6 +711,8 @@ namespace SuddenMageEncounter
             CardId.Wolfgang => SpellPlans.WolfDraw + SpellPlans.WolfFireTime,  // drawn, then firing
             CardId.HeavenlySlash => SpellPlans.HeavenRelease + 0.2f,           // the crouch, the leap, the pose, the cut
             CardId.Parry => SpellPlans.ParryWindow,                            // on guard (cut short if it deflects)
+            CardId.Hammerang => SpellPlans.RangCast,                           // the left hand out, then the throw
+            CardId.PineTree => SpellPlans.PotGrow,                             // the pot phases in, the sapling grows (then held: no other card meanwhile)
             _ => 0.3f,
         };
 

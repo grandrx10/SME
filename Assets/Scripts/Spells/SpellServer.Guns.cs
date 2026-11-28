@@ -298,8 +298,9 @@ namespace SuddenMageEncounter
             PlayerController by = caster;
             float left = SpellPlans.SebLength;
             double now = WorldNet.Now;
+            int jumps = 0; // (bit i: points i to i+1 is a jump across Skyland, not drawn)
 
-            for (int leg = 0; leg < 4 && left > 0.1f; leg++)
+            for (int leg = 0; leg < 8 && left > 0.1f; leg++)
             {
                 ulong owner = by.NetworkObjectId;
                 float len = SpellPlans.SebastianReach(world, from, dir, left, leg == 0 ? 0.9f : 0f);
@@ -315,6 +316,9 @@ namespace SuddenMageEncounter
                     if (d < 0f || d > len) continue;
                     len = d; mirror = h; bounce = at; normal = n;
                 }
+                // Skyland: out through a side, the top or the bottom, it carries on in from the opposite one
+                bool wrap = SkyWrap.ShotExit(from, dir, len, out float exit, out var enter) && exit < len;
+                if (wrap) { len = exit; mirror = null; }
                 // someone's barrier or bubble stops it
                 for (float d = 0f; d < len; d += 0.2f)
                 {
@@ -324,6 +328,7 @@ namespace SuddenMageEncounter
                     if (bubble != null) HurtBubble(bubble, SpellPlans.SebDamage, p);
                     len = d;
                     mirror = null;
+                    wrap = false;
                     break;
                 }
 
@@ -333,6 +338,13 @@ namespace SuddenMageEncounter
                 ShotSetsOff(from, to, SpellPlans.SebRadius, true); // (it goes through the ground it breaks)
                 SpellPlans.SebastianCells(world, from, to, _sebCells);
                 left -= len;
+                if (wrap)
+                {
+                    points.Add(enter);
+                    jumps |= 1 << (points.Count - 2);
+                    from = enter;
+                    continue;
+                }
                 if (mirror == null) break;
                 WorldNet.ServerHierophantReflect(mirror.id, bounce);
                 by = mirror.caster;
@@ -340,7 +352,7 @@ namespace SuddenMageEncounter
                 from = bounce + normal * 0.05f;
                 points[points.Count - 1] = from;
             }
-            WorldNet.ServerSebastian(points, new List<Vector3Int>(_sebCells));
+            WorldNet.ServerSebastian(points, jumps, new List<Vector3Int>(_sebCells));
         }
 
         /// <summary>Everyone in one stretch of the shot (a capsule, as it's drawn), once per shot.</summary>

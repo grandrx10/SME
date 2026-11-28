@@ -63,14 +63,18 @@ namespace SuddenMageEncounter
             i.Broadcast(Finish(ref w));
         }
 
-        /// <summary>Sebastian's shot along <paramref name="points"/> (more than two: it bounced), vaporising these cells.</summary>
-        public static void ServerSebastian(List<Vector3> points, List<Vector3Int> cells)
+        /// <summary>
+        /// Sebastian's shot along <paramref name="points"/> (more than two: it bounced or wrapped round Skyland),
+        /// vaporising these cells. <paramref name="jumps"/>: bit i set, points i to i+1 is a wrap (nothing between).
+        /// </summary>
+        public static void ServerSebastian(List<Vector3> points, int jumps, List<Vector3Int> cells)
         {
             var i = Instance;
             if (i == null || !IsServer || points.Count < 2) return;
-            var w = NewOp(GunOp.Sebastian, 32 + points.Count * 12 + cells.Count * 6);
+            var w = NewOp(GunOp.Sebastian, 36 + points.Count * 12 + cells.Count * 6);
             w.WriteValueSafe((byte)points.Count);
             foreach (var p in points) w.WriteValueSafe(p);
+            w.WriteValueSafe(jumps);
             WriteCells(ref w, cells);
             i.Broadcast(Finish(ref w));
         }
@@ -151,11 +155,12 @@ namespace SuddenMageEncounter
                     r.ReadValueSafe(out byte n);
                     var points = new List<Vector3>(n);
                     for (int k = 0; k < n; k++) { r.ReadValueSafe(out Vector3 p); points.Add(p); }
+                    r.ReadValueSafe(out int jumps);
                     var cells = ReadCells(ref r);
                     world.RemoveCells(cells, removed, true, islands);
                     // erased, not broken (as Arcane Judgment), with a golden rim
                     if (removed.Count > 0 && !Debris.Suppressed) VoidRise.Spawn(world, removed, SpellPlans.SebGold);
-                    if (!Debris.Suppressed) SebastianBeam.Create(points);
+                    if (!Debris.Suppressed) SebastianBeam.Create(points, jumps);
                     return true;
                 }
                 case GunOp.Grasp:

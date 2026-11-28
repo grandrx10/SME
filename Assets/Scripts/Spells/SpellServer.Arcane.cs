@@ -215,8 +215,19 @@ namespace SuddenMageEncounter
         // A projectile counts as in when its ball touches the opening (the slab behind is too thin to fly into first),
         // and comes out the same distance in front of the other portal.
 
+        // Skyland: out through a side, the top or the bottom, it comes in at the opposite one, as through a portal
+        // (each only a few times, so nothing goes round forever).
+
         static bool RockThroughPortal(RockState rock, WorldNet.RockFx fx, Vector3 pos, double now)
         {
+            if (rock.wraps < SkyWrap.ShotWraps && SkyWrap.WrapShot(rock.lastPos, pos, out var wp))
+            {
+                rock.wraps++;
+                WorldNet.ServerRockLaunch(rock.id, wp, WorldNet.RockVelocity(fx, now));
+                rock.lastPos = wp;
+                rock.lastTime = now;
+                return true;
+            }
             if (!WorldNet.PassPortal(rock.lastPos, pos, rock.radius + 0.02f, rock.radius * 0.5f, out var a, out var b)) return false;
             Vector3 np = SpellPlans.ThroughPoint(pos, a.center, a.Rotation, b.center, b.Rotation, true);
             Vector3 nv = SpellPlans.ThroughDir(WorldNet.RockVelocity(fx, now), a.Rotation, b.Rotation);
@@ -228,6 +239,13 @@ namespace SuddenMageEncounter
 
         static bool FireballThroughPortal(FireballState f, WorldNet.FireballFx fx, Vector3 pos)
         {
+            if (f.wraps < SkyWrap.ShotWraps && SkyWrap.WrapShot(f.lastPos, pos, out var wp))
+            {
+                f.wraps++;
+                WorldNet.ServerFireballLaunch(f.id, wp, fx.velocity, fx.owner);
+                f.lastPos = wp;
+                return true;
+            }
             if (!WorldNet.PassPortal(f.lastPos, pos, f.Radius + 0.02f, f.Radius * 0.5f, out var a, out var b)) return false;
             Vector3 np = SpellPlans.ThroughPoint(pos, a.center, a.Rotation, b.center, b.Rotation, true);
             WorldNet.ServerFireballLaunch(f.id, np, SpellPlans.ThroughDir(fx.velocity, a.Rotation, b.Rotation), fx.owner);
@@ -237,6 +255,12 @@ namespace SuddenMageEncounter
 
         static bool MissileThroughPortal(int volley, int index, WorldNet.Missile ms)
         {
+            // (its age carries on, so it still runs out in time)
+            if (SkyWrap.WrapShot(ms.prev, ms.pos, out var wp))
+            {
+                WorldNet.ServerMissileRedirect(volley, index, wp, ms.dir, ms.owner, true);
+                return true;
+            }
             if (!WorldNet.PassPortal(ms.prev, ms.pos, SpellPlans.MissileRadius + 0.02f, SpellPlans.MissileRadius, out var a, out var b)) return false;
             Vector3 np = SpellPlans.ThroughPoint(ms.pos, a.center, a.Rotation, b.center, b.Rotation, true);
             WorldNet.ServerMissileRedirect(volley, index, np, SpellPlans.ThroughDir(ms.dir, a.Rotation, b.Rotation), ms.owner);
